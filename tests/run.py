@@ -52,6 +52,8 @@ TESTS = [
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
+    ("enroll", [PY, "tests/fake_web_enroll.py"]),
+    ("wakewords", [PY, "tests/fake_web_wakewords.py"]),
     ("web", [PY, "tests/fake_web.py"]),
     ("update", [PY, "tests/fake_ha_update.py"]),
     ("wakesound", [PY, "tests/fake_ha_wakesound.py"]),

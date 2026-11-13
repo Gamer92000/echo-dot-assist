@@ -236,7 +236,7 @@ printf 'ARGS="%s"\n' "$DEFAULT_ARGS" > $OUT/hassmic.conf
 t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf > /dev/null
 t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers those; the fresh install wins
 # the wake word aligners too, as bundle.sh ships them (sysinstall.sh leaves them out where /system has no room)
-FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/*.ko $OUT/libhmui.so 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
+FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/pryon_extract $OUT/pryon_train $OUT/*.ko $OUT/libhmui.so 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
        scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh scripts/device/wifictl.dex scripts/device/ringbar.dex scripts/device/screen.dex
        ${HOME_APK:+scripts/device/$HOME_APK} $(echo wakealign/*.wa wakealign/*.was)"
 t "rm -rf $STAGE; mkdir -p $STAGE"

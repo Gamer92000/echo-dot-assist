@@ -319,6 +319,22 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   wins (`core_wake_refused`).  Remote: EV_WAKE_END -> `core_remote_wake` (sound, ring, `listening(1)` until mic off).
   `tests/unit/mww_ref.py` (in `make unit`) checks features and every inference against pymicro-features and TFLite
   BUILTIN_REF on all of pymicro-wakeword's models.
+- **A wake word of your own** (`enroll.c`, `enroll_pkg.c`, `enroll.h`; tools `src/tools/pryon_extract.c` + `pryon_tap.S`,
+  `pryon_train.c` + `pryon_qat.c`; page card in `web/app.js` `renderEnroll`, API `/api/enroll*` in `web.c`): one session at a
+  time in a thread of its own.  Recording: `enroll_feed` in the capture thread's loop takes the 16 kHz micAsr audio for each
+  prompt (8 of the word, then 8 others, the last two of each held back) and `enroll_recording` keeps the wake word from
+  being fed meanwhile.  Then `pryon_extract` (the stock engine over each recording with 2 s of silence either side; it
+  observes the wake word head's input through a trampoline in its own process's private pages only, the library pinned by
+  SHA-256 and the first instructions) and `pryon_train` (float BFGS, then exact int8 forward + Adam; verdict on the held-back
+  files) run as children at nice 19 through a middle child that waits (hassmic ignores SIGCHLD; the tool's output and an
+  `#exit N` line come back through one pipe).  `pryon_qat.c` carries the Echo's libm `exp/log/log1p` (FreeBSD msun, as
+  bionic's) so a PC and the Echo train the same model bit for bit: `tests/unit/pryon_qat_test.c` pins a hash taken from the
+  Echo.  Build every file of the trainer with `-ffp-contract=off`.  Only if no held-back file is wrong does
+  `enroll_pkg.c` make the set (Amazon's "Alexa" set with the model replaced, the word in Alexa's place everywhere, the STOP
+  spotter and rules cut out, a checksum of its own, a mark file) in the staging folder, and `art_staged`/`art_commit`/
+  `art_install` do the rest as for any set (it must load in the Echo's own engine; root installs and restarts hassmic);
+  `state/wake_word` is written first when the word is to be used at once.  Recordings, activations and the candidate go
+  when the session ends.  The page's "Your wake words" card: `/api/wakewords`, `/api/wakeword/use|delete/<id>` in `web.c`; a removal is `state/artifacts/delete`, which root's watcher (`main.sh`) hands to `artifact-install.sh delete`: only sets with the mark file `enrolled.txt`, never the one in `state/wake_word`.  Tests: `tests/unit/enroll_pkg_test.c`, `tests/fake_web_enroll.py` (stand-in tools), `tests/fake_web_wakewords.py`.  What was learnt about the engine for this: `docs/re-pryon-training.md`.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
   (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it, in a
   thread of its own (`afe_thread`; the capture never waits on it, issue #77: `score_wait` claims once it is in or after

@@ -377,6 +377,18 @@ input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 
 .card-head .help { margin: 0; max-width: 100ch; }
 .card-head .grow { flex: 1; min-width: 0; }
 .card-body { padding: 0 18px 16px; }
+#enroll, #wake-words { width: min(100%, max(420px, calc(50% - 7px))); max-width: 860px; }      /* one column of the .flow beside it, not both */
+.enroll-say { text-align: center; padding: 22px 18px; }
+.enroll-kind { margin-top: 10px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); }
+.enroll-text { margin: 6px 0 14px; font-size: 30px; font-weight: 650; line-height: 1.2; word-break: break-word; }
+.enroll-count { display: inline-flex; align-items: baseline; justify-content: center; gap: 6px; min-width: 96px; padding: 6px 20px; border-radius: 999px; font-size: 40px; font-weight: 700; background: var(--surface-2); color: var(--faint); }
+.enroll-count.go { background: var(--accent); color: #fff; }
+.enroll-count svg.i { width: 40px; height: 40px; color: var(--ok); }
+.enroll-bar { height: 12px; margin: 12px 0 8px; border-radius: 6px; background: var(--line); overflow: hidden; }
+.enroll-bar > i { display: block; height: 100%; border-radius: 6px; background: var(--accent); transition: width .8s linear; }
+.enroll-form { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 10px; }
+.enroll-form input[type=text] { flex: 1 1 220px; min-width: 0; }
+.enroll-use { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .card-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--surface-2);
              border-radius: 0 0 var(--radius) var(--radius); }
 .card-foot .grow { flex: 1; }

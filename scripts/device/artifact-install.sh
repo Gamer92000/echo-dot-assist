@@ -20,10 +20,21 @@
 # Only languages Amazon serves in one region (scripts/lib/artifacts.sh LOCALES): en, fr, es come in several, and the
 # files do not say which, so those stay as they are.  A long name already there: the short one goes if it holds the
 # same files, else both stay.
+#   artifact-install.sh delete STATE DATA
+# A wake word trained on this Echo (src/hassmic/enroll.c) that the owner removes on the settings page: hassmic names it in
+# STATE/artifacts/delete ("wake:<name>").  Only a set that has the mark file enrolled.txt goes (a plain file: never Amazon's
+# sets, which have none) and never the one STATE/wake_word names; main.sh then restarts hassmic, as for an install.
 umask 022
 # READ_AS: how root reads what the daemon left (main.sh: runas as its user).  Empty only on the PC (tests: the test's
 # own user); not set at all would have root read the daemon's files itself
 [ -n "${READ_AS+set}" ] || { echo "FAILED: READ_AS not set (main.sh gives it)"; exit 1; }
+# Root-owned parent and a persistent inode: the daemon opens this read-only to fence recovery against a live installer.
+lockdata=$2
+case $1 in migrate|delete) lockdata=$3;; esac
+# Android mksh closes nonstandard descriptors on exec; stdin keeps this lock inherited by copying children.
+exec 0>>"$lockdata/.artifact-lock" || exit 1
+chmod 644 "$lockdata/.artifact-lock"
+flock -x 0 || exit 1
 # folders $1 and $2 hold the same files, folders down included (toybox here has no diff -r)
 same_tree() {
     for f in $1/* $2/*; do
@@ -54,10 +65,12 @@ if [ "$1" = migrate ]; then
     done
     exit 0
 fi
+mode=install request=request
+if [ "$1" = delete ]; then mode=delete request=delete; shift; fi
 STATE=$1 DATA=$(cd -P "$2" && pwd -P) || exit 1
 A=$STATE/artifacts
 REQ=$DATA/.artifact-request RES=$DATA/.artifact-result
-[ -f $A/request ] || exit 1
+[ -f $A/$request ] || exit 1
 # The folder itself is the daemon's to replace (STATE is its own): a link there had root remove, read and leave files in
 # a folder of root's.  So into it (cd -P), the folder it is in checked to be STATE/artifacts itself (pwd -P: the folder,
 # whatever names point at it now), and only names relative to it from here on.  STATE's own parent is root's.
@@ -69,7 +82,7 @@ fi
 A=.
 rm -rf $REQ $RES
 # a rename moves a link as a link; one name only (/data has no protected_hardlinks: a hard link to a file of root's)
-mv $A/request $REQ && [ -f $REQ ] && [ ! -L $REQ ] && set -- $(ls -ld $REQ 2>/dev/null) && [ "$2" = 1 ] ||
+mv $A/$request $REQ && [ -f $REQ ] && [ ! -L $REQ ] && set -- $(ls -ld $REQ 2>/dev/null) && [ "$2" = 1 ] ||
     { rm -rf $REQ; exit 1; }
 ok=0
 : > $RES
@@ -120,8 +133,23 @@ install_one() {
     say "OK $id"; ok=1
 }
 
+delete_one() {
+    id=$1
+    case $id in wake:*) name=${id#wake:};; *) say "FAILED $id: not a wake word set"; return;; esac
+    good "$name" || { say "FAILED $id: bad name"; return; }
+    dest=$DATA/models/$name
+    if [ ! -d "$dest" ] || [ -L "$dest" ] || [ ! -f "$dest/enrolled.txt" ] || [ -L "$dest/enrolled.txt" ]; then
+        say "FAILED $id: not a wake word trained on this Echo"; return
+    fi
+    # The model tree is root's; read the daemon-owned selection only as the daemon.
+    if $READ_AS grep -Fxq "$name" "$STATE/wake_word" 2>/dev/null; then
+        say "FAILED $id: it is the wake word in use"; return
+    fi
+    rm -rf "$dest" && { say "OK deleted $id"; ok=1; } || say "FAILED $id: cannot remove it"
+}
+
 ids=$($READ_AS dd if=$REQ bs=4096 count=1 2>/dev/null); rm -f $REQ     # as the daemon: a hard link reads only what it may
-for id in $ids; do install_one "$id"; done
+for id in $ids; do "${mode}_one" "$id"; done
 cat $RES
 [ -n "$DAEMON_USER" ] && chown $DAEMON_USER $RES
 chmod 644 $RES; rm -rf $A/result; mv -f $RES $A/result      # a folder by that name too (rm never follows a link)

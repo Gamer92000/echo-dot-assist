@@ -40,6 +40,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <sys/statvfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -508,4 +509,40 @@ int art_install(char *err, size_t errsz)
     pthread_mutex_unlock(&lk);
     fprintf(stderr, "artifacts: %d handed to root to install; hassmic restarts\n", n);
     return 0;
+}
+
+/* Fence root before retracting queued work. Its request is checked/claimed under the same persistent inode lock.
+ * This does not delete or roll back an installed set, nor change the selected wake word. */
+int art_discard_install(const char *id, char *err, size_t errsz)
+{
+    char path[340], stage[300], text[4097], kept[4097] = ""; struct stat st;
+    int fd = -1, rc = -1; size_t used = 0;
+    if (strncmp(id, "wake:", 5) || !good_name(id + 5)) { snprintf(err, errsz, "invalid wake word request"); return -1; }
+    pthread_mutex_lock(&lk);
+    fd = open(env_or("HASSMIC_ARTIFACT_LOCK", "/data/local/hassmic/.artifact-lock"), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode)) {
+        snprintf(err, errsz, "The installer lock is unavailable; update/start the root installer before clearing this request."); goto out;
+    }
+    if (flock(fd, LOCK_EX | LOCK_NB)) { snprintf(err, errsz, "The installer is still running; try again when it finishes."); goto out; }
+    snprintf(path, sizeof path, "%s/artifacts/request", state_dir());
+    FILE *f = fopen(path, "r");
+    if (f) {
+        size_t n = fread(text, 1, sizeof text - 1, f);
+        int bad = ferror(f) || n == sizeof text - 1;
+        fclose(f); text[n] = 0;
+        if (bad) { snprintf(err, errsz, "Cannot safely read the queued installation request."); goto out; }
+        char *save, *token = strtok_r(text, " \t\r\n", &save);
+        for (; token; token = strtok_r(NULL, " \t\r\n", &save)) {
+            if (strcmp(token, id)) used += (size_t)snprintf(kept + used, sizeof kept - used, "%s\n", token);
+        }
+        if (used ? statefile_write(path, 0666, kept, used) : (unlink(path) && errno != ENOENT)) {
+            snprintf(err, errsz, "Cannot retract the queued installation request."); goto out;
+        }
+    } else if (errno != ENOENT) { snprintf(err, errsz, "Cannot read the queued installation request."); goto out; }
+    snprintf(stage, sizeof stage, "%s/artifacts/wake.%s", state_dir(), id + 5);
+    unstage(stage); rc = 0;
+out:
+    if (fd >= 0) close(fd);                /* also releases flock */
+    pthread_mutex_unlock(&lk);
+    return rc;
 }

@@ -55,7 +55,7 @@ FORCE:
 BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
        $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
-       $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
+       $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test $(OUT)/pryon_extract $(OUT)/pryon_train)
 
 .DEFAULT_GOAL := all
 all: $(BIN)
@@ -187,6 +187,24 @@ $(OUT)/pryon_test: src/tools/pryon_test.c src/include/pryon_api.h $(STOCK)/libpr
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so $(STOCK)/libz.so
 
+# Training a wake word of your own on the Echo (enroll.c): pryon_extract runs the stock engine over a recording and writes
+# what feeds its wake word head (the engine's own activations, observed through a trampoline in this process's own pages
+# only, guarded by the library's SHA-256); pryon_train fits a new head to them, with the Echo's own math library
+# functions reproduced bit for bit (src/tools/pryon_qat.c) so that any machine trains the same model.
+$(OUT)/pryon_extract: src/tools/pryon_extract.c src/tools/pryon_tap.S src/hassmic/hash.c src/hassmic/hash.h src/include/pryon_api.h $(STOCK)/libpryon.so
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -Werror -mthumb -mfpu=neon -Isrc/hassmic src/tools/pryon_extract.c src/tools/pryon_tap.S src/hassmic/hash.c -o $@ $(LDFLAGS) $(STOCK)/libpryon.so -ldl
+
+# no -ffp-contract: a fused multiply-add would change the bits the training must reproduce
+$(OUT)/pryon_train: src/tools/pryon_train.c src/tools/pryon_qat.c src/tools/pryon_qat.h src/hassmic/json.c src/hassmic/json.h src/hassmic/hash.c src/hassmic/hash.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -O3 -ffp-contract=off -Werror -Isrc/hassmic src/tools/pryon_train.c src/tools/pryon_qat.c src/hassmic/json.c src/hassmic/hash.c -o $@ -pie -fuse-ld=lld -lm
+
+# the same trainer for the PC (tests, and training a model from features there)
+build/pryon_train-host: src/tools/pryon_train.c src/tools/pryon_qat.c src/tools/pryon_qat.h src/hassmic/json.c src/hassmic/json.h src/hassmic/hash.c src/hassmic/hash.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Wno-misleading-indentation -ffp-contract=off -Isrc/hassmic src/tools/pryon_train.c src/tools/pryon_qat.c src/hassmic/json.c src/hassmic/hash.c -o $@ -lm
+
 $(OUT)/aed_test: src/tools/aed_test.c src/include/pryon_api.h $(STOCK)/libpryon.so
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS) $(STOCK)/libpryon.so
@@ -202,7 +220,7 @@ WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/enroll.c src/hassmic/enroll_pkg.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
@@ -241,8 +259,19 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release
+	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release pryon_qat enroll_pkg enroll_state enroll_ui
 unit: $(addprefix unit-,$(UNIT_TESTS))
+unit-pryon_qat:
+	@mkdir -p build
+	cc -O2 -Wall -Wno-misleading-indentation -ffp-contract=off tests/unit/pryon_qat_test.c src/tools/pryon_qat.c -lm -o build/pryon_qat_test && build/pryon_qat_test
+unit-enroll_ui:
+	node tests/unit/enroll_ui_test.js
+unit-enroll_state:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -Wno-unused-function -ffunction-sections -fdata-sections -fsanitize=address,undefined -Isrc/hassmic tests/unit/enroll_state_test.c src/hassmic/statefile.c src/hassmic/artifacts.c -Wl,--gc-sections -lpthread -o build/enroll_state_test && build/enroll_state_test
+unit-enroll_pkg:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -fsanitize=address,undefined -Isrc/hassmic tests/unit/enroll_pkg_test.c src/hassmic/enroll_pkg.c src/hassmic/json.c src/hassmic/hash.c -o build/enroll_pkg_test && build/enroll_pkg_test
 unit-hash:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test
