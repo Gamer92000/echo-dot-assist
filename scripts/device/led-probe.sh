@@ -183,19 +183,28 @@ write)
     restore() {
         cat $B/dark.frame > $F 2>/dev/null
         unset_all; play $SOLID; sleep 0.3; unset_all; sleep 0.5     # ledcontroller writes the frame itself again
+        bright_restore
         echo "restored: frame $(hexof $F)"
     }
     trap 'restore; exit 1' INT TERM
     cat $F > $B/dark.frame; echo "dark frame:  $(hexof $B/dark.frame)"
-    # The driver scales each channel as it takes a frame (measured 2026-11-12: 0000A9 written read back 000071, blue
-    # x 0.668) and frame reads back what it got after that.  So what ledcontroller wrote is not what frame shows: for
-    # solid_blue (00F) at brightness 100 the HAL's pwm 0.993 makes 0000FD, which frame shows as 0000A9.  That input is
-    # written here, and only on that measured case: brightness 100 and stock's frame read as 0000A9 on every LED.
-    SOLID=solid_blue; [ -f $LR/$SOLID.animation ] || die "no solid_blue"
+    # What ledcontroller writes for solid_blue (00F) at brightness 100 and what frame then reads back, per model as
+    # measured; only that case is written here (the stock stage shows both at every level):
+    #   donut: the HAL's pwm 0.993 makes 0000FD; the driver scales each channel by the unit's calibration as it takes a
+    #          frame (0000A9 written read back 000071, blue x 0.668), so frame shows 0000A9 (2026-11-12)
+    #   biscuit (and radar, the same HAL table "default"): pwm 0.875 makes 0000DF, and frame reads back 0000DF, no
+    #          scaling seen (2026-11-13; at 50/25/10/1: C0, 68, 3C, 22 = the table's pwm x 255, truncated)
+    case $(getprop ro.product.device) in
+    donut*) IN=FD BACK=a9;;
+    biscuit*|radar*) IN=DF BACK=df;;
+    *) die "no measured case for $(getprop ro.product.device): run the stock stage and add one";;
+    esac
+    ledctrl -a off -b 100 > /dev/null 2>&1; sleep 1                   # bright_restore puts it back
+    SOLID=solid_blue; [ -f $LR/$SOLID.animation ] || { restore; die "no solid_blue"; }
     play $SOLID; sleep 1.5; cat $F > $B/stock.frame; echo "stock frame ($SOLID, as read): $(cat $B/stock.frame)"
-    want=; i=0; while [ $i -lt 12 ]; do want=${want}0000a9; i=$((i + 1)); done
-    [ "$(tr 'A-F' 'a-f' < $B/stock.frame)" = "$want" ] || { restore; die "not stock's 0000A9 on every LED (brightness not 100?): stopped"; }
-    print -r -- "$(echo $want | sed 's/a9/FD/g')" > $B/in.frame; echo "our input: $(cat $B/in.frame)"
+    want=; i=0; while [ $i -lt 12 ]; do want=${want}0000$BACK; i=$((i + 1)); done
+    [ "$(tr 'A-F' 'a-f' < $B/stock.frame)" = "$want" ] || { restore; die "not stock's 0000$BACK on every LED at brightness 100: stopped"; }
+    print -r -- "$(echo $want | sed "s/0000$BACK/0000$IN/g")" > $B/in.frame; echo "our input: $(cat $B/in.frame)"
 
     sec "1. stock's own input written while stock shows it: must read back as stock's frame (no change to see)"
     if ! err=$(cat $B/in.frame 2>&1 > $F); then echo "  refused: $err"; restore; die "the driver does not take it: stopped here"; fi
