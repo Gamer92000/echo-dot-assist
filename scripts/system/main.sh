@@ -863,6 +863,30 @@ leds() {
     rm -rf $LEDNEW $LEDLOCK
 }
 
+# The light ring live (ringlive.c): hassmic writes the ring's frame itself.  That one file and nothing else of the LED
+# driver's: led_current (the chip's current), the calibration, the boot animation and the mute button's PWM stay
+# ledcontroller's and root's.  init chowns it to ledcontroller at every boot (/init.ledcontroller.rc, 0644); its group
+# becomes LED_GID, which no stock process has and hassmic gets beside its others (runas below), and that group may write.
+# ledcontroller still owns it and keeps writing through the descriptor it holds.  sysfs: the next boot has init's again.
+# Only where device.conf names it (a model measured with scripts/led-probe.sh), and only a file in sysfs.  By otatool:
+# toybox's chgrp takes names only, and no stock group is this one (the Dot 3: "chgrp: group '3991': No such file").
+LED_GID=3991
+LED_TABLE=/system/etc/led_mute_ring_config.json; LED_TABLE_COPY=/data/local/hassmic/led-table.json
+led_frame() {
+    [ -n "$LED_FRAME" ] && [ -f "$LED_FRAME" ] || return 0
+    case $(readlink -f "$LED_FRAME") in /sys/*) ;; *) echo "light ring live: $LED_FRAME is not in sysfs, left alone"; return 0;; esac
+    # The brightness table hassmic caps its colours by: ledcontroller's 0760 on the Dot 2 (0644 on the Dot 3), so a
+    # copy, 0644, in root's own folder (hassmic may not write there: no link of its can point this elsewhere)
+    if [ -f $LED_TABLE ] && ! cmp -s $LED_TABLE $LED_TABLE_COPY 2>/dev/null; then
+        rm -f $LED_TABLE_COPY.new
+        if cp $LED_TABLE $LED_TABLE_COPY.new && chmod 0644 $LED_TABLE_COPY.new && mv -f $LED_TABLE_COPY.new $LED_TABLE_COPY
+        then echo "light ring live: the brightness table copied for hassmic"
+        else rm -f $LED_TABLE_COPY.new; echo "light ring live: the brightness table could not be copied"; fi
+    fi
+    if $D/otatool chgrp $LED_GID "$LED_FRAME" && chmod 0664 "$LED_FRAME"; then echo "light ring live: hassmic may write $LED_FRAME"
+    else echo "light ring live: $LED_FRAME could not be given to hassmic"; fi
+}
+
 # A push update runs "firewall" again (exec, same PID) while the previous firewall watcher is still looping: stop it first,
 # or every update adds one and old and new rules take turns.  Matched by command line, which also catches the ones that
 # earlier versions left behind.  Nothing here may loop on reads of a /proc file: a process that exits between the open and
@@ -907,6 +931,7 @@ satellite)
         # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
         [ -f $D/artifact-install.sh ] && READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         leds                              # before alexa-off.sh: a ledcontroller that started again may want Alexa back
+        led_frame
         sh $D/alexa-off.sh; quiet
         # Android models: with the screen off Android lets the SoC suspend once no wake lock is held (autosleep), and the
         # satellite must keep listening: a kernel wake lock of root's, for as long as the satellite runs
@@ -947,7 +972,8 @@ satellite)
         # play from wherever Home Assistant points.  Not the effective group: the mixer only records for group aipc.
         # in its own SELinux domain (scripts/system/sepolicy-hassmic.rules: su, which the unlock makes permissive, lets
         # any process set any property, adb's port and ctl.start included); runas says when the policy has none yet
-        $D/runas -r 3990 -Z u:r:hassmic:s0 $DAEMON_USER $DAEMON_GROUPS \
+        # LED_GID: the ring's frame (led_frame above), only where there is one
+        $D/runas -r 3990 -Z u:r:hassmic:s0 $DAEMON_USER $DAEMON_GROUPS${LED_FRAME:+,$LED_GID} \
             $BIN -P ${PROTO:-esphome} $ARGS >> $LOG 2>&1
         say "hassmic exited rc=$?, restart in 3 s" >> $LOG
         # An update whose daemon does not stay up is worse than no update: with hassmic down there is no push port either.

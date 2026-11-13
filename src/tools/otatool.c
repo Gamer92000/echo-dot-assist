@@ -8,6 +8,7 @@
  *   otatool push    HOST PORT BUNDLE SIG                send to a running hassmic, print its answer (exit 0 on "OK ...")
  *   otatool adb     HOST PORT SECRET                    open adb over Wi-Fi on it for 30 min (sign its challenge)
  *   otatool remount rw|ro PATH                          remount the file system PATH lives on (device, root)
+ *   otatool chgrp   GID PATH                            a file's group by number (device, root: main.sh's light ring live)
  *
  * The device runs "install" as root from the read-only system partition, with the public key from there, so whatever
  * downloaded the bundle (an unprivileged, network-facing process) cannot get anything installed that the owner of
@@ -216,6 +217,19 @@ static int remount(const char *how, const char *path)
     return 0;
 }
 
+/* The Echo's toybox chgrp takes group names only ("chgrp: group '3991': No such file or directory", Dot 3,
+ * 2026-11-12), and the light ring live's group (main.sh LED_GID) is a number no stock group has, on purpose: the file
+ * keeps its owner, only its group is set, never to 0, and only on a file that is there */
+static int chgrp(const char *gid_s, const char *path)
+{
+    char *end; unsigned long gid = strtoul(gid_s, &end, 10); struct stat st;
+    if (!*gid_s || *end || !gid || gid > 0x7fffffffUL) { fprintf(stderr, "otatool: chgrp: %s is not a group number\n", gid_s); return 2; }
+    if (stat(path, &st)) { fprintf(stderr, "otatool: chgrp: %s: %s\n", path, strerror(errno)); return 1; }
+    if (!S_ISREG(st.st_mode)) { fprintf(stderr, "otatool: chgrp: %s: not a file\n", path); return 1; }
+    if (chown(path, (uid_t)-1, (gid_t)gid)) { fprintf(stderr, "otatool: chgrp %lu %s: %s\n", gid, path, strerror(errno)); return 1; }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc == 4 && !strcmp(argv[1], "keygen")) return keygen(argv[2], argv[3]);
@@ -225,6 +239,7 @@ int main(int argc, char **argv)
     if (argc == 6 && !strcmp(argv[1], "install")) return verify_install(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 5 && !strcmp(argv[1], "adb")) return challenge(argv[2], argv[3], argv[4], "HMOTA-ADB1\n");
     if (argc == 4 && !strcmp(argv[1], "remount")) return remount(argv[2], argv[3]);
-    fprintf(stderr, "usage: otatool keygen SECRET PUBLIC | push HOST PORT BUNDLE SIG | adb HOST PORT SECRET | pack SECRET VERSION OUT FILE[:MODE]... | verify PUBLIC BUNDLE SIG | install PUBLIC BUNDLE SIG DESTDIR | remount rw|ro PATH\n");
+    if (argc == 4 && !strcmp(argv[1], "chgrp")) return chgrp(argv[2], argv[3]);
+    fprintf(stderr, "usage: otatool keygen SECRET PUBLIC | push HOST PORT BUNDLE SIG | adb HOST PORT SECRET | pack SECRET VERSION OUT FILE[:MODE]... | verify PUBLIC BUNDLE SIG | install PUBLIC BUNDLE SIG DESTDIR | remount rw|ro PATH | chgrp GID PATH\n");
     return 2;
 }

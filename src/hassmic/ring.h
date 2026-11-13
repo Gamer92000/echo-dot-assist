@@ -17,6 +17,14 @@ struct ring_light {
     int nleds;                              /* > 0: LED by LED instead (Home Assistant's action), from the fill's start */
     unsigned char led_rgb[RING_LEDS_MAX][3];        /* as seen, 0..255; black: that LED off */
 };
+/* The effects only the live ring draws (ringlive.c), after the palette's five in ring.c's list */
+#define RING_LIVE_EFFECTS "Breathe", "Color loop", "Comet", "Wave", "Sparkle", "Fire", \
+        "Music beat", "Music spectrum", "Music VU meter", "Music orbit", "Music drums", "Music aurora"
+#define RING_LIVE_NEFFECTS 12
+enum { RING_E_NONE, RING_E_PULSE, RING_E_SPIN, RING_E_BLINK, RING_E_RAINBOW,
+       RING_E_BREATHE, RING_E_COLORLOOP, RING_E_COMET, RING_E_WAVE, RING_E_SPARKLE, RING_E_FIRE,
+       RING_E_MUSIC_BEAT, RING_E_MUSIC_SPECTRUM, RING_E_MUSIC_VU, RING_E_MUSIC_ORBIT, RING_E_MUSIC_DRUMS, RING_E_MUSIC_AURORA };
+#define RING_E_IS_MUSIC(e) ((e) >= RING_E_MUSIC_BEAT && (e) <= RING_E_MUSIC_AURORA)
 extern const char *const ring_effects[];    /* "None" first, as ESPHome's own lights */
 extern const int ring_neffects;
 int  ring_effect_listed(int i);            /* offered to Home Assistant: not "Spin" on one LED (board.ring_leds) */
@@ -59,6 +67,12 @@ int  ring_designs_live(void);
  * patterns, frame by frame); malloc'd.  NULL: stock's files are the animations (ringdesign.c rd_stock reads them) */
 char *ring_stock(int i, size_t *n);
 void ring_unset(const char *pattern);
+/* One of the Echo's own patterns shows now (ring_set and not unset or played out): the live ring (ringlive.h) waits */
+int  ring_busy(void);
+/* The live ring draws Home Assistant's light (ringlive.h, "Light ring live" on): ring.c plays no palette pattern for it
+ * and offers the live ring's effects too.  The light as it should show now, the flash's while one runs (1) */
+void ring_light_live(int on);
+int  ring_light_now(struct ring_light *l);
 void ring_tick(void);                       /* every 200 ms: the beam while listening, the light back after the Echo's */
 void ring_light_get(struct ring_light *l);
 void ring_light_set(const struct ring_light *l, unsigned flash_ms);  /* flash_ms > 0: blinks that long, then as before */

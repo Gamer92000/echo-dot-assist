@@ -47,6 +47,8 @@
 #include "improv.h"
 #include "buttons.h"
 #include "ring.h"
+#include "ringlive.h"
+#include "musiclight.h"
 #include "ringdesign.h"
 #include "ledq.h"
 #include "screen.h"
@@ -386,7 +388,7 @@ static void led_run(const char *op, const char *pattern) { ledq_run(op, pattern)
 static void led(const char *op, const char *pattern)
 {
     if (!pattern) return;
-    if (!strcmp(op, "-s")) ring_set(pattern); else ring_unset(pattern);
+    if (!strcmp(op, "-s")) { ringlive_yield(); ring_set(pattern); ringlive_yield_end(); } else ring_unset(pattern);
     screen_led(op, pattern);                        /* the face on a screen says the same (screen.h) */
 }
 
@@ -2128,7 +2130,9 @@ static void q_push(int kind, int media, unsigned rate, unsigned ch, const void *
 
 static void *playback_thread(void *arg)
 {
-    int open = 0;
+    int open = 0, play_media = 0, play_ch = 1; unsigned play_rate = 0;
+    long long play_t0 = 0, play_frames = 0;     /* the TTS stream's queue as the mixer's music queue is modelled
+                                                 * (audio_mixer.c s_queued_us): written minus what real time played */
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -2147,6 +2151,7 @@ static void *playback_thread(void *arg)
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
             tts_kind(it->media);            /* the TTS stream's volume for what comes now */
+            play_media = it->media; play_rate = it->rate; play_ch = it->ch; play_t0 = 0; play_frames = 0;
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
@@ -2156,6 +2161,17 @@ static void *playback_thread(void *arg)
                 const int16_t *pcm = (const int16_t *)it->data; size_t ns = it->len / 2; double e = 0;
                 for (size_t i = 0; i < ns; i += 4) e += (double)pcm[i] * pcm[i];
                 screen_level(ns >= 4 && e > 0 ? (int)lround(100 * log10(e / (ns / 4) / (32768.0 * 32768.0))) : -1000);
+            }
+            /* Home Assistant's media (play_media) for the ring's music effects, stamped with what the stream still
+             * holds in front of it (play_write has no queue of its own to ask); not replies or announcements */
+            if (open && play_media && play_rate) {
+                size_t frames = it->len / 2 / (play_ch ? play_ch : 1);
+                long long now = mono_ms(), q;
+                if (!play_t0) play_t0 = now;
+                q = play_frames * 1000 / play_rate - (now - play_t0);
+                if (q < 0) { play_t0 = now; play_frames = 0; q = 0; }      /* it ran dry: the queue starts again */
+                musiclight_feed((const int16_t *)it->data, frames, play_ch, play_rate, q * 1000);
+                play_frames += (long long)frames;
             }
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
@@ -2722,11 +2738,13 @@ static void mute_latch(int muted, int sound)
 {
     static int last = 0;
     fprintf(stderr, "mic mute button: %d\n", muted);
+    ringlive_yield();                   /* ledcontroller's red ring comes: the live ring's SIGTERM leaves it alone */
     pthread_mutex_lock(&core_lock);
     int was = last || soft_mute; last = muted;
     if (!muted && soft_mute) { soft_mute = 0; fprintf(stderr, "soft mute: 0 (released with the button)\n"); }
     mute_update(was, sound);
     pthread_mutex_unlock(&core_lock);
+    ringlive_yield_end();               /* core_muted() holds the writer off now */
 }
 
 static void on_mute(int muted) { mute_latch(muted, 1); }       /* hardware latch changed (button) */
@@ -3083,6 +3101,28 @@ void core_set_eq(int band, int db)
 static atomic_int led_auto = 1, led_level = 80;     /* 80: ledcontroller's first-boot level; read without core_lock
                                                      * (core_led_brightness(-1): the band's thread, the protocols) */
 
+/* The light ring live (ringlive.h).  It steps back while one of the Echo's own patterns shows and while the microphones
+ * are off (the mute's red ring is always the Echo's), at the ring's brightness (auto included); what changes by itself
+ * there (a timeout, an animation's end) goes to Home Assistant */
+static int live_hold(void) { return ring_busy() || core_muted(); }
+static int live_level(void) { return core_led_brightness(-1); }
+static void live_changed(void) { pthread_mutex_lock(&core_lock); core_settings_changed(); pthread_mutex_unlock(&core_lock); }
+
+/* The design select lists the library's names as they were when Home Assistant listed it: a design saved or deleted on
+ * the settings page has it list them again, but only when the names changed (each save would close the links) */
+static void live_names_check(void)
+{
+    static int gen = -1; static unsigned long long had;
+    int g = rd_generation();
+    if (g == gen) return;
+    static char names[RD_MAX][RD_NAME]; int n = rd_names(names, RD_MAX); unsigned long long h = 1469598103934665603ULL;
+    for (int i = 0; i < n; i++) for (const char *c = names[i]; ; c++) { h = (h ^ (unsigned char)*c) * 1099511628211ULL; if (!*c) break; }
+    if (gen >= 0 && h != had && ringlive_available() && settings_on("ring_live")) {
+        pthread_mutex_lock(&core_lock); core_entities_changed(); pthread_mutex_unlock(&core_lock);
+    }
+    gen = g; had = h;
+}
+
 /* Root installed the ring's set again (designs applied on the settings page) and restarted ledcontroller, which starts
  * with auto brightness on: a fixed level once more, and Home Assistant's light listed anew if it came or went */
 static void ring_reloaded(int custom_changed)
@@ -3281,6 +3321,7 @@ static void *volume_led_thread(void *arg)
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         ring_tick();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
+        if (tick % 5 == 2) live_names_check();
         usleep(200000);
     }
     return NULL;
@@ -3559,6 +3600,7 @@ int main(int argc, char **argv)
                                                      * laid out twice */
       if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
+    ringlive_start(live_hold, live_level, live_changed);     /* where root gave hassmic the ring's frame (main.sh) */
     rd_start();                         /* designs asked for before this start: still installing, or back */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
     audio_earcon_started = earcon_started;
@@ -3617,6 +3659,7 @@ int main(int argc, char **argv)
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    ringlive_begin();                   /* the mute and the Echo's own patterns known: what the last run left lit, dark */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }
@@ -3647,5 +3690,6 @@ int main(int argc, char **argv)
     }
     cap_close();
     if (core_local_wake) wake_close(-1);
+    ringlive_shutdown();                /* the live ring's frame dark, if it showed */
     return 1;
 }

@@ -209,14 +209,15 @@ const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];          
 const IDLE = ['screen_sleep_minutes', 'screen_clock'];                             // the screen's timeout, the clock in place of dark
 const MOVED = { light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
   screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen',
-  arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+  arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice',
+  ring_live: 'lights' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
           ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any', 'timer_stop_from_others']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS]],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Live from Home Assistant', 'ring_live'], ['Screen', ...BRIGHTNESS]],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -396,6 +397,9 @@ const HELP = {
   whisper_detection: { icon: 'whisper', ha: ['Last request whispered'], help: 'Tells whether your last request was whispered, before speech-to-text finishes. Use it in your conversation agent\'s prompt to have it answer quietly.' },
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware. Someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
+  ring_live: { icon: 'sparkle', ha: ['Light ring LED 1 to 12', 'Light ring design', 'the actions light_ring_frame, light_ring_animation, light_ring_design and light_ring_stop'],
+    help: 'The Echo draws its light ring itself, from Home Assistant: any colour on any LED, up to 30 pictures a second. "Light ring" then shows its exact colour instead of the nearest of a set, fades when it changes, and has more effects: Breathe, Color loop, Comet, Wave, Sparkle, Fire, and six that move with the music the Echo plays (Music beat, spectrum, VU meter, orbit, drums, aurora): the Echo hears the beat, the drums and left and right itself, and keeps time with what you hear. Over it lie twelve lights, one per LED (LED 1 is where the volume starts, turned by "Light ring rotation"), and over those an animation: your own frames from an action, or a design of yours, which "Light ring design" in Home Assistant and "Show on the Echo" here play at once, without Apply. The Echo plays animations itself, so they run smoothly whatever Home Assistant does meanwhile. The Echo\'s own lights always come first: listening, thinking, replies, timers, volume and mute show as set on this page, and your lights come back after them. Never brighter than the Echo\'s own lights at the ring\'s brightness ("LED brightness", auto included).',
+    note: 'Only on an Echo Dot 3, Echo Dot 2 or Echo 2, and only after an update that lets hassmic write the ring (the Echo restarts it by itself).' },
   light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
   bluetooth_proxy: { icon: 'bt', ha: ['the Bluetooth proxy'], help: 'Home Assistant hears Bluetooth devices near the Echo through it, as through an ESPHome Bluetooth proxy: their advertisements for sensors and trackers, and connections to up to 3 devices at a time. Off, Home Assistant gets no Bluetooth from this Echo and the Echo stops scanning; disabling its Bluetooth entries in Home Assistant does not. Phones, a Bluetooth speaker and the setup from a phone work either way.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
@@ -476,6 +480,7 @@ const SUB = {
   whisper_detection: 'Tells Home Assistant when a request was whispered',
   wifi_motion: 'A motion sensor from changes in the Wi-Fi signal',
   wifi_motion_sensitivity: 'Higher catches more, with more false alarms',
+  ring_live: 'Any colour on any LED from Home Assistant, your designs at once',
   light_sensor: 'The room\'s light in lux, for automations',
   bluetooth_proxy: 'Home Assistant hears Bluetooth devices near the Echo',
   bluetooth_audio: 'Phones can pair and play music on the Echo',

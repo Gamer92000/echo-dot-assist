@@ -69,6 +69,12 @@ char *rd_stock(const char *slot, size_t *n);           /* stock's animation for 
 char *rd_packs_text(size_t *n);                         /* every pack, "pack <id>\n" before each */
 int   rd_pack_save(int id, const char *text, size_t n, int *saved, char *err, size_t cap);  /* version 2, its designs in the library; id 0: new */
 int   rd_pack_delete(int id, char *err, size_t cap);
+/* Home Assistant's side (ringlive.c, proto_esphome.c): the library's names in id order (one of a name twice: the
+ * first), their count; a design by its name, case ignored (0, -1 none); a count that changes with every save and
+ * delete, to see the names may have */
+int   rd_names(char (*names)[RD_NAME], int max);
+int   rd_find(const char *name, struct rd_design *d);
+int   rd_generation(void);
 void  rd_start(void);                                   /* at a start, after ring_start: a request still out, a draft left */
 void  rd_tick(void);                                    /* about once a second: root's answer to an apply */
 #endif

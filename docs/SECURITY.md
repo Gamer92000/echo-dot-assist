@@ -77,6 +77,16 @@ not change the policy); until then hassmic's log says "runas: no SELinux domain"
 to set properties. The firewall lets no process on the Echo but root's connect to adb's port, so no process acting
 for hassmic can use an open adb.
 
+On an Echo Dot 3, an Echo Dot 2 and an Echo 2 root also gives hassmic one file of the LED driver at each start, the ring's frame
+(the colours of its 12 LEDs, for "Light ring live"), through a group only hassmic has. Nothing else of the driver: the
+LEDs' current, their calibration, the start-up ring and the Dot 3's mute button light stay Amazon's ring program's
+and root's. Root also copies the ring's brightness table (Amazon's, read-only for hassmic on the Dot 2 and Echo 2) into its own
+folder, where hassmic may read it and not write. On the Dot 3 the driver scales and bounds every value by the unit's
+calibration; the Dot 2's and the Echo 2's take what they are given, so a hassmic taken over could drive its LEDs up to FF where Amazon's
+brightest is DF, at the current Amazon's program set. Either way the worst it could do is show wrong colours on the
+ring, mute's red ring included, which it could already through the ring's own patterns; the hardware mute switch
+does not depend on any of it.
+
 What stays: hassmic is what sees the action button and checks the signed challenge, so code that took hassmic over
 can open adb over Wi-Fi for someone else on the network, though not use it itself.
 

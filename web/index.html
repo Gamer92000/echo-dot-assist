@@ -787,7 +787,16 @@ button.ringd-act.custom .ringd-act-pick { color: var(--accent); font-weight: 560
 
 /* the library and the pickers: tiles with the design playing */
 .ringd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding: 0 18px 18px; }
-.ringd-tile { display: grid; grid-template-rows: 1fr auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); min-width: 0; overflow: hidden; }
+.ringd-tile { position: relative; display: grid; grid-template-rows: 1fr auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); min-width: 0; overflow: hidden; }
+/* the live ring's "Show" / "Stop" (ring.js liveButton): a pill over the picture, readable on its dark ground */
+button.ringd-live { position: absolute; left: 14px; top: 14px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px 5px 8px;
+                    border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface); color: var(--fg); font-size: 13px; font-weight: 600;
+                    line-height: 1; box-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
+button.ringd-live svg.i { width: 14px; height: 14px; color: var(--accent); }
+button.ringd-live:hover:not(:disabled) { border-color: var(--accent); background: var(--surface); }
+button.ringd-live.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+button.ringd-live.on svg.i { color: var(--accent-fg); }
+button.ringd-live.on:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 .ringd-tile:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-2)); }
 button.ringd-tile-main { display: grid; justify-items: center; gap: 3px; border: 0; border-radius: 0; background: none; padding: 6px 6px 10px; min-width: 0; }
 button.ringd-tile-main:hover:not(:disabled) { background: none; }

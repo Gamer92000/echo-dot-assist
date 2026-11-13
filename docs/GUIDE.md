@@ -439,6 +439,60 @@ Beyond the README's two figures:
   name, author and a line about it. **Use** sets its animations, only those or all of them (the rest back to
   Amazon's), and applies. A pack travels with its designs: as a `.ringpack` file (Export, Import) or with "Copy
   models". Up to 50 packs; their designs count towards the 100.
+- **Light ring live** (Echo Dot 3, Echo Dot 2 and Echo 2; settings page, Lights, "Live from Home Assistant", off by default): the
+  Echo draws its ring itself, from Home Assistant, in any colour on any LED, up to 30 pictures a second, and plays your
+  designs at once, without Apply. In layers, the lowest first:
+  - "Light ring" (the light above) in its exact colour instead of the nearest of the set, fading when it changes
+    (Home Assistant's transition, else a quarter of a second), with more effects: Breathe, Color loop, Comet, Wave,
+    Sparkle and Fire beside Pulse, Spin, Blink and Rainbow, and six that follow the music the Echo plays (Music
+    Assistant, a phone over Bluetooth, Home Assistant's media). The Echo listens to it itself: twelve bands, the kick,
+    snare and hi-hat, the tempo and the beat, left and right, how loud it gets. **Music beat** (the ring blooms on every
+    beat from LED 1 round to the back and settles to a glow, each beat of the bar a shade apart, every fourth whiter),
+    **Music spectrum** (the twelve bands LED by LED, bass at LED 1 round to the highs at LED 12), **Music VU meter**
+    (stereo: the right channel from LED 1 the clock's way, the left the other way, green to red, peaks falling),
+    **Music orbit** (two comets going round once a bar, opposite ways, flaring on the kick), **Music drums** (the kick a
+    wave from LED 1, the snare one from the back, hi-hats sparks) and **Music aurora** (light flowing slowly round,
+    swelling on the beat, turning cooler with brighter sound). They take the light's colour; for white, colours of
+    their own. They follow what comes out of the speaker, not what is still in its buffer, and the music's own
+    loudness, not the volume; with nothing playing they breathe quietly. Fill, rotation and `light_ring_leds` work as before;
+  - twelve lights "Light ring LED 1" to "12" over it (colour and brightness each; LED 1 is where the volume starts,
+    turned by "Light ring rotation"), for scenes and automations; an LED that is off lets "Light ring" through;
+  - an animation over everything: your own frames from `light_ring_animation`, or a design of your library from the
+    select "Light ring design", the action `light_ring_design`, or "Show on the Echo" on the Lights page (beside each
+    design, and in the designer for what you are drawing, saved or not). "None" in the select, or "Stop" on the page,
+    ends it.
+
+  The actions: `light_ring_frame` (12 colours `#rrggbb` from LED 1 on, `""` dark; `brightness` 0 to 255; `timeout`
+  in seconds, 0 for none: sets the twelve lights), `light_ring_animation` (`frames`: one `"<ms>:RRGGBB,RRGGBB,..."` per
+  picture with all 12 LEDs, as a design's lines; `repeat` 0 for until stopped; `brightness`), `light_ring_design`
+  (`name`, `repeat` 0 for as drawn, `brightness`) and `light_ring_stop` (the animation, and the twelve lights off).
+  The Echo plays animations itself: smooth, whatever Home Assistant does meanwhile. About 600 pictures fit in one
+  action; a picture shorter than 33 ms is skipped.
+
+  The Echo's own lights always come first: listening, thinking, replies, timers, volume, Drop In and the red ring of
+  muted microphones show as you set them above, and your lights come back after them. Nothing is brighter than the
+  Echo's own lights: it follows "LED brightness" (auto included) the way Amazon's ring does, and no LED goes above what
+  Amazon's ring itself writes at that level. The current through the LEDs, the mute button's light and the ring at
+  start-up stay Amazon's. Switched off, the ring is Amazon's ring program's again and "Light ring" uses its set.
+
+  ```yaml
+  - action: esphome.echo_dot_3_5695c4_light_ring_animation
+    data:
+      repeat: 3
+      brightness: 255
+      frames:
+        - "150:FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+        - "150:000000,FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+        - "150:000000,000000,FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+  - action: select.select_option
+    target: { entity_id: select.echo_dot_3_5695c4_light_ring_design }
+    data: { option: Sunrise }
+  - action: light.turn_on
+    target: { entity_id: light.echo_dot_3_5695c4_light_ring }
+    data: { effect: Music drums, brightness: 200 }
+  ```
+  An Echo installed before this needs the update once: root then lets hassmic write the ring's LEDs (that one file of
+  the LED driver, given again at each start); until then the setting is not shown.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
 - **Echo Show 5 (both generations) and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the

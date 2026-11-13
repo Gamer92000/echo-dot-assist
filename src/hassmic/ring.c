@@ -45,6 +45,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,8 +63,9 @@
 static const float level_gain[LEVELS] = { 1.0f, 0.66f, 0.382f };
 #define GAMMA 2.2f
 enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW, E_COUNT };
-const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow" };
-const int ring_neffects = E_COUNT;
+/* The palette's five, then those only the live ring draws (ringlive.c), offered while it draws the light */
+const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow", RING_LIVE_EFFECTS };
+const int ring_neffects = E_COUNT + RING_LIVE_NEFFECTS;
 static const char *const effect_ids[] = { "solid", "pulse", "spin", "blink", "rainbow" };
 
 /* Every pattern main.c plays (led()), by what it shows.  The ids are the settings page's and state/ring-applied's: keep
@@ -747,6 +749,8 @@ static struct ring_light flash; static long long flash_until;
 static char light_shown[48];                /* what of ours is on the ring for the light, "" none */
 static char led_shown[MAX_LEDS][32];        /* and on each LED's own layer (a fill), "" none */
 static int rotation;                        /* the fill's start, in LEDs from stock's */
+static atomic_int live_light;               /* the live ring draws the light (ringlive.h): no palette pattern for it;
+                                             * written under lock, read without it by ring_effect_listed (protocols) */
 
 static long long now_ms(void)
 {
@@ -859,6 +863,8 @@ static void light_apply(long long now)
     if (!flashing) flash_until = 0;
     const struct ring_light *l = flashing ? &flash : &light;
     memset(wled, 0, sizeof wled);
+    static const struct ring_light none;
+    if (live_light) { l = &none; flashing = 0; }        /* the live ring draws it: ours all off */
     /* The fill: that share of the LEDs, rounded up (1 % one LED, all of them only at 100 %), from where stock's volume
      * steps start (volume_step-01 lights LED 11, -05 LEDs 11 and 0, -10 LEDs 11 to 2) turned by the rotation.  A part
      * of the ring is each LED's own solid pattern, so the effects are the whole ring's only; a flash blinks it whole */
@@ -875,7 +881,8 @@ static void light_apply(long long now)
     }
     else if (custom && (l->on || flashing) && !busy(now) && lit > 0) {
         struct colour c; quantize(l, &c);
-        if (lit >= leds || flashing || !have_leds) light_pattern(flashing ? E_BLINK : l->effect, &c, want, sizeof want);
+        /* an effect only the live ring draws, left over from it: the colour still */
+        if (lit >= leds || flashing || !have_leds) light_pattern(flashing ? E_BLINK : l->effect < E_COUNT ? l->effect : E_NONE, &c, want, sizeof want);
         else {
             char code[8]; colour_code(&c, code, sizeof code);
             for (int j = 0; j < lit; j++) { int i = (start + j) % leds; snprintf(wled[i], sizeof wled[i], "hassmic_led_%d_%s", i, code); }
@@ -976,7 +983,11 @@ int ring_custom(void) { return custom; }
 int ring_assistant_steps(void) { return have_assist; }
 int ring_per_led(void) { return have_leds; }
 /* one LED shows a spin as a pulse of its own, twice a second: Pulse is the one meant */
-int ring_effect_listed(int i) { return i >= 0 && i < E_COUNT && !(i == E_SPIN && board.ring_leds == 1); }
+int ring_effect_listed(int i)
+{
+    if (i >= E_COUNT) return i < ring_neffects && live_light;
+    return i >= 0 && !(i == E_SPIN && board.ring_leds == 1);
+}
 
 /* lock held: the slot that shows PATTERN (stock's name; a volume step: its number in *step), -1 none */
 static int slot_of(const char *pattern, int *step)
@@ -1095,6 +1106,28 @@ void ring_reload(void)
     if (reloaded_fn) reloaded_fn(custom != was || have_leds != was_leds);      /* the fill's entities come and go with them */
 }
 
+void ring_light_live(int on)
+{
+    pthread_mutex_lock(&lock);
+    if (live_light != !!on) fprintf(stderr, "light ring: Home Assistant's light %s\n", on ? "drawn by the live ring, in its own colours" : "from the palette again");
+    live_light = !!on;
+    /* an effect only the live ring draws is gone with it: Home Assistant's state must name one of the list it gets */
+    if (!live_light && (light.effect < 0 || light.effect >= E_COUNT)) light.effect = E_NONE;
+    light_apply(now_ms());
+    pthread_mutex_unlock(&lock);
+}
+
+int ring_light_now(struct ring_light *l)
+{
+    pthread_mutex_lock(&lock);
+    int fl = flash_until && now_ms() < flash_until;
+    *l = fl ? flash : light;
+    pthread_mutex_unlock(&lock);
+    return fl;
+}
+
+int ring_busy(void) { pthread_mutex_lock(&lock); int b = busy(now_ms()); pthread_mutex_unlock(&lock); return b; }
+
 void ring_light_get(struct ring_light *l) { pthread_mutex_lock(&lock); *l = light; pthread_mutex_unlock(&lock); }
 
 void ring_level(int dbfs10) { (void)dbfs10; }       /* the LEDs' listening ring does not follow the voice */
@@ -1105,7 +1138,7 @@ void ring_light_set(const struct ring_light *l, unsigned flash_ms)
     pthread_mutex_lock(&lock);
     if (flash_ms) { flash = *l; flash.on = 1; flash_until = now_ms() + flash_ms; }
     else { light = *l; flash_until = 0; }
-    if (light.effect < 0 || light.effect >= E_COUNT) light.effect = E_NONE;
+    if (light.effect < 0 || light.effect >= ring_neffects) light.effect = E_NONE;
     light.fill = light.fill < 0 ? 0 : light.fill > 100 ? 100 : light.fill;
     if (light.nleds < 0 || light.nleds > MAX_LEDS) light.nleds = 0;
     flash.fill = flash.fill < 0 ? 0 : flash.fill > 100 ? 100 : flash.fill;
