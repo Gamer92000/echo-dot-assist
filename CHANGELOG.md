@@ -4,6 +4,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-13
 
+- **Duplex for a realtime agent (`-D`, Wyoming).** With `-D` in `ARGS` the microphone keeps streaming while a reply
+  plays, and a wake word during the reply is left to the client: for a client that cuts replies itself, such as
+  hermes-talk's Echo surface (`hermes talk echo`), which talks with a realtime voice model straight from the Echo.
+  Amazon's echo canceller keeps the reply out of the microphone, and the microphone gain holds while the reply plays
+  so it does not turn the canceller's leftover up into something the client hears as speech. The action button still
+  cuts a reply. `-D` is ignored with the ESPHome connection. Without `-D` nothing changes. Thanks to patrickhaahr.
+
 - **Bluetooth proxy: each request to a connected device took about 25 ms instead of 100 in a test on an Echo Dot 2
   (issue #167).** Devices that Home Assistant drives through the Echo, such as IKEA's Idasen desk, ask for something
   and wait for the answer several times a second. Once a device is connected, the Echo now asks for the short link

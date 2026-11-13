@@ -224,6 +224,7 @@ static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
 static int dropin_port = 28932;                     /* 0 = no Drop In (needs the arbitration network) */
 int core_web_port = 28931;                           /* 0 = no settings page */
+int core_duplex;
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
 
@@ -1267,6 +1268,11 @@ static void trigger(int touch, uint64_t from)
         fprintf(stderr, "stop: came during the round, reply cut\n");
         barge_in = 0;
         atomic_store(&flush_playback, 1);
+    } else if (state == SPEAKING && core_duplex && !touch) {
+        /* the client has the microphone through the reply and cuts it itself: what follows the wake word is speech to it.
+         * Not the button: it cuts the reply as without -D (barge-in below).  After the stop branch: a "stop" in the
+         * round cuts the reply under -D too, as stop_word does */
+        fprintf(stderr, "wake word during the reply: left to the client (-D)\n");
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
@@ -1583,7 +1589,9 @@ static int kiosk_score(uint64_t end, int simulated)
 static void send_out(const int16_t *pcm, size_t n, int sound)
 {
     static int16_t out[1024 + MICDENOISE_FRAME];
-    mic_gain.hold = sound;
+    /* -D: the reply is our own sound too.  The echo canceller leaves a trace of it that the gain would bring up to
+     * speech level (up to +36 dB), and the client would answer it as the talker */
+    mic_gain.hold = sound || (core_duplex && atomic_load(&tts_on));
     micend_run(&mic_end, pcm, n, mic_gain.hold);        /* the level as heard, before the gain; heard_end() acts on it */
     while (n) {
         size_t k = n < 1024 ? n : 1024, m = k;
@@ -2169,7 +2177,10 @@ static void *playback_thread(void *arg)
 
 void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
-    if (!wake_wait) { atomic_store(&streaming, 0); mic_stopped(); }     /* wake_wait: a chime and then the message */
+    /* wake_wait: a chime and then the message.  -D: the stream stays open, and with it the front end's listening flag
+     * (listening(1) of pipeline_start): its cancellers do not adapt during the reply.  As measured on radar (PLAN.md);
+     * listening(0) for the reply, as -w remote has it, not tried */
+    if (!wake_wait && !core_duplex) { atomic_store(&streaming, 0); mic_stopped(); }
     if (state != SPEAKING) speak_media = media;
     core_set_state(SPEAKING);
     q_push(Q_START, media, rate, channels, NULL, 0);
@@ -3502,7 +3513,7 @@ int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:G:LEVSTB")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:G:LEVSTBD")) != -1) switch (o) {
         case 'G': return ring_generate(optarg);     /* root, at the satellite's start (main.sh leds) */
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
@@ -3520,8 +3531,15 @@ int main(int argc, char **argv)
         case 'V': use_volume = 0; break;
         case 'S': print_mdns = 1; break;
         case 'B': use_bt = 0; break;
+        case 'D': core_duplex = 1; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
-        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S]\n"); return 2;
+        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S] [-D]\n"); return 2;
+    }
+    if (core_duplex && proto != &proto_wyoming) {
+        /* ESPHome: Home Assistant's run has finished listening once its reply plays, and the open stream would keep
+         * wake_listen (-w remote) from starting the run that lets the wake word cut the reply */
+        fprintf(stderr, "-D: Wyoming only, ignored\n");
+        core_duplex = 0;
     }
     core_port = port ? port : proto->port;
     if (!core_name) name_make();
