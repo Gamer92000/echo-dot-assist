@@ -22,7 +22,8 @@
  * stream is the call's keepalive, LOST_MS without one ends it.  The other side's address comes from its message, then
  * from its authenticated audio (an address that changed mid-call follows).
  *
- * The audio itself (codec, gate, echo suppressor, jitter buffer, playout, the call's microphone) is call.c's.
+ * The audio itself (codec, gate, echo suppressor, jitter buffer, playout) is call.c's, shared with the phone (sip.c);
+ * a call claims it (call_claim) from calling or ringing on, so the Echo is in one call at a time.
  */
 #include "dropin.h"
 #include "arb.h"
@@ -166,7 +167,7 @@ static void go_live(long long now)
 {
     ev_push(DROPIN_LIVE, c.node, c.outgoing, c.outgoing ? DROPIN_R_CONNECTED : -1, 0);
     c.state = DROPIN_LIVE; c.live_at = c.rx_at = now;
-    c.media = call_begin(send_audio, NULL);
+    c.media = call_begin(CALL_DROPIN, CODEC_OPUS, send_audio, NULL);
     fprintf(stderr, "drop in: connected with %s\n", c.node);
 }
 
@@ -189,6 +190,7 @@ static void end_call(const char *why, int tell, int result)
     memcpy(ended[ended_n++ % 4], c.id, 8);
     c.state = DROPIN_IDLE; c.gen++; c.keyed = 0; c.rang = 0;
     crypto_wipe(c.esk, sizeof c.esk); crypto_wipe(c.key, sizeof c.key);
+    call_release(CALL_DROPIN);
 }
 
 static void fresh_call(const uint8_t peer[8], const char *node, uint32_t ip, int outgoing)
@@ -280,6 +282,7 @@ int dropin_call(const char *target, char *err, size_t errsz)
     else if (!enabled) { snprintf(err, errsz, "Drop In is off on this Echo"); r = DROPIN_R_FAILED; }
     else if (no) { snprintf(err, errsz, "%s", no); r = DROPIN_R_MUTED_HERE; }
     else if (c.state) { snprintf(err, errsz, "already in a Drop In with %s", c.node); r = DROPIN_R_BUSY_HERE; }
+    else if (call_claim(CALL_DROPIN)) { snprintf(err, errsz, "already in a phone call"); r = DROPIN_R_BUSY_HERE; }
     if (r >= 0) { ev_push(-1, node, 1, r, 1); pthread_mutex_unlock(&dl); return -1; }
     fresh_call(id, node, ip, 1);
     ws_random(c.id, 8);
@@ -344,15 +347,16 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
         }
         { int old = 0; for (int i = 0; i < 4; i++) old |= !memcmp(ended[i], id, 8);
           if (old) break; }                             /* a late copy of an invite for a call that is over */
-        if (!enabled || no || c.state || !port || !node[0]) {
-            const char *why = !enabled ? "Drop In is off there" : no ? no : c.state ? "busy in another Drop In" : "no address";
+        if (!enabled || no || c.state || !port || !node[0] || call_claim(CALL_DROPIN)) {
+            /* in a phone call: busy, in the words every build with Drop In knows */
+            const char *why = !enabled ? "Drop In is off there" : no ? no : c.state || (port && node[0]) ? "busy in another Drop In" : "no address";
             fprintf(stderr, "drop in: call from %s refused: %s\n", node[0] ? node : "an Echo", why);
             send_to(from, id, M_REFUSE, why);
             break;
         }
         fresh_call(from, node, ip, 0);
         memcpy(c.id, id, 8); c.port = htons((uint16_t)port);
-        if (derive(epk)) { send_to(from, id, M_REFUSE, "no key"); c.state = DROPIN_IDLE; break; }
+        if (derive(epk)) { send_to(from, id, M_REFUSE, "no key"); c.state = DROPIN_IDLE; call_release(CALL_DROPIN); break; }
         if (ask) { c.state = DROPIN_RINGING; ev_push(DROPIN_RINGING, c.node, 0, -1, 0);
                    fprintf(stderr, "drop in: %s calls, ringing until the action button\n", node); send_msg(M_RINGING, NULL); }
         else { fprintf(stderr, "drop in: %s drops in\n", node); answer(); }

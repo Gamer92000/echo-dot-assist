@@ -9,6 +9,7 @@
  *     -o port  push update port (default 28929, 0 = off; see scripts/ota-push.sh)
  *     -a port  wake word arbitration between Echos, UDP (default 28930, 0 = off; see arb.c)
  *     -i port  Drop In audio between Echos, UDP (default 28932, 0 = off; needs -a; see dropin.c)
+ *     -c port  the phone: SIP on UDP port, RTP on port + 1 (default 28933, 0 = off; see sip.c)
  *     -z port  Sendspin player port (default 28928, 0 = off)
  *     -T       print the Sendspin pairing token (paste it into Music Assistant to pair) and exit
  *     -L no LED ring   -E no earcon on wake   -V leave the volume buttons alone   -S print the avahi service file and exit
@@ -53,6 +54,7 @@
 #include "davs.h"
 #include "dropin.h"
 #include "call.h"
+#include "sip.h"
 #include "duck.h"
 #include "ringstop.h"
 #include "micdenoise.h"
@@ -224,6 +226,7 @@ void core_reboot(const char *why)
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
 static int dropin_port = 28932;                     /* 0 = no Drop In (needs the arbitration network) */
+static int phone_port = 28933;                      /* 0 = no phone (sip.c); RTP on the next port */
 int core_web_port = 28931;                           /* 0 = no settings page */
 int core_duplex;
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
@@ -922,24 +925,32 @@ int core_dnd(int set)
 
 int core_muted(void) { return soft_mute || buttons_muted(); }
 
-/* ---------------------------------------------------------------- Drop In (dropin.c)
+/* ---------------------------------------------------------------- calls: Drop In (dropin.c) and the phone (sip.c)
  * As stock shows a call: the ring's call animations (layer 2, under listening and replies; every model has them) and the
  * comms sounds of the image, whatever the wake sound setting says (a call that opens the microphone is never silent).
- * The front end's listening mode follows who talks (core_dropin_listen). */
+ * The front end's listening mode follows who talks (core_dropin_listen).  A phone call looks and sounds as a Drop In
+ * that rings; only one of the two runs at a time (call.h call_claim), each kept by its own state here all the same. */
 static atomic_int dropin_ring = -1;                 /* the earcon thread loops this ringtone (SND_RING_*), -1: none */
 static atomic_llong dropin_ring_at;                 /* ... from then on (mono_ms) */
-static atomic_int dropin_live;
-static int dropin_was;                              /* lock held */
+static atomic_int in_call;                          /* a call is connected, either kind */
+static int call_was[3];                             /* lock held: each kind's state (CALL_DROPIN, CALL_PHONE) */
 static const char *const dropin_led[4] = { NULL, "call_outbound_ringing", "call_incoming", "call_connected" };
 static void mix_apply(void);
 
-void core_dropin(int st, const char *peer, int outgoing)
+static int calls_idle(void) { return call_was[CALL_DROPIN] == DROPIN_IDLE && call_was[CALL_PHONE] == PHONE_IDLE; }    /* lock held */
+static int call_any(void)                           /* any lock: a call in any state, either kind */
+{
+    return (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) || (sip_running() && sip_status(NULL, 0) != PHONE_IDLE);
+}
+static void call_hangup(const char *why) { if (dropin_running()) dropin_hangup(why); if (sip_running()) sip_hangup(why); }
+
+static void call_changed(int kind, int st, const char *peer, int outgoing)
 {
     pthread_mutex_lock(&core_lock);
-    int was = dropin_was;
-    dropin_was = st;
+    int was = call_was[kind];
+    call_was[kind] = st;
     if (st != was) {
-        fprintf(stderr, "drop in: %s%s%s\n", dropin_states[st], peer[0] ? " " : "", peer);
+        fprintf(stderr, "%s: %s%s%s\n", kind == CALL_PHONE ? "phone" : "drop in", dropin_states[st], peer[0] ? " " : "", peer);
         if (dropin_led[was]) led("-u", dropin_led[was]);
         if (dropin_led[st]) led("-s", dropin_led[st]);
         else if (was == DROPIN_LIVE) led("-s", "call_connected_end");
@@ -948,10 +959,11 @@ void core_dropin(int st, const char *peer, int outgoing)
         atomic_store(&dropin_ring, st == DROPIN_RINGING ? SND_RING_IN : st == DROPIN_CALLING ? SND_RING_OUT : -1);
         if (st == DROPIN_LIVE) sound_queue(outgoing || was == DROPIN_RINGING ? SND_CALL_ON : SND_DROPIN);
         else if (st == DROPIN_IDLE) sound_queue(SND_CALL_OFF);
-        atomic_store(&dropin_live, st == DROPIN_LIVE);
+        atomic_store(&in_call, call_was[CALL_DROPIN] == DROPIN_LIVE || call_was[CALL_PHONE] == PHONE_LIVE);
         mix_apply();                                /* a loud call's volume counts now, or no longer (mix_target) */
-        if (st != DROPIN_LIVE) { listen_call = 0; listening_apply(); }       /* dropin.c turns it on while this side talks */
-        if (connected && proto->dropin_changed) proto->dropin_changed(st, peer);
+        if (st != DROPIN_LIVE) { listen_call = 0; listening_apply(); }       /* call.c turns it on while this side talks */
+        if (connected && kind == CALL_DROPIN && proto->dropin_changed) proto->dropin_changed(st, peer);
+        if (connected && kind == CALL_PHONE && proto->phone_changed) proto->phone_changed(st, peer);
     }
     pthread_mutex_unlock(&core_lock);
     /* A call is the newest source, as Alexa's paused what played: music's leftovers in micAsr would open the gate and go
@@ -959,6 +971,26 @@ void core_dropin(int st, const char *peer, int outgoing)
      * made silent and is heard again.  Outside core_lock: sendspin takes its own lock */
     if (st == DROPIN_LIVE && was != DROPIN_LIVE) { if (core_sendspin_port) sendspin_pause(); a2dp_pause(); }
     if (st == DROPIN_IDLE && was == DROPIN_LIVE) a2dp_unyield();
+}
+
+void core_dropin(int st, const char *peer, int outgoing) { call_changed(CALL_DROPIN, st, peer, outgoing); }
+void core_phone(int st, const char *peer, int outgoing) { call_changed(CALL_PHONE, st, peer, outgoing); }
+
+/* What came of a phone call this Echo made ("Phone result"); one refused here never left idle: the end of a call's sound */
+void core_phone_result(int r, const char *peer, int here)
+{
+    pthread_mutex_lock(&core_lock);
+    fprintf(stderr, "phone: result %s%s%s%s\n", phone_results[r], peer[0] ? " " : "", peer, here ? " (refused here: end of call sound)" : "");
+    if (here) sound_queue(SND_CALL_OFF);
+    if (connected && proto->phone_result) proto->phone_result(phone_results[r]);
+    pthread_mutex_unlock(&core_lock);
+}
+
+void core_phone_line(int line)
+{
+    pthread_mutex_lock(&core_lock);
+    if (connected && proto->phone_line) proto->phone_line(line);
+    pthread_mutex_unlock(&core_lock);
 }
 
 /* What came of a call this Echo made, for Home Assistant ("Drop In result").  One refused here (this Echo in a call or
@@ -982,11 +1014,11 @@ void core_dropin_result(int r, const char *peer, int here)
 void core_dropin_listen(int on)
 {
     pthread_mutex_lock(&core_lock);
-    if (on != listen_call && (!on || atomic_load(&dropin_live))) { listen_call = on; listening_apply(); }
+    if (on != listen_call && (!on || atomic_load(&in_call))) { listen_call = on; listening_apply(); }
     pthread_mutex_unlock(&core_lock);
 }
 
-/* Any lock or none (dropin_call runs under core_lock from Home Assistant): plain reads of flags */
+/* Any lock or none (dropin_call and sip_call run under core_lock from Home Assistant): plain reads of flags */
 const char *core_dropin_refusal(int incoming)
 {
     if (buttons_muted() || soft_mute) return "the microphones are off";
@@ -1219,7 +1251,7 @@ static int stopped_now(void) { return stop_heard() && (stop_cut || stop_ends); }
 static int error_shows(void)
 {
     return !core_muted() && !link_paused && !atomic_load(&oobe) && state == IDLE &&
-           !atomic_load(&alarm_on) && dropin_was == DROPIN_IDLE;
+           !atomic_load(&alarm_on) && calls_idle();
 }
 
 /* touch: the action button rather than the wake word.  from: where the wake word ended on the ring's clock (0: unknown) */
@@ -1259,7 +1291,7 @@ static void trigger(int touch, uint64_t from)
     } else if (state == IDLE && !touch && stopped_now()) {
         fprintf(stderr, "stop: came during the round, nothing started\n");
     } else if (state == IDLE) {
-        if (atomic_load(&alarm_on) || dropin_was != DROPIN_IDLE) wake_cut_ms = mono_ms();     /* its "stop" drops this pipeline again */
+        if (atomic_load(&alarm_on) || !calls_idle()) wake_cut_ms = mono_ms();     /* its "stop" drops this pipeline again */
         if (touch) wake_phrase[0] = 0;                          /* the button: the first wake word's assistant */
         sound_request(touch ? SND_TOUCH : SND_WAKE);
         pipeline_start(touch ? 0 : from);
@@ -1330,7 +1362,7 @@ static int stop_is_here(int run)
 static void stop_word(void)
 {
     int ended = 0, paused = 0, told = 0;
-    if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) { dropin_hangup("stop"); ended = 1; }   /* and the pipeline its wake word opened */
+    if (call_any()) { call_hangup("stop"); ended = 1; }   /* a Drop In or a phone call, and the pipeline its wake word opened */
     pthread_mutex_lock(&core_lock);
     stop_ms = mono_ms();
     if (atomic_load(&alarm_on)) { core_alarm_stop("stop"); ended = 1; }     /* and the pipeline its wake word opened, below */
@@ -1990,7 +2022,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
 static void on_near_miss(int slot, const char *keyword)
 {
     if (!core_local_wake || !strcasecmp(keyword, "STOP") || (wake_keyword[slot][0] && strcasecmp(keyword, wake_keyword[slot]))) return;
-    if (atomic_load(&dropin_live) && call_far_talking()) return;
+    if (atomic_load(&in_call) && call_far_talking()) return;
     wake_tell("near_miss");
 }
 
@@ -2035,7 +2067,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     }
     /* In a Drop In the other side's voice plays here, and what the echo canceller leaves of its "Alexa" (meant for the
      * Echo over there) can be enough for ours.  While it talks, the wake word is left to that Echo */
-    if (atomic_load(&dropin_live) && call_far_talking()) {
+    if (atomic_load(&in_call) && call_far_talking()) {
         fprintf(stderr, "wake: %s while the other side of the Drop In talks (%.1f dBFS here), ignored\n", keyword, call_far_level());
         return;
     }
@@ -2449,9 +2481,9 @@ int core_transcript(const char *text)
         if (connected && proto->cancel) quiet_cancel(); else core_pipeline_finish();
         return 1;
     }
-    if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) {
+    if (call_any()) {
         if (said(w, stops, sizeof stops / sizeof *stops) || said(w, hangups, sizeof hangups / sizeof *hangups)) {
-            dropin_hangup("said hang up");
+            call_hangup("said hang up");
             if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
             core_pipeline_finish();
             return 1;
@@ -2685,6 +2717,7 @@ static void on_action(void)
     if (improv_authorize()) return;                     /* a phone setting up the network did */
     button_event(BUTTON_ACTION, 0);
     if (dropin_running() && dropin_button()) return;    /* a Drop In rang (answered) or ran (ended) */
+    if (sip_running() && sip_button()) return;          /* a phone call: the same */
     pthread_mutex_lock(&core_lock);
     int busy = state == LISTENING || state == THINKING;
     pthread_mutex_unlock(&core_lock);
@@ -2704,7 +2737,7 @@ static void on_multi(int n)
     int busy = state == LISTENING || state == THINKING;
     pthread_mutex_unlock(&core_lock);
     /* a Drop In in any state (a call ringing here included) is the single press's to answer or end, never a skip */
-    int call = dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE;
+    int call = call_any();
     if (!busy && !call && (a2dp_skip(dir) || (core_sendspin_port && sendspin_skip(dir)))) return;
     on_action();
 }
@@ -2810,7 +2843,7 @@ static int loudest(void)
     int v = core_volume();
     if (vol_split)
         for (int k = 0; k < VOL_KINDS; k++)   /* a call's volume only while one is on: no hidden loud one moves the rest */
-            if ((k != VOL_CALLS || atomic_load(&dropin_live)) && kind_volume(k) > v) v = kind_volume(k);
+            if ((k != VOL_CALLS || atomic_load(&in_call)) && kind_volume(k) > v) v = kind_volume(k);
     return v;
 }
 
@@ -3249,7 +3282,7 @@ static void on_volume(int dir)
     pthread_mutex_lock(&core_lock);
     /* separate volumes: what plays now, a Drop In call, a reply (not Home Assistant's media) or a ringing timer, else
      * the music; one that follows the music moves with it */
-    int k = !vol_split ? -1 : atomic_load(&dropin_live) ? VOL_CALLS : atomic_load(&tts_on) && !tts_media ? VOL_ASSISTANT
+    int k = !vol_split ? -1 : atomic_load(&in_call) ? VOL_CALLS : atomic_load(&tts_on) && !tts_media ? VOL_ASSISTANT
           : atomic_load(&alarm_on) ? VOL_TIMERS : -1;
     if (k >= 0 && !kinds[k].linked) level_step(k, dir);
     else core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
@@ -3440,7 +3473,7 @@ static void *capture_thread(void *arg)
             if (whisper_on && s) whisper_feed(pcm, n / 2);
             if (whisper_on && !s) { whisper_end(atomic_exchange(&whisper_eou, 0)); whisper_on = 0; }
         }
-        if (atomic_load(&dropin_live)) {               /* a Drop In: the call gets the mic as the pipeline does; muted, silence */
+        if (atomic_load(&in_call)) {               /* a Drop In: the call gets the mic as the pipeline does; muted, silence */
             static int16_t zeros[1024];
             int own = core_own_sound();             /* our own sounds and replies: not for the other side */
             if (!core_muted()) call_mic(pcm, n / 2, own);
@@ -3520,7 +3553,7 @@ int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:G:LEVSTBD")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:c:W:G:LEVSTBD")) != -1) switch (o) {
         case 'G': return ring_generate(optarg);     /* root, at the satellite's start (main.sh leds) */
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
@@ -3532,6 +3565,7 @@ int main(int argc, char **argv)
         case 'o': ota_port = atoi(optarg); break;
         case 'a': arb_port = atoi(optarg); break;
         case 'i': dropin_port = atoi(optarg); break;
+        case 'c': phone_port = atoi(optarg); break;
         case 'W': core_web_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
         case 'E': no_earcons = 1; break;
@@ -3603,6 +3637,7 @@ int main(int argc, char **argv)
     if (arb_running() && duck_start()) fprintf(stderr, "duck: no thread, the other Echos' runs do not duck the music here\n");
     if (arb_running() && ringstop_start()) fprintf(stderr, "ringstop: no thread, a stop here ends no ring elsewhere\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
+    if (phone_port && strcmp(proto->id, "wyoming") && sip_start(phone_port)) fprintf(stderr, "phone: not available\n");
 
     pthread_t cap_t, play_t, ear_t;
     pthread_create(&cap_t, NULL, capture_thread, NULL);

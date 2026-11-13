@@ -12,6 +12,21 @@ What changed for people using the Echo, newest first. Details and measurements a
   processing (default) or the assistant's stream as before. The Echo Shows and the Echo Input keep the assistant's:
   their audio has no call stream.
 
+- **The Echo as a phone: an extension of your phone system (SIP).** Asterisk, FreePBX, a Fritz!Box or any phone
+  system that takes SIP phones can now ring the Echo, and the Echo can call through it: a doorbell intercom, a desk
+  phone, a softphone. New feature "Phone" (Features, off by default): switch it on and, under "Set up…", give the
+  phone system's address, the extension made for the Echo and its password (sent sealed, kept on the Echo, never
+  shown again, never exported). A call rings as a Drop In that waits for the button, until you answer with the action
+  button, on an Echo Show's screen, with "Answer phone" in Home Assistant or on the settings page; it never connects by
+  itself. Call out with the action `esphome.<echo>_phone_call` (`number:`) or Call… on the page. Home Assistant gets
+  "Phone", "Phone with" ("Portero (60)"), "Phone line" (registered or why not), "Answer phone", "Hang up phone" and
+  the event "Phone result", as Drop In's. The sound is Drop In's: its echo handling, its call volume and its
+  microphone (Amazon's call processing where the Echo has it); Opus
+  (wideband) or G.711. Only the phone system's address can ring the Echo; do not disturb, the microphones off and a
+  Drop In refuse calls. SIP and the audio are not encrypted, as with most desk phones: for a phone system in your
+  own network. UDP 28933 and 28934. No DTMF, transfer, hold or paging yet. Setup and an Asterisk example in the
+  guide ("Phone").
+
 - **Duplex for a realtime agent (`-D`, Wyoming).** With `-D` in `ARGS` the microphone keeps streaming while a reply
   plays, and a wake word during the reply is left to the client: for a client that cuts replies itself, such as
   hermes-talk's Echo surface (`hermes talk echo`), which talks with a realtime voice model straight from the Echo.

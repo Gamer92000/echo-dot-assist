@@ -64,6 +64,11 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # speaker adaptation in use and saved (a German "Alexa", timed per loop)
 .venv/bin/python tests/fake_ha_arbitration.py # two Echos under one fake HA: wake word arbitration, join paths and security
                                              # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
+.venv/bin/python tests/fake_sip.py            # the phone (sip.c) against a fake PBX written from the RFCs: digest registration,
+                                             # calls in (G.711, Opus as Asterisk offers it) and out (407, busy, CANCEL), the
+                                             # call's audio both ways, refusals, the page's account, a wrong password
+.venv/bin/python tests/asterisk_real.py       # the same against a real Asterisk in a throwaway container (docker, image
+                                             # andrius/asterisk; skips without): Opus and A-law both ways; not in run.py
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
@@ -396,10 +401,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `automation.trigger`, since ServiceNotFound would end the conversation's run with "Done"; the reply from "Drop In
   result" where the Echo has it, else from the timing of the "Drop In" sensor). Keep the entities' states, event
   types, icons and the action's name stable: released blueprints rely on them; a new result is a new event type.
-- **Call audio** (`call.c`, `call.h`): Drop In's audio moved out of `dropin.c` unchanged: the mic gate, echo
-  suppressor and gain (`call_mic` from the capture thread, the owner's `send` per encoded 20 ms frame), the jitter
-  buffer and playout on the Voip stream (`call_rx`, its thread), Opus 16 kHz; `call_begin`/`call_end` the media's
-  generation. Lock order: `dl` before call.c's `ml`.
+- **Call audio** (`call.c`, `call.h`): what Drop In and the phone share: the mic gate, echo suppressor and gain
+  (`call_mic` from the capture thread, the owner's `send` per encoded 20 ms frame), the jitter buffer and playout on
+  the Voip stream (`call_rx`, its thread), Opus 16 kHz or G.711 at 8 kHz (63-tap Kaiser FIR 2:1,
+  `half_down`/`half_up`; `tests/unit/call_test.c`). One call on the Echo at a time: `call_claim` from calling/ringing
+  until idle, so a Drop In gets "busy in another Drop In" during a phone call and the other way round.
+  `call_begin`/`call_end` the media's generation. Lock order: `dl`/`sl` before call.c's `ml`.
   Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`): on the Dots' mixer
   `micHfp` is Amazon's "Voice" pipeline (AFE.cfg: VAEC, RES, NR, CNG, AGC -22 dBFS, Tx EQ, limiter; no beamformer)
   once the front end is in call mode (a Voip stream open), the bare mic otherwise. `callmic_thread` opens it after the
@@ -407,6 +414,19 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`SUPPRESS_HFP_DB`, `NEAR_MIN_HFP_DB`), `call_mic` (micAsr) stands aside (`src_hfp`); no stream or 3 empty reads:
   micAsr for the rest of the call. Record streams' format getters answer -1 (mixcap.c): never refuse on that.
   `audio_file.c`: `HASSMIC_CALL_CAP` (tests: the hall's 700 Hz tone in `fake_ha_dropin.py`); Android: none.
+- **Phone** (`sip.c`, `sip.h`): a SIP user agent of our own over UDP for one account (`state/phone` 0600: server,
+  user, password hex; never exported; `/api/phone` sets it with the password sealed as Wi-Fi's), feature `phone` (off).
+  REGISTER with digest (MD5 in `hash.c`, qop=auth or none), refresh at 80 %, a refusal retried every 5 min, a new
+  local address registers at once.  Requests only from the server's address (403 otherwise); incoming INVITE: 100,
+  180, rings (Drop In's ring and sounds via `core_phone` = `call_changed(CALL_PHONE)` in main.c) until answered
+  (`sip_answer`/`sip_button`, HA "Answer phone", the screen's "dropin answer", the page), 200 with our SDP answer (the
+  offer's first codec of ours), 603 declined, 480 after 60 s / DND / muted, 486 busy, 488 no codec. Outgoing
+  `sip_call` (HA action `phone_call`, page): INVITE with Opus(111)/PCMA/PCMU, one 401/407 answered, CANCEL after the
+  first provisional, non-2xx ACKed in their transaction, 2xx ACKed in its own. UDP retransmission T1..T2, 64 T1. A call
+  ended here finishes its transactions in `z`. RTP symmetric on port + 1, only from the SDP's address, no RTCP, 120 s
+  without RTP ends a call. Everything goes to the server (outbound proxy), Record-Route kept as Route. HA: "Phone",
+  "Phone with", "Phone line" (diagnostic), buttons "Answer phone", "Hang up phone", event "Phone result"
+  (`phone_results`), action `phone_call`; keep them stable as Drop In's. `-c port` (28933; 0 off), ESPHome only.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
@@ -692,7 +712,7 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
-must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
+must stay in that range (UDP 28932 Drop In, 28933/28934 the phone's SIP and RTP too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
 `state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed, and with `kiosk_dlna` on its DLNA renderer (`kiosk_dlna` in `lockdown.sh`: the TCP port of the app's own setting `flutter.ks.dlna.port`, read through `runas` as its user, while its uid listens there per `/proc/net/tcp*`; UDP 1900 to 239.255.255.250 only while its uid alone holds 1900; issue #109); its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.

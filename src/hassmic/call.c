@@ -1,6 +1,6 @@
 /*
- * A call's audio: call.h says what each side does.  Taken out of dropin.c as it was tuned there (PLAN.md, 2026-10-08 and
- * on), so that the call's microphone below can live beside it.
+ * A call's audio: what Drop In (dropin.c) and the phone (sip.c) share; call.h says what each side does.  Taken out of
+ * dropin.c as it was tuned there (PLAN.md, 2026-10-08 and on): the measurements below are Drop In's.
  *
  * Mic: micAsr, what the pipeline gets.  Playback on the mixer's Voip stream, which puts the front end in its call mode
  * (audio.h).  The front end's listening mode only while this side talks (main.c core_dropin_listen says why): its level
@@ -14,8 +14,9 @@
  * the pipeline's gain (micgain.c) goes first, learning the talker only while the far end is quiet: micAsr runs some
  * 30 dB under speech level, and a gain that took the echo's onsets for a talker lifted them by up to 27 dB (2026-10-08).
  *
- * Codec: Opus (the firmware's libopus), 16 kHz mono, 20 ms, inband FEC.  Loss: Opus's FEC from the next packet, its
- * concealment for PLC_FRAMES.
+ * Codecs: Opus (the firmware's libopus), 16 kHz mono, 20 ms, inband FEC; G.711 A-law and mu-law at 8 kHz for phones,
+ * the mic halved and what plays doubled by a 63-tap FIR (half_down, half_up: Kaiser, cut at 3.85 kHz, -63 dB from 4.4).
+ * Loss: Opus's FEC from the next packet, its concealment for PLC_FRAMES; G.711 the last frame fading, then silence.
  *
  * The call's own microphone (call_mic_source, audio.h callmic_*): on the Dots the mixer's micHfp carries Amazon's call
  * pipeline once the front end is in call mode, which our Voip stream puts it in.  It already has an echo canceller and
@@ -93,11 +94,11 @@ enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXIT
 #define SUPPRESS_HFP_DB -12.0f
 #define NEAR_MIN_HFP_DB -45.0f
 
-static pthread_mutex_t ml = PTHREAD_MUTEX_INITIALIZER;   /* everything below; taken after dropin.c's */
+static pthread_mutex_t ml = PTHREAD_MUTEX_INITIALIZER;   /* everything below; taken after dropin.c's and sip.c's */
 static pthread_cond_t live_cond = PTHREAD_COND_INITIALIZER;
-static atomic_int running;
+static atomic_int claimed, running;
 static struct {
-    int live, gen;
+    int live, gen, who, codec;
     void (*send)(const uint8_t *, size_t, uint32_t, void *); void *arg;
     uint32_t tx_seq;
     struct call_stats st;
@@ -126,7 +127,107 @@ static float level_db(const int16_t *s, size_t n)
     return (float)(10 * log10(sum / (n ? n : 1) / (32768.0 * 32768.0) + 1e-10));
 }
 
+/* ---------------------------------------------------------------- G.711 (ITU-T G.711, as Sun's g711.c) */
+
+uint8_t g711_alaw(int16_t pcm)
+{
+    static const int end[8] = { 0x1f, 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff };
+    int v = pcm >> 3, mask = 0xd5, seg = 0;                 /* 13 bits */
+    if (v < 0) { v = -v - 1; mask = 0x55; }
+    if (v > 0xfff) v = 0xfff;
+    while (v > end[seg]) seg++;
+    return (uint8_t)((seg << 4 | ((seg < 2 ? v >> 1 : v >> seg) & 0x0f)) ^ mask);
+}
+
+int16_t g711_alaw_dec(uint8_t a)
+{
+    int t, seg;
+    a ^= 0x55;
+    t = (a & 0x0f) << 4; seg = (a & 0x70) >> 4;
+    if (seg == 0) t += 8; else if (seg == 1) t += 0x108; else { t += 0x108; t <<= seg - 1; }
+    return (int16_t)(a & 0x80 ? t : -t);
+}
+
+uint8_t g711_ulaw(int16_t pcm)
+{
+    static const int end[8] = { 0x3f, 0x7f, 0xff, 0x1ff, 0x3ff, 0x7ff, 0xfff, 0x1fff };
+    int v = pcm >> 2, mask = 0xff, seg = 0;                 /* 14 bits */
+    if (v < 0) { v = -v; mask = 0x7f; }
+    if (v > 8159) v = 8159;
+    v += 0x21;
+    while (seg < 8 && v > end[seg]) seg++;
+    if (seg == 8) return (uint8_t)(0x7f ^ mask);
+    return (uint8_t)((seg << 4 | ((v >> (seg + 1)) & 0x0f)) ^ mask);
+}
+
+int16_t g711_ulaw_dec(uint8_t u)
+{
+    int t;
+    u = (uint8_t)~u;
+    t = ((u & 0x0f) << 3) + 0x84; t <<= (u & 0x70) >> 4;
+    return (int16_t)(u & 0x80 ? 0x84 - t : t - 0x84);
+}
+
+/* ---------------------------------------------------------------- 16 kHz <-> 8 kHz */
+
+#define TAPS 63
+static float fir[TAPS];
+static pthread_once_t fir_once = PTHREAD_ONCE_INIT;
+
+static double bessel_i0(double x)
+{
+    double sum = 1, t = 1;
+    for (int k = 1; k < 30; k++) { t *= x / (2 * k); sum += t * t; }
+    return sum;
+}
+
+static void fir_make(void)              /* windowed sinc (Kaiser, beta 6: -63 dB), cut at 3.85 kHz of 16, unity gain */
+{
+    double sum = 0, wc = 2 * M_PI * 3850.0 / 16000.0, beta = 6;
+    for (int i = 0; i < TAPS; i++) {
+        double k = i - (TAPS - 1) / 2.0, s = k == 0 ? wc / M_PI : sin(wc * k) / (M_PI * k), r = 2.0 * i / (TAPS - 1) - 1;
+        fir[i] = (float)(s * bessel_i0(beta * sqrt(1 - r * r)) / bessel_i0(beta)); sum += fir[i];
+    }
+    for (int i = 0; i < TAPS; i++) fir[i] = (float)(fir[i] / sum);
+}
+
+static float fir_push(struct half *h, float v)          /* one sample in at 16 kHz, the filter's output */
+{
+    float acc = 0;
+    memmove(h->x, h->x + 1, (TAPS - 1) * sizeof h->x[0]); h->x[TAPS - 1] = v;
+    for (int i = 0; i < TAPS; i++) acc += fir[i] * h->x[i];
+    return acc;
+}
+
+static int16_t clip(float v) { return (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : lrintf(v)); }
+
+void half_down(struct half *h, const int16_t *in, size_t n, int16_t *out)
+{
+    pthread_once(&fir_once, fir_make);
+    for (size_t i = 0; i < n; i++) { float y = fir_push(h, in[i]); if (h->n++ & 1) out[i / 2] = clip(y); }
+}
+
+void half_up(struct half *h, const int16_t *in, size_t n, int16_t *out)
+{
+    pthread_once(&fir_once, fir_make);
+    for (size_t i = 0; i < n; i++) { out[2 * i] = clip(2 * fir_push(h, in[i])); out[2 * i + 1] = clip(2 * fir_push(h, 0)); }
+}
+
 /* ---------------------------------------------------------------- the call */
+
+int call_claim(int who)
+{
+    int none = CALL_NONE;
+    return atomic_compare_exchange_strong(&claimed, &none, who) || none == who ? 0 : -1;
+}
+
+void call_release(int who)
+{
+    int w = who;
+    atomic_compare_exchange_strong(&claimed, &w, CALL_NONE);
+}
+
+int call_claimed(void) { return atomic_load(&claimed); }
 
 int call_mic_source(int set)
 {
@@ -144,10 +245,11 @@ static int call_gen_is(int gen)
     return r;
 }
 
-int call_begin(void (*send)(const uint8_t *, size_t, uint32_t, void *), void *arg)
+int call_begin(int who, int codec, void (*send)(const uint8_t *, size_t, uint32_t, void *), void *arg)
 {
     pthread_mutex_lock(&ml);
-    m.gen++; m.live = 1; m.send = send; m.arg = arg; m.tx_seq = 0;
+    if (m.live && m.who != who) { pthread_mutex_unlock(&ml); return -1; }
+    m.gen++; m.live = 1; m.who = who; m.codec = codec; m.send = send; m.arg = arg; m.tx_seq = 0;
     memset(&m.st, 0, sizeof m.st); m.arr_at = 0; play_next = 0;
     memset(jb, 0, sizeof jb); jb_any = 0; ref_n = 0; memset(ref, 0, sizeof ref);
     int gen = m.gen;
@@ -202,6 +304,7 @@ static pthread_mutex_t tx_mu = PTHREAD_MUTEX_INITIALIZER;
 static OpusEncoder *enc;
 static int enc_gen = -1, enc_hfp = -1;
 static struct micgain gain;
+static struct half down;
 static float es_c, es_g;                /* echo against what we play, dB (peak held); the gain applied, linear */
 static int dt_n;                        /* frames in a row over the echo estimate */
 static float far_hold;                  /* what we play, held: falls FAR_FALL dB a frame */
@@ -250,10 +353,10 @@ static void send_frame(const int16_t *pcm, int own, int hfp)
 
 static void send_frame_locked(const int16_t *pcm, int own, int hfp)
 {
-    uint8_t op[MAXPKT]; int gen; void (*send)(const uint8_t *, size_t, uint32_t, void *); void *arg;
+    uint8_t op[MAXPKT]; int gen, codec; void (*send)(const uint8_t *, size_t, uint32_t, void *); void *arg;
     pthread_mutex_lock(&ml);
     if (!m.live || !m.send) { pthread_mutex_unlock(&ml); return; }
-    gen = m.gen; send = m.send; arg = m.arg;
+    gen = m.gen; codec = m.codec; send = m.send; arg = m.arg;
     float far = far_db(now_ms()), ffloor = far_floor;
     uint32_t seq = m.tx_seq++;
     pthread_mutex_unlock(&ml);
@@ -261,11 +364,14 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
     if (enc_gen != gen || enc_hfp != hfp) {         /* a new call or another source: a fresh encoder, gain and suppressor */
         int e = 0;
         if (enc) { opus_encoder_destroy(enc); enc = NULL; }
-        enc = opus_encoder_create(RATE, 1, OPUS_APPLICATION_VOIP, &e);
-        if (!enc) { fprintf(stderr, "call: no Opus encoder (%d)\n", e); return; }
-        opus_encoder_ctl(enc, OPUS_SET_BITRATE, BITRATE); opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC, 1);
-        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
-        opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
+        if (codec == CODEC_OPUS) {
+            enc = opus_encoder_create(RATE, 1, OPUS_APPLICATION_VOIP, &e);
+            if (!enc) { fprintf(stderr, "call: no Opus encoder (%d)\n", e); return; }
+            opus_encoder_ctl(enc, OPUS_SET_BITRATE, BITRATE); opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC, 1);
+            opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
+            opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
+        }
+        memset(&down, 0, sizeof down);
         micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, 1);
         es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = hfp ? -40 : -70; near_until = 0; listen_on = 0; listen_at = 0;
         enc_gen = gen; enc_hfp = hfp;
@@ -305,7 +411,14 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
      * the call pipeline's microphone (1) or micAsr (0) */
     { static FILE *tr; if (!tr && getenv("HASSMIC_DROPIN_TRACE")) tr = fopen(getenv("HASSMIC_DROPIN_TRACE"), "w");
       if (tr) { fprintf(tr, "%lld %.1f %.1f %.1f %.1f %d %d %d %.2f %.1f %d\n", now, lv, far, es_c, floor_db, near, own, dt_n, target, hfp ? 0.0f : gain.gain_db, hfp); fflush(tr); } }
-    int32_t len = enc ? opus_encode(enc, f, FRAME, op, sizeof op) : -1;
+    int32_t len;
+    if (codec == CODEC_OPUS) len = enc ? opus_encode(enc, f, FRAME, op, sizeof op) : -1;
+    else {
+        int16_t h[FRAME / 2];
+        half_down(&down, f, FRAME, h);
+        for (int i = 0; i < FRAME / 2; i++) op[i] = codec == CODEC_PCMA ? g711_alaw(h[i]) : g711_ulaw(h[i]);
+        len = FRAME / 2;
+    }
     if (len > 0) send(op, (size_t)len, seq, arg);
 }
 
@@ -365,6 +478,14 @@ static void *callmic_thread(void *arg)
 
 /* ---------------------------------------------------------------- audio in */
 
+/* One frame of G.711 into 16 kHz (fewer bytes than a frame: the rest silence) */
+static void g711_frame(int codec, struct half *up, const uint8_t *p, int len, int16_t *pcm)
+{
+    int16_t h[FRAME / 2] = { 0 };
+    for (int i = 0; i < len && i < FRAME / 2; i++) h[i] = codec == CODEC_PCMA ? g711_alaw_dec(p[i]) : g711_ulaw_dec(p[i]);
+    half_up(up, h, FRAME / 2, pcm);
+}
+
 /* The playout thread: one frame per 20 ms into the Voip stream, from the jitter buffer, with Opus's FEC and loss
  * concealment for what is missing, silence before the first frame and after a long gap */
 static void *playout(void *arg)
@@ -373,14 +494,16 @@ static void *playout(void *arg)
     for (;;) {
         pthread_mutex_lock(&ml);
         while (!m.live) pthread_cond_wait(&live_cond, &ml);
-        int gen = m.gen; long long t0 = now_ms();
+        int gen = m.gen, codec = m.codec; long long t0 = now_ms();
         far_floor = -70;
         pthread_mutex_unlock(&ml);
         int e = 0, open = voip_open(RATE, 1) == 0, started = 0, missing = 0, skipped = 0, stretched = 0;
-        OpusDecoder *dec = opus_decoder_create(RATE, 1, &e);
+        OpusDecoder *dec = codec == CODEC_OPUS ? opus_decoder_create(RATE, 1, &e) : NULL;
+        struct half up; int16_t last[FRAME]; float fade = 0;
+        memset(&up, 0, sizeof up); memset(last, 0, sizeof last);
         if (!open) fprintf(stderr, "call: cannot open the Voip stream\n");
         else atomic_store(&voip_gen, gen);              /* call mode on: callmic_thread may open micHfp */
-        if (!dec) fprintf(stderr, "call: no Opus decoder (%d)\n", e);
+        if (codec == CODEC_OPUS && !dec) fprintf(stderr, "call: no Opus decoder (%d)\n", e);
         uint32_t next = 0;
         for (;;) {
             uint8_t pkt[MAXPKT]; int len = 0, fec = 0; int16_t pcm[FRAME];
@@ -393,7 +516,7 @@ static void *playout(void *arg)
                 struct slot *s = &jb[next % JB], *s1 = &jb[(next + 1) % JB];
                 if (s->len && s->seq == next) { len = s->len; memcpy(pkt, s->d, (size_t)len); }
                 else if ((int32_t)(jb_hi - next) <= 0) stretched++;         /* nothing newer yet: wait, concealing */
-                else if (s1->len && s1->seq == next + 1) { len = s1->len; memcpy(pkt, s1->d, (size_t)len); fec = 1; }
+                else if (codec == CODEC_OPUS && s1->len && s1->seq == next + 1) { len = s1->len; memcpy(pkt, s1->d, (size_t)len); fec = 1; }
                 if (len || (int32_t)(jb_hi - next) > 0) {                  /* played, or lost for good: on to the next */
                     if (!len || fec) m.st.lost++;
                     s->len = 0;
@@ -402,8 +525,13 @@ static void *playout(void *arg)
             }
             pthread_mutex_unlock(&ml);
             int got = 0;
-            if (dec && len) got = opus_decode(dec, pkt, len, pcm, FRAME, fec);
-            else if (dec && started && missing < PLC_FRAMES) got = opus_decode(dec, NULL, 0, pcm, FRAME, 0);
+            if (codec == CODEC_OPUS) {
+                if (dec && len) got = opus_decode(dec, pkt, len, pcm, FRAME, fec);
+                else if (dec && started && missing < PLC_FRAMES) got = opus_decode(dec, NULL, 0, pcm, FRAME, 0);
+            } else if (len) { g711_frame(codec, &up, pkt, len, pcm); memcpy(last, pcm, sizeof last); fade = 1; got = FRAME; }
+            else if (started && missing < PLC_FRAMES && fade > 0) {        /* the last frame again, fading out */
+                fade *= 0.5f; for (int i = 0; i < FRAME; i++) pcm[i] = (int16_t)(last[i] * fade); got = FRAME;
+            }
             missing = len ? 0 : missing + 1;
             if (got != FRAME) memset(pcm, 0, sizeof pcm);
             long long q = open ? voip_queued_us() : 0;
