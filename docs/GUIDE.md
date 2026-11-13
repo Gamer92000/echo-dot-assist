@@ -696,7 +696,11 @@ name and state.
 ## Bluetooth proxy
 
 Works like an ESPHome `bluetooth_proxy` with `active: true`: scanning, up to 3 connections, "Just Works" pairing only.
-While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
+While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering. While Home
+Assistant talks to a connected device (a desk moving, a lock), scanning pauses too, until a second after the last
+request and for about 30 seconds at a time (then it scans for 3 seconds). Connected devices get the short link
+ESPHome's proxy asks for (about 10 ms; a device that asks for a link of its own gets that one): an exchange took about
+25 ms, measured with a PC as the device (not yet with a desk).
 
 On by default. "Bluetooth proxy" (settings page, Features) switches it off: the Echo then tells Home Assistant it is no
 proxy, so Home Assistant sets up no scanner for it, and the Echo stops scanning and refuses connections. Disabling the

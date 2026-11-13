@@ -2,6 +2,18 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-13
+
+- **Bluetooth proxy: each request to a connected device took about 25 ms instead of 100 in a test on an Echo Dot 2
+  (issue #167).** Devices that Home Assistant drives through the Echo, such as IKEA's Idasen desk, ask for something
+  and wait for the answer several times a second. Once a device is connected, the Echo now asks for the short link
+  ESPHome's proxy asks for (a device that asks for a link of its own gets that one). Measured on an Echo Dot 2 with a
+  PC standing in for the device, running a loop like the desk's (write, wait 100 ms, read): 300 ms a round before, 150
+  ms now; in a short, rough test Wi-Fi was no slower. While Home Assistant talks to a connected device the Echo also
+  stops looking for other Bluetooth devices, until a second after the last request (about 30 seconds at a time, then 3
+  seconds of looking); in three runs that took a little more off the loop. Not tried with a desk yet. Thanks to
+  lebheisenberg for the report.
+
 ## 2026-11-12
 
 - **Echo Shows: a clock where the screen used to go dark.** On the settings page's **Screen** page, the new **When

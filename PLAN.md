@@ -196,6 +196,43 @@ Run in this order. Each step says what it proves.
       Verified by the author on a Dot 2; `tests/fake_ha_remote_followup.py` (fails on the old core: flags [3, 3, 3]).
       Seen meanwhile, not fixed: with `-w remote` an ERROR outside a reply (e.g. nothing said) ends the run and asks for the
       next, then its RUN_END finds that new run and asks again: two starts, HA cancels the first
+- [~] Bluetooth proxy latency (issue #167, 2026-11-12/13): the Idasen desk stutters through a Dot 2, not through an ESP32
+      proxy (the report). HA's `idasen_desk` (idasen-ha 3.0, idasen 0.14) moves by a loop: write the target with response
+      (bleak 3 picks with-response when the characteristic has it), sleep 100 ms, GATT read of height and speed; the desk
+      stops between refreshes that come late. Its up and down buttons are writes without response. Measured on the Dot 2
+      (2026-11-13, the PC's BlueZ as the device, `bluetoothctl advertise peripheral`; descriptor write with response + 100
+      ms + read of the device name, 150 rounds a run; builds run by hand with an empty `HASSMIC_STATE`, plaintext API): LE
+      Create Connection's 30-50 ms gives 50 ms, each request and answer 100 ms (two events), the loop 300-350 ms, 464-506 ms
+      while Wi-Fi is saturated; at 11.25 ms 22-24 ms a request, the loop 146-150 ms, 261-301 ms under load. Wi-Fi PC -> Echo
+      (toybox nc, 24 MB, 3-6 runs each): idle link 2.06-2.63 MB/s at 11.25 ms, 1.71-2.31 at 50 ms; with the loop running
+      2.15-3.00 against 2.35-2.53: no cost found, but the measurement is weak (one early run at 0.8-1.6 did not repeat; the
+      house's Wi-Fi varies 0.68-2.05 without any link). Changed: (1) ESPHome's 8.75-11.25 ms (`MEDIUM_*_CONN_INTERVAL`,
+      esphome/components/ble_device_base/ble_client_state.h, dev branch 2026-11-12) asked for by LE Connection Update once
+      the MTU exchange is done (`fast`; HASSMIC_IVAL/NOUPD experiment builds, not in git, for the interval sweep), not in LE
+      Create Connection: there 14 of 16 tries to the PC failed (it ends the link, 0x13, when its LE Read Remote Features is
+      refused 0x1a, btmon; at 30-50 ms 12-14 of 24 failed, old and new build alike, so the PC is a flaky test device). A
+      device that asked for its own parameters (L2CAP) gets them (ours not sent when it asked first); one update at a time
+      (`upd_wait`, 5 s cap), refusals retried after 1 s (ours 2 tries, its 3), neither during encryption or pairing; never
+      on the peripheral link. Linux apparently asks only when the interval is outside its 30-50 ms, so the PC stayed at
+      11.25 (the update's Complete came 430 ms after the connect). The interval is logged (`connected to ..., interval`, LE
+      Connection Update Complete). (2) Scan paused for GATT (`gatt_busy`: 1 s after each request HA sends, spells of about
+      30 s, then 3 s of scanning). ESPHome keeps scanning while connected, in its 30 ms window (`connection_scan_window`,
+      esphome/components/esp32_ble_tracker/__init__.py, dev branch 2026-11-13). Measured at 11.25 ms, 3 runs each (a local
+      experiment build, not in git: `gatt_busy` returning at once when an env variable was set): loop 146-148 ms (p90
+      158-162) with it, 158 ms (p90 180-191) without; under load 270-301 (p90 315-360) against 292-305 (p90 372-439); Wi-Fi
+      with the loop running 2.15-2.65 against 2.04-2.55. At 50 ms no difference (300 ms both). `ble_scanning()` says what HA
+      was told, so a subscribe during a pause does not hear idle. (3) Each ESPHome message in one `writev` (`write2`;
+      TCP_NODELAY was on already, `net_accept`): one segment instead of two, effect not measured.
+      `tests/fake_ha_bt_proxy.py`: the connect at 30-50 ms, the update to 8.75-11.25, a device's own wish kept, the pause
+      and its end, the scanner state asked for during it. **Open:** not tried with a desk, nor whether the Idasen asks for
+      parameters of its own (then it keeps its own interval). Not tested: the 30 s spell and 3 s break; writes without
+      response and service discovery starting a pause; refused updates, their retries and a failed LE Connection Update
+      Complete; a device's request arriving while ours is in flight or during encryption; no update when the link is already
+      at 11.25 ms or less; the `!c->srv` guards; the report after a controller lost during a pause and the 100 ms report
+      cap; `write2`'s short writes. Fixed too, older than this: an encryption that never finished (a pairing timed out in
+      S_ENC, or a bonded link's Start Encryption never answered) left `enc_pending` set, which held GATT requests (and now
+      both updates) until the link ended; 30 s after Start Encryption went out (`enc_t`, SMP_MS) the link is closed now (not
+      tested). Left: a key refresh event clears `enc_pending` early (older, harmless here).
 - [x] Bluetooth proxy as a feature (issue #152, 2026-11-09): setting `bluetooth_proxy` (Features, on by default, exported).
       Disabling HA's entities left the scanner: HA subscribes to raw advertisements whenever the device info carries
       proxy flags. Off: `proto_esphome.c` `bt_proxy()` leaves fields 11, 15 and 18 out of the device info, refuses
