@@ -17,6 +17,7 @@ ones with the way into each; [`README.md`](README.md) here says how to add a mod
 | ✅ | Echo Show 5 1st gen | H23K37 | [`checkers`](checkers/README.md) | 2019-06-26 | added in [`7745dca`](https://github.com/Gamer92000/echo-dot-assist/commit/7745dca) |
 | ❌ | Echo Dot 3rd gen refresh | C78MP8 | `crumpet` | 2019-10-16 | *no known exploit yet* |
 | ❌ | Echo Dot 3rd gen with clock | 36EBT3 | `doebrite` | 2019-10-16 | *no known exploit yet*; thought to be `crumpet` hardware |
+| ❌ | Echo 3rd gen | R9P2A5 | `pascal` | 2019-10-16 | *no known exploit yet*; `crumpet`'s boot chain ([#178](https://github.com/Gamer92000/echo-dot-assist/issues/178)) |
 | ❌ | Echo Studio (rev1) | O2T2V3 | `octave` | 2019-11-07 | *no known exploit yet* |
 | ❌ | Echo Flex | C77A68 | `croissant` | 2019-11-14 | *no known exploit yet*; `crumpet`'s boot chain ([#83](https://github.com/Gamer92000/echo-dot-assist/issues/83)) |
 | ✅ | Echo Show 8 1st gen | C7H6N3 | [`crown`](crown/README.md) | 2019-11-21 | added in [`7745dca`](https://github.com/Gamer92000/echo-dot-assist/commit/7745dca) |
@@ -52,4 +53,5 @@ others cannot start yet. Vega OS is Amazon's newer system, not Android, and has 
 
 Names, model numbers, codenames and dates come from the
 [Amazon device codenames](https://bitbyte.miraheze.org/wiki/Amazon_device_codenames) wiki as of 2026-11-01, which has no
-Echo Buds, Frames or Loop.
+Echo Buds, Frames or Loop. It has no Echo 3rd gen either: model and codename from
+[#178](https://github.com/Gamer92000/echo-dot-assist/issues/178), released 2019-10-16, the refreshed Dot 3's day.

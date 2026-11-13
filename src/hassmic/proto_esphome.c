@@ -70,6 +70,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -184,11 +185,26 @@ static int client_of(int fd)            /* lock held */
     return -1;
 }
 
+/* Header and message in one write: as two (TCP_NODELAY is on, net_accept), every message went out as two TCP
+ * segments, so two Wi-Fi frames and, expected, two wakeups of HA's reader (issue #167: what a device driven through the
+ * Bluetooth proxy waits for; the gain is not measured) */
+static int write2(int fd, const void *h, size_t hn, const void *d, size_t dn)
+{
+    struct iovec v[2] = { { (void *)h, hn }, { (void *)d, dn } }, *p = v;
+    for (int k = dn ? 2 : 1; k; ) {
+        ssize_t w = writev(fd, p, k);
+        if (w < 0) { if (errno == EINTR) continue; return -1; }
+        while (k && (size_t)w >= p->iov_len) { w -= p->iov_len; p++; k--; }
+        if (k) { p->iov_base = (char *)p->iov_base + w; p->iov_len -= w; }
+    }
+    return 0;
+}
+
 /* Noise frame: 0x01, big-endian length, then a handshake message or ciphertext */
 static int write_frame(int fd, const void *data, size_t len)
 {
     unsigned char h[3] = { 1, len >> 8, len & 0xff };
-    return len > 0xffff || write_all(fd, h, 3) < 0 || (len && write_all(fd, data, len) < 0) ? -1 : 0;
+    return len > 0xffff || write2(fd, h, 3, data, len) < 0 ? -1 : 0;
 }
 
 /* lock held */
@@ -204,7 +220,7 @@ static void send_to(int fd, unsigned type, const struct pb *b)
         rc = write_frame(fd, ct, noise_encrypt(&clients[c].tx, pt, 4 + n, ct));
     } else {
         pb_raw(&hb, "", 1); pb_varint(&hb, n); pb_varint(&hb, type);
-        rc = write_all(fd, h, hb.n) < 0 || (n && write_all(fd, b->p, n) < 0) ? -1 : 0;
+        rc = write2(fd, h, hb.n, n ? b->p : NULL, n);
     }
     if (rc < 0) shutdown(fd, SHUT_RDWR);                /* its reader cleans up */
 }

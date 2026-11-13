@@ -21,6 +21,21 @@
  * the notification descriptors itself (with REMOTE_CACHING it does).  What the device asks of us: the MTU exchange and
  * connection parameter updates are granted; our GATT server is empty towards these devices.  Scanning pauses while a
  * connection is being set up, as ESPHome does.
+ * Latency is what the devices that are driven through the proxy notice (issue #167: IKEA's Idasen desk stutters while
+ * it moves; idasen 0.14 writes the target with response, sleeps 100 ms and reads the height, again and again, and the
+ * desk stops between refreshes that come late).  At 30-50 ms the controller picks 50, and each request with its answer
+ * took two events, 100 ms; that loop 300 ms.  So, as ESPHome's proxy, 8.75-11.25 ms (its "medium",
+ * MEDIUM_*_CONN_INTERVAL in esphome/components/ble_device_base/ble_client_state.h, dev branch 2026-11-12): 22-24 ms a
+ * request, the loop 150 ms, Wi-Fi no slower in a weak test (Dot 2, a PC's BlueZ standing in for the device, 2026-11-13;
+ * PLAN.md).  Asked for once the link is up (fast), not in LE Create Connection: there 14 of 16 links to the PC failed
+ * at once (its kernel ends the link when its LE Read Remote Features is refused, 0x1a; at 30-50 ms that happens too, to
+ * about half).  A device that asks for parameters of its own gets them, faster or slower, after ours when ours is
+ * already on its way (one update at a time: upd_wait); Linux asks only when the interval is outside its 30-50 ms,
+ * apparently.  And, ours: while HA's requests go to a device the scan pauses (gatt_busy: from each request until 1 s
+ * after it, about 30 s at a time, then 3 s of scanning), on the reasoning that the scan's windows take the radio from
+ * the connection's events.  At 11.25 ms that loop took 147 ms (p90 160) with the pause, 158 (p90 185) without; at 50 ms
+ * no difference.  ESPHome keeps scanning while connected, in a 30 ms window (connection_scan_window,
+ * esphome/components/esp32_ble_tracker/__init__.py, dev branch 2026-11-13).  Not measured on a desk.
  *
  * The peripheral role, for setting the Echo up from a phone (improv.c): legacy connectable advertising, and one link a
  * phone opens to us (conns[SRV], outside the proxy's slots), on which a small GATT server answers: Generic Access and the
@@ -65,10 +80,18 @@
 #define ATT_MS 30000                            /* ATT transaction timeout: the connection is closed after it */
 #define SMP_MS 30000                            /* SMP timeout: pairing failed */
 #define MAX_BONDS 16
+#define FAST_MIN 7                              /* connection interval once a link is up: 8.75 ms, units of 1.25 ms */
+#define FAST_MAX 9                              /* 11.25 ms: ESPHome's MEDIUM_*_CONN_INTERVAL */
+#define GATT_HOLD_MS 1000                       /* scan paused this long after a request to a device (gatt_busy): the
+                                                 * desk's loop on a PC stand-in sent one every 150-350 ms */
+#define GATT_SPELL_MS 30000                     /* at most this long at a time: a move or a lock's exchange fits, a device
+                                                 * HA polls without end gets the scan back.  A choice, not measured */
+#define GATT_BREAK_MS 3000                      /* then scanning at least this long: ~9 scan intervals, so a device that
+                                                 * advertises every second or faster is seen a few times */
 
 enum { H4_CMD = 1, H4_ACL = 2, H4_EVT = 4 };
 enum { EV_DISCONNECT = 0x05, EV_ENC_CHANGE = 0x08, EV_ENC_REFRESH = 0x30, EV_CMD_COMPLETE = 0x0e, EV_CMD_STATUS = 0x0f, EV_NUM_COMPLETED = 0x13, EV_LE_META = 0x3e };
-enum { LE_CONN_COMPLETE = 0x01, LE_ADV_REPORT = 0x02, LE_LTK_REQUEST = 0x05, LE_PK_COMPLETE = 0x08, LE_DHKEY_COMPLETE = 0x09 };
+enum { LE_CONN_COMPLETE = 0x01, LE_ADV_REPORT = 0x02, LE_CONN_UPDATED = 0x03, LE_LTK_REQUEST = 0x05, LE_PK_COMPLETE = 0x08, LE_DHKEY_COMPLETE = 0x09 };
 enum { OP_DISCONNECT = 0x0406, OP_EVENT_MASK = 0x0c01, OP_RESET = 0x0c03, OP_READ_LOCAL_CMDS = 0x1002, OP_READ_BUFFER = 0x1005, OP_LE_EVENT_MASK = 0x2001,
        OP_LE_READ_BUFFER = 0x2002, OP_LE_ADV_PARAMS = 0x2006, OP_LE_ADV_DATA = 0x2008, OP_LE_SCAN_RSP = 0x2009, OP_LE_ADV_ENABLE = 0x200a, OP_LE_SCAN_PARAMS = 0x200b, OP_LE_SCAN_ENABLE = 0x200c, OP_LE_CONNECT = 0x200d,
        OP_LE_CONNECT_CANCEL = 0x200e, OP_LE_CONN_UPDATE = 0x2013, OP_LE_START_ENC = 0x2019, OP_LE_LTK_NEG = 0x201b,
@@ -87,7 +110,9 @@ enum { HCI_E_UNKNOWN_CONN = 0x02, HCI_E_TIMEOUT = 0x08, HCI_E_LIMIT = 0x09, HCI_
 static int fd = -1, wake[2] = { -1, -1 };
 static const struct ble_handler *H;
 static atomic_int want_on, want_active, scanning;
+static atomic_int shown;                        /* what HA and the log were told (ble_scanning): 0 off, 1 passive, 2 active */
 static atomic_llong quiet_until;                /* CLOCK_MONOTONIC ms: no scanning before then (ble_quiet) */
+static long long gatt_quiet_until, gatt_spell, gatt_break_until;   /* controller thread: the same for GATT (gatt_busy) */
 static char bdaddr[18];                         /* set once, before anything reads it */
 
 static unsigned char in[2048]; static size_t have;             /* H4 stream: reads may split or join packets */
@@ -143,8 +168,9 @@ struct smp {
 };
 
 static struct conn {
-    int state, handle, cancel, close_now, ltk_neg, upd; uint64_t addr; unsigned addr_type, mtu;
+    int state, handle, cancel, close_now, ltk_neg, upd, asked, fast; uint64_t addr; unsigned addr_type, mtu;
     int enc, enc_pending, need_enc, need_dhkey;  /* encrypted; being encrypted (GATT waits); Start Encryption / DHKey wanted */
+    struct timespec enc_t;                      /* when Start Encryption went out */
     int heard, mtu_retry, peer_mtu;             /* the device has sent something; MTU exchange again once encrypted;
                                                    the device exchanged MTUs itself */
     unsigned char enc_ltk[16], enc_rand[8]; unsigned enc_ediv;
@@ -156,6 +182,11 @@ static struct conn {
     struct ble_db *db;
     unsigned char rx[4 + ATT_MTU + 64]; size_t rxlen, rxwant;  /* L2CAP reassembly */
     unsigned char upd_par[8];                   /* LE Connection Update wanted by the device */
+    unsigned ival;                              /* connection interval, 1.25 ms units: logged, what latency comes from */
+    /* mono ms: an update pending until its Complete, or a retry's time.  One at a time: a controller may refuse a second
+     * LE Connection Update while one runs (Command Disallowed; reasoning, not seen).  5 s at most, in case the Complete
+     * is lost: an update takes effect some connection events after it is sent (on the PC: 430 ms after the connect) */
+    long long upd_wait;
     int unacked;                                /* ACL packets sent, not yet reported complete */
     int srv;                                    /* conns[SRV]: a phone's link to our GATT server */
 } conns[BLE_MAX_CONN + 1];
@@ -346,10 +377,28 @@ static void disc_rx(struct conn *c, const unsigned char *p, size_t n)
     disc_next(c);
 }
 
+/* A request of HA's goes to a device: no scanning for GATT_HOLD_MS (the thread's loop turns it off and on).  Every
+ * request counts, writes without response and service discovery too: the desk's up and down are writes without
+ * response.  A spell of pauses ends after GATT_SPELL_MS, then the scan runs GATT_BREAK_MS before the next may start: a
+ * device HA talks to all the time must not blind the proxy for good.  Neither limit has a test (30 s). */
+static void gatt_busy(void)
+{
+    long long t = mono_ms();
+    if (t >= gatt_quiet_until) {                            /* scanning now */
+        if (t < gatt_break_until) return;                   /* the scan's turn after a long spell */
+        gatt_spell = t;
+    } else if (t - gatt_spell >= GATT_SPELL_MS) {           /* paused long enough: let it lapse, then the break */
+        gatt_break_until = gatt_quiet_until + GATT_BREAK_MS;
+        return;
+    }
+    gatt_quiet_until = t + GATT_HOLD_MS;
+}
+
 static void start_op(struct conn *c)
 {
     while (!c->cur && c->ops && c->state == C_UP && !c->close_now && !c->enc_pending) {
         struct op *o = c->cur = c->ops; c->ops = o->next;
+        gatt_busy();
         unsigned char p[3 + ATT_MTU];
         now(&c->t); c->vlen = c->off = 0;
         switch (o->kind) {
@@ -400,8 +449,10 @@ static void att_rx(struct conn *c, const unsigned char *p, size_t n)
     if (c->state == C_MTU && (p[0] == ATT_MTU_RSP || (p[0] == ATT_ERROR && n >= 2 && p[1] == ATT_MTU_REQ))) {
         if (p[0] == ATT_MTU_RSP && n >= 3) { unsigned m = u16(p + 1); c->mtu = m < 23 ? 23 : m < ATT_MTU ? m : ATT_MTU; }
         else if (!c->peer_mtu) c->mtu = 23;                /* refused: the default, unless the device's own exchange set one */
-        c->state = C_UP;
-        fprintf(stderr, "bluetooth: connected to %012llx, MTU %u\n", (unsigned long long)c->addr, c->mtu);
+        /* ESPHome's interval (fast) unless the device asked for its own or the link is that fast already.  2 tries: a
+         * refusal is most likely a collision with a procedure the device started, over a second later */
+        c->state = C_UP; c->fast = !c->asked && c->ival > FAST_MAX ? 2 : 0;
+        fprintf(stderr, "bluetooth: connected to %012llx, MTU %u, interval %.2f ms\n", (unsigned long long)c->addr, c->mtu, c->ival * 1.25);
         if (H->connection) H->connection(c->addr, 1, c->mtu, 0);
         start_op(c);
         return;
@@ -444,7 +495,8 @@ static void sig_rx(struct conn *c, const unsigned char *p, size_t n)
     unsigned char r[8];
     if (n < 4) return;
     if (p[0] == 0x12 && n >= 12) {                          /* Connection Parameter Update Request */
-        memcpy(c->upd_par, p + 4, 8); c->upd = 1;
+        /* its own wish wins over ours (fast): it knows what it needs.  3 tries a second apart, against collisions */
+        memcpy(c->upd_par, p + 4, 8); c->upd = 3; c->asked = 1; c->fast = 0;
         r[0] = 0x13; r[1] = p[1]; put16(r + 2, 2); put16(r + 4, 0);
         l2cap_send(c, CID_SIG, r, 6);
     } else if (p[0] != 0x01 && p[0] != 0x13 && p[0] != 0x15 && p[0] != 0x07) {  /* not a response: Command Reject */
@@ -1050,7 +1102,7 @@ static void conn_complete(const unsigned char *q, size_t n)
         if (H->connection) H->connection(a, 0, 0, err);
         return;
     }
-    c->handle = u16(q + 1) & 0x0fff; c->state = C_MTU; c->mtu = ATT_MTU; now(&c->t);
+    c->handle = u16(q + 1) & 0x0fff; c->state = C_MTU; c->mtu = ATT_MTU; c->ival = u16(q + 11); now(&c->t);
     if (c->cancel) { c->close_now = 1; return; }            /* asked to go away while it came up */
     struct bond *b = bond_for(c->addr, c->addr_type);
     if (b) encrypt_with(c, b->ltk, b->rand, b->ediv);      /* paired before: encrypted before any GATT request */
@@ -1093,6 +1145,14 @@ static void event(const unsigned char *p, size_t n)            /* p: event code,
         if (n < 1) break;
         if (q[0] == LE_ADV_REPORT) adv_report(q + 1, n - 1);
         else if (q[0] == LE_CONN_COMPLETE) conn_complete(q + 1, n - 1);
+        else if (q[0] == LE_CONN_UPDATED && n >= 10 && (c = by_handle(u16(q + 2) & 0x0fff))) {     /* status, handle, interval */
+            c->upd_wait = 0;                                /* the update in flight is done: the device's may go */
+            if (q[1]) fprintf(stderr, "bluetooth: %012llx: connection update failed (0x%02x)\n", (unsigned long long)c->addr, q[1]);
+            else if (u16(q + 4) != c->ival) {
+                c->ival = u16(q + 4);
+                fprintf(stderr, "bluetooth: %012llx: interval %.2f ms\n", (unsigned long long)c->addr, c->ival * 1.25);
+            }
+        }
         else if (q[0] == LE_LTK_REQUEST && n >= 3 && (c = by_handle(u16(q + 1) & 0x0fff))) c->ltk_neg = 1;   /* never the peripheral */
         else if (q[0] == LE_PK_COMPLETE && n >= 66) { if (!q[1]) { swap_coords(local_pk, q + 2); pk_ready = 1; } else pk_ready = -1; }
         else if (q[0] == LE_DHKEY_COMPLETE && n >= 34) dhkey_done(q[1], q + 2);
@@ -1301,20 +1361,53 @@ static int upkeep(void)
         }
         /* Not straight after the connection: started before the device's first packet, the link failed (0x3e) */
         if (c->need_enc && c->heard && c->state >= C_MTU && c->state != C_CLOSING) {
-            c->need_enc = 0;
+            c->need_enc = 0; now(&c->enc_t);
             put16(p, c->handle); memcpy(p + 2, c->enc_rand, 8); put16(p + 10, c->enc_ediv); memcpy(p + 12, c->enc_ltk, 16);
             int st = cmd(OP_LE_START_ENC, p, 28);
             if (st < 0) return -1;
             if (st) encrypted(c, st);
+        }
+        /* no Encryption Change in SMP_MS after Start Encryption (a bonded link's or a pairing's): enc_pending would hold GATT requests and
+         * parameter updates until the link ends by itself, which a chatty device never lets happen.  End it; HA
+         * connects again */
+        if (c->enc_pending && !c->need_enc && c->state >= C_MTU && c->state != C_CLOSING && !c->close_now && ms_since(&c->enc_t) > SMP_MS) {
+            fprintf(stderr, "bluetooth: %012llx: encryption never finished, disconnecting\n", (unsigned long long)c->addr);
+            c->close_now = 1;
         }
         if (c->smp.state != S_IDLE && ms_since(&c->smp.t) > SMP_MS) {
             fprintf(stderr, "bluetooth: %012llx: pairing timed out\n", (unsigned long long)c->addr);
             smp_fail(c, 0x08);
         }
         if (c->ltk_neg) { c->ltk_neg = 0; put16(p, c->handle); if (cmd(OP_LE_LTK_NEG, p, 2) < 0) return -1; }
-        if (c->upd && c->state >= C_MTU) {
-            c->upd = 0; put16(p, c->handle); memcpy(p + 2, c->upd_par, 8); put16(p + 10, 0); put16(p + 12, 0);
-            if (cmd(OP_LE_CONN_UPDATE, p, 14) < 0) return -1;
+        /* up and the device asked for nothing: ESPHome's interval.  Not while the link is being encrypted or paired: two
+         * link layer procedures at once, and the controller refuses one */
+        if (c->fast && !c->srv && c->state == C_UP && !c->close_now && !c->enc_pending && !c->need_enc && c->smp.state == S_IDLE &&
+            mono_ms() >= c->upd_wait) {
+            put16(p, c->handle); put16(p + 2, FAST_MIN); put16(p + 4, FAST_MAX); put16(p + 6, 0); put16(p + 8, 500);
+            put16(p + 10, 0); put16(p + 12, 0);
+            c->upd_wait = mono_ms() + 5000;                 /* before: cmd() may already read its Complete */
+            int st = cmd(OP_LE_CONN_UPDATE, p, 14);
+            if (st < 0) return -1;
+            if (!st) c->fast = 0;
+            else {
+                fprintf(stderr, "bluetooth: %012llx: connection update refused (0x%02x), %s\n", (unsigned long long)c->addr, st, --c->fast ? "again in 1 s" : "giving up");
+                c->upd_wait = mono_ms() + 1000;
+            }
+        }
+        /* what the device asked for: after ours is done (one update at a time), again in a second if refused, and as
+         * ours not during encryption or pairing.  Never on the peripheral link: there the phone is the central, and only
+         * a central sends LE Connection Update */
+        if (c->upd && !c->srv && c->state >= C_MTU && c->state != C_CLOSING && mono_ms() >= c->upd_wait &&
+            !c->enc_pending && !c->need_enc && c->smp.state == S_IDLE) {
+            put16(p, c->handle); memcpy(p + 2, c->upd_par, 8); put16(p + 10, 0); put16(p + 12, 0);
+            c->upd_wait = mono_ms() + 5000;
+            int st = cmd(OP_LE_CONN_UPDATE, p, 14);
+            if (st < 0) return -1;
+            if (!st) c->upd = 0;
+            else {
+                fprintf(stderr, "bluetooth: %012llx: its connection update refused (0x%02x), %s\n", (unsigned long long)c->addr, st, --c->upd ? "again in 1 s" : "giving up");
+                c->upd_wait = mono_ms() + 1000;
+            }
         }
         if (c->state == C_CONNECTING && !c->cancel && ms_since(&c->t) > CONNECT_MS) {
             c->cancel = 2; if (cmd(OP_LE_CONNECT_CANCEL, NULL, 0) < 0) return -1;
@@ -1348,7 +1441,7 @@ static int connect_next(void)                               /* scanning is off w
     p[4] = 0; p[5] = c->addr_type;                          /* no filter list; peer address type */
     for (int b = 0; b < 6; b++) p[6 + b] = c->addr >> (8 * b);
     p[12] = 0;                                              /* own address public */
-    put16(p + 13, 24); put16(p + 15, 40);                   /* connection interval 30..50 ms */
+    put16(p + 13, 24); put16(p + 15, 40);                   /* 30..50 ms; FAST_* once it is up (see the top) */
     put16(p + 17, 0); put16(p + 19, 500);                   /* latency 0, supervision timeout 5 s */
     put16(p + 21, 0); put16(p + 23, 0);
     c->state = C_CONNECTING; now(&c->t);
@@ -1388,7 +1481,7 @@ static void *thread(void *arg)
         have = 0; nbatch = 0;
         if (setup() < 0) { fprintf(stderr, "bluetooth: controller does not answer\n"); close(fd); fd = -1; continue; }
         said = 0;
-        int on = 0, active = 0, was_quiet = 0;
+        int on = 0, active = 0, was_quiet = 0, told = 0;     /* told: what HA and the log last heard, 0 off, 1 passive, 2 active */
         for (;;) {
             struct req *r;
             pthread_mutex_lock(&qlock); r = qhead; qhead = NULL; qtail = &qhead; pthread_mutex_unlock(&qlock);
@@ -1400,18 +1493,26 @@ static void *thread(void *arg)
                 free(r); r = n;
             }
             if (bad || upkeep() < 0) break;
-            /* scanning pauses while a connection is being set up, and while a wake word round listens (ble_quiet): that pause
-             * is neither logged nor reported, it is over within a second */
-            long long qleft = atomic_load(&quiet_until) - mono_ms();
+            /* scanning pauses while a connection is being set up (logged and reported, as before), while a wake word round
+             * listens (ble_quiet) and while HA talks to a device (gatt_busy): those two are neither logged nor reported,
+             * each is over a second or so after its cause (a round's: the wait left + 500 ms, 1 s at least), and
+             * ble_scanning() goes on saying what HA was told.  What changed meanwhile (HA unsubscribed during a pause) is
+             * reported once it is over. */
+            long long qend = atomic_load(&quiet_until);
+            if (gatt_quiet_until > qend) qend = gatt_quiet_until;
+            long long qleft = qend - mono_ms();
             int quiet = qleft > 0, brief = quiet || was_quiet;
             int won = atomic_load(&want_on) && !quiet && !in_state(C_WAIT) && !in_state(C_CONNECTING) && !a2dp_streaming(), wac = atomic_load(&want_active);
             was_quiet = quiet;
             if (won != on || (on && wac != active)) {
                 if (apply(won, wac) < 0) break;
-                if ((won != on || wac != active) && !brief)
-                    fprintf(stderr, "bluetooth: %s\n", atomic_load(&scanning) ? (wac ? "scanning (active)" : "scanning (passive)") : "scan off");
                 on = won; active = wac;
-                if (H->scan_changed && !brief) H->scan_changed();
+            }
+            int now_sc = atomic_load(&scanning) ? 1 + active : 0;
+            if (!brief && now_sc != told) {
+                fprintf(stderr, "bluetooth: %s\n", now_sc == 2 ? "scanning (active)" : now_sc ? "scanning (passive)" : "scan off");
+                told = now_sc; atomic_store(&shown, told);
+                if (H->scan_changed) H->scan_changed();
             }
             if (!on && connect_next() < 0) break;
             int busy = a2dp_busy();
@@ -1420,6 +1521,8 @@ static void *thread(void *arg)
             struct pollfd p[2] = { { fd, POLLIN, 0 }, { wake[0], POLLIN, 0 } };
             int wait = busy ? 500 : nbatch ? 100 : -1;
             if (quiet && (wait < 0 || qleft < wait)) wait = (int)qleft + 1;          /* back to scanning when the pause ends */
+            /* left unreported by the pause just ended: told within 100 ms (the next pass), not at the next packet */
+            if (!quiet && now_sc != told && (wait < 0 || wait > 100)) wait = 100;
             if (poll(p, 2, wait) < 0 && errno != EINTR) break;
             if (p[1].revents & POLLIN) { char c[16]; if (read(wake[0], c, sizeof c) < 0) break; }
             if (pump(0) < 0) break;
@@ -1427,7 +1530,8 @@ static void *thread(void *arg)
         fprintf(stderr, "bluetooth: controller lost, reopening\n");
         drop_all();
         close(fd); fd = -1;
-        if (atomic_exchange(&scanning, 0) && H->scan_changed) H->scan_changed();
+        atomic_store(&scanning, 0); atomic_store(&shown, 0);
+        if (told && H->scan_changed) H->scan_changed();     /* by what HA heard: a pause may have stopped the scan unreported */
     }
     return NULL;
 }
@@ -1438,7 +1542,7 @@ static void *thread(void *arg)
  * switch was listed and fell back off at once, as no thread ever took the request) */
 int ble_present(void) { return core_bluetooth(-1) && access(bt_dev(), F_OK) == 0; }
 const char *ble_mac(void) { return bdaddr; }
-int ble_scanning(void) { return atomic_load(&scanning); }
+int ble_scanning(void) { return atomic_load(&shown) != 0; }       /* not the brief pauses: HA would hear "idle" for good */
 
 int ble_connections(uint64_t *addrs)
 {

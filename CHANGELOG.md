@@ -2,8 +2,26 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-13
+
+- **Bluetooth proxy: each request to a connected device took about 25 ms instead of 100 in a test on an Echo Dot 2
+  (issue #167).** Devices that Home Assistant drives through the Echo, such as IKEA's Idasen desk, ask for something
+  and wait for the answer several times a second. Once a device is connected, the Echo now asks for the short link
+  ESPHome's proxy asks for (a device that asks for a link of its own gets that one). Measured on an Echo Dot 2 with a
+  PC standing in for the device, running a loop like the desk's (write, wait 100 ms, read): 300 ms a round before, 150
+  ms now; in a short, rough test Wi-Fi was no slower. While Home Assistant talks to a connected device the Echo also
+  stops looking for other Bluetooth devices, until a second after the last request (about 30 seconds at a time, then 3
+  seconds of looking); in three runs that took a little more off the loop. Not tried with a desk yet. Thanks to
+  lebheisenberg for the report.
+
 ## 2026-11-12
 
+- **Echo Shows: a clock where the screen used to go dark.** On the settings page's **Screen** page, the new **When
+  idle** card has **Clock when idle**: when the screen would turn off (5 minutes after the last thing happened, 1 minute
+  with the mic off or in Do not disturb), it shows the time across the whole screen with the date under it instead.
+  Until then the face shows as always. A touch on the clock, a request, a timer, the volume or music starting bring
+  the face back, and the wait starts again. **Screen sleeps after** sets that wait in minutes (0: never, the face
+  stays). With an app or the music page in front the screen goes dark as before. Off and 5 minutes by default.
 - **A tighter wall between hassmic and root (issue #130).** If something ever took hassmic over, it could have had
   root overwrite one of root's own files, set system properties (open adb, start any service) or connect to an open
   adb itself, and from there run as root. Root now treats everything hassmic leaves for it as hostile, the firewall
@@ -55,6 +73,21 @@ What changed for people using the Echo, newest first. Details and measurements a
   with that Echo: not in the settings file, and a factory reset removes it. The name at the top now opens a list of
   your other Echos with their notes: pick one and its settings page opens on the same page you are on. Suggested by
   baudneo.
+- **More languages for the Echo's own words, Romanian among them.** "Language you speak" (settings page, Wake word)
+  now also lists Italian, Portuguese, Dutch, Swedish, Danish, Norwegian, Finnish, Polish and Romanian; automatic picks
+  them from your time zone too (Romania and Moldova: Romanian). The Echo Show writes the date on its screen (the clock,
+  the drawer) in that language: "Miercuri, 11 noiembrie". Finding where the wake word ends works as before for these
+  (there are no sound models for them yet: the wake word's own). Bluetooth announcements can be in Romanian ("Conectat
+  la …"). "Oprește" stops like "stop", and "închide" / "închide apelul" ends a Drop In like "hang up"; these words are
+  now recognised with or without their accents and capitals in every language ("Închide", "inchide", "Arrête"). The
+  Drop In blueprint has Romanian sentences ("conectează-mă cu bucătăria") and replies: re-import it to get them. In
+  English the clock's date now reads like the drawer's: "Wednesday, 1 November" (was "Wednesday 01 November").
+- **Echo Show 5: Wi-Fi no longer drops every few minutes.** Amazon's Wi-Fi diagnostics, still running inside Android,
+  test the connection against Amazon's servers; the satellite's firewall blocks them, so the test always failed and
+  the diagnostics then disconnected and reconnected the Wi-Fi (a few seconds each time, every link to Home Assistant
+  and Music Assistant dropped, music stopped and restarted), and their watchdog turned the Wi-Fi off and on when the
+  test never passed. The satellite now switches both off. The other Echo Shows and the Echo Input have the same
+  diagnostics and get the same change, not tried on them yet.
 
 ## 2026-11-10
 

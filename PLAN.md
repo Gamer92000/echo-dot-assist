@@ -196,6 +196,43 @@ Run in this order. Each step says what it proves.
       Verified by the author on a Dot 2; `tests/fake_ha_remote_followup.py` (fails on the old core: flags [3, 3, 3]).
       Seen meanwhile, not fixed: with `-w remote` an ERROR outside a reply (e.g. nothing said) ends the run and asks for the
       next, then its RUN_END finds that new run and asks again: two starts, HA cancels the first
+- [~] Bluetooth proxy latency (issue #167, 2026-11-12/13): the Idasen desk stutters through a Dot 2, not through an ESP32
+      proxy (the report). HA's `idasen_desk` (idasen-ha 3.0, idasen 0.14) moves by a loop: write the target with response
+      (bleak 3 picks with-response when the characteristic has it), sleep 100 ms, GATT read of height and speed; the desk
+      stops between refreshes that come late. Its up and down buttons are writes without response. Measured on the Dot 2
+      (2026-11-13, the PC's BlueZ as the device, `bluetoothctl advertise peripheral`; descriptor write with response + 100
+      ms + read of the device name, 150 rounds a run; builds run by hand with an empty `HASSMIC_STATE`, plaintext API): LE
+      Create Connection's 30-50 ms gives 50 ms, each request and answer 100 ms (two events), the loop 300-350 ms, 464-506 ms
+      while Wi-Fi is saturated; at 11.25 ms 22-24 ms a request, the loop 146-150 ms, 261-301 ms under load. Wi-Fi PC -> Echo
+      (toybox nc, 24 MB, 3-6 runs each): idle link 2.06-2.63 MB/s at 11.25 ms, 1.71-2.31 at 50 ms; with the loop running
+      2.15-3.00 against 2.35-2.53: no cost found, but the measurement is weak (one early run at 0.8-1.6 did not repeat; the
+      house's Wi-Fi varies 0.68-2.05 without any link). Changed: (1) ESPHome's 8.75-11.25 ms (`MEDIUM_*_CONN_INTERVAL`,
+      esphome/components/ble_device_base/ble_client_state.h, dev branch 2026-11-12) asked for by LE Connection Update once
+      the MTU exchange is done (`fast`; HASSMIC_IVAL/NOUPD experiment builds, not in git, for the interval sweep), not in LE
+      Create Connection: there 14 of 16 tries to the PC failed (it ends the link, 0x13, when its LE Read Remote Features is
+      refused 0x1a, btmon; at 30-50 ms 12-14 of 24 failed, old and new build alike, so the PC is a flaky test device). A
+      device that asked for its own parameters (L2CAP) gets them (ours not sent when it asked first); one update at a time
+      (`upd_wait`, 5 s cap), refusals retried after 1 s (ours 2 tries, its 3), neither during encryption or pairing; never
+      on the peripheral link. Linux apparently asks only when the interval is outside its 30-50 ms, so the PC stayed at
+      11.25 (the update's Complete came 430 ms after the connect). The interval is logged (`connected to ..., interval`, LE
+      Connection Update Complete). (2) Scan paused for GATT (`gatt_busy`: 1 s after each request HA sends, spells of about
+      30 s, then 3 s of scanning). ESPHome keeps scanning while connected, in its 30 ms window (`connection_scan_window`,
+      esphome/components/esp32_ble_tracker/__init__.py, dev branch 2026-11-13). Measured at 11.25 ms, 3 runs each (a local
+      experiment build, not in git: `gatt_busy` returning at once when an env variable was set): loop 146-148 ms (p90
+      158-162) with it, 158 ms (p90 180-191) without; under load 270-301 (p90 315-360) against 292-305 (p90 372-439); Wi-Fi
+      with the loop running 2.15-2.65 against 2.04-2.55. At 50 ms no difference (300 ms both). `ble_scanning()` says what HA
+      was told, so a subscribe during a pause does not hear idle. (3) Each ESPHome message in one `writev` (`write2`;
+      TCP_NODELAY was on already, `net_accept`): one segment instead of two, effect not measured.
+      `tests/fake_ha_bt_proxy.py`: the connect at 30-50 ms, the update to 8.75-11.25, a device's own wish kept, the pause
+      and its end, the scanner state asked for during it. **Open:** not tried with a desk, nor whether the Idasen asks for
+      parameters of its own (then it keeps its own interval). Not tested: the 30 s spell and 3 s break; writes without
+      response and service discovery starting a pause; refused updates, their retries and a failed LE Connection Update
+      Complete; a device's request arriving while ours is in flight or during encryption; no update when the link is already
+      at 11.25 ms or less; the `!c->srv` guards; the report after a controller lost during a pause and the 100 ms report
+      cap; `write2`'s short writes. Fixed too, older than this: an encryption that never finished (a pairing timed out in
+      S_ENC, or a bonded link's Start Encryption never answered) left `enc_pending` set, which held GATT requests (and now
+      both updates) until the link ended; 30 s after Start Encryption went out (`enc_t`, SMP_MS) the link is closed now (not
+      tested). Left: a key refresh event clears `enc_pending` early (older, harmless here).
 - [x] Bluetooth proxy as a feature (issue #152, 2026-11-09): setting `bluetooth_proxy` (Features, on by default, exported).
       Disabling HA's entities left the scanner: HA subscribes to raw advertisements whenever the device info carries
       proxy flags. Off: `proto_esphome.c` `bt_proxy()` leaves fields 11, 15 and 18 out of the device info, refuses
@@ -3305,6 +3342,40 @@ Run in this order. Each step says what it proves.
       after `core_transcript`, and `stop_word` clears what it ended.  Checked on the PC: `ui_test` (fades, hold, the
       drawer, timers by the second, the pulse by alpha only, a reply too long, broken UTF-8, under ASan/UBSan),
       `tests/fake_screen_words.py`, `build/uishot`.  Open: the moved form not yet on an Echo.
+- [~] Echo Show: clock when idle, and the screen's timeout (2026-11-11).  Asked for: the time across the whole screen
+      where it went dark, the face as before until then.  A first form (the clock in place of the idle face at once)
+      was not that.  Setting `screen_sleep_minutes` ("Screen sleeps after", 5, 0 never): the timeout in place of
+      `TIMEOUT_MS`, mic off and Do not disturb at most stock's minute.  Setting `screen_clock` ("Clock when idle",
+      off): with it on and our own face in front (the UI's `front 1`, `scene.c` `front_tell`: no music page, drawer
+      or setup screen, each of which would otherwise never go dark; a request, a call, a ringing timer keep it, or
+      each would flip the timeout, a `settings put` VM each way), `ring_band.c` holds the screen on (`INT_MAX`, AOSP
+      Settings' never; when it lets go, a userActivity if `isInteractive`: PowerManager counted from the last one,
+      maybe an hour back; the UI's count restarts as it takes over: no frames behind an app counted it) and the UI counts the same timeout itself (`scene_active`: a touch,
+      a pattern coming on, the volume, mute, Do not disturb, music starting (not its stop: a new Sendspin session says "stopped" again), the music view, the drawer, an app in front;
+      the face while it is not waiting), then `face.c` `big_clock`: the digits at 0.56 of the height (0.48 with the
+      music's bar), sized on "88:88", the date under them, mic off and Do not disturb on a line, one hit over all of
+      it (`A_WAKE`: the waking touch does nothing else).  An app or the music page in front: dark after the timeout as
+      before (the clock is the face's).  Told as `ck <on> <min>` beside `wo`.  Cost: `ui_test` counts 0 frames in 20 s on the clock
+      against 117 for the idle face.  Checked on the PC: `ui_test` under ASan/UBSan (the face at half the timeout, the
+      clock after it, no frames between minutes, a touch wakes and sends nothing, a request, mic off, a ringing timer
+      with its Stop, 0 minutes, off again), `fake_screen_words.py` (`ck`, held on only with `front 1`, an app: as
+      before, 0: never), `fake_screen.py`, `fake_web.py`, `build/uishot`.  Seen on an Echo Show 5 (checkers, 2026-11-12, 1 min, mic
+      off): held on with the face, the clock a minute later (time, date, "Microphone off"), a touch on it the face; Kiosk
+      Satellite over it: said in the log, 60 s, userActivity then (`mLastUserActivityTime` 5 s ago); back on the face
+      the clock 59.3 s later, not at once; the drawer 60 s while out, held again closed; a paused music page dark 60 s
+      after the last touch.  `service call power 12` answers `00000000 00000001` / `00000000` there, and a
+      userActivity leaves a dark screen asleep.
+- [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
+      `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
+      (Brazil's before "America/"), and the aligner finds no `.wa` for them, so it takes the word's own as with no
+      language (no MFA model for them in build.sh).  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
+      `ui_date`: day and month names per language (bionic's strftime is C locale only), English for none or one not
+      known, Japanese left out (no kanji in Roboto).  `bt_langs` has ro.  `core_transcript` compares folded (`fold`:
+      U+00C0..U+017F and ș ț without marks, lower case, no hyphens): "Închide" was never lower-cased, and the old
+      byte-wise strip of ¡ ¿ cut á (C3 A1) in two; stops + "oprește", hang-ups + "închide (apelul|Drop In)", "termină
+      apelul", "încheie apelul".  Blueprint: ro sentences and replies.  Checked on the PC: `ui_test` (each language's
+      date, cut at the end, `lg`), `fake_screen_words.py` (`lg`), `fake_ha_dropin.py` ("Închide apelul!"),
+      `blueprint_dropin.py` (ro-RO).  Open: seen on an Echo; the page and the screen's other words stay English.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,
@@ -3654,6 +3725,32 @@ Run in this order. Each step says what it proves.
       (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
       commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
       tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.
+- [x] Echo Show 5: Amazon's network bounce (2026-11-11).  The links to HA, Sendspin and the arbitration network all
+      dropped for ~5 s every few minutes (14:37, 15:11, 15:14), signal -36 dBm.  logcat: `WifiDiagsUtil` (fosservices,
+      in system_server) pings the gateway and DNS and fetches `generate_204` from mmechocaptiveportal.com and
+      fireoscaptiveportal.com; behind the egress lock the fetch times out -> `BAD_CONNECTION` -> `wifidiags-bounce` ->
+      wpa_supplicant `CTRL-EVENT-DISCONNECTED reason=3 locally_generated=1`, joined again 4.1 s later
+      (`wifi-disconnect-duration`).  Its `WifiDiagsConfigReceiver` (registered without a permission) takes a boolean
+      `val` for SET_ENABLENETBOUNCE and SET_ENABLEWIFIDIAGS (`receivedIntentSetEnableNetBounce, val=false` logged);
+      kept in memory only.  device.conf `ANDROID_BROADCASTS`, main.sh `android_tell` in netwatch: sent once per
+      system_server pid after boot, 3 netwatch rounds (>= 30 s) after a new pid is first seen: sys.boot_completed
+      stays 1 over a framework restart and am reports "Broadcast completed" with no receiver registered yet; am under
+      `timeout 10`, the first failure ends the attempt (netwatch held 10 s at worst), retried 6 rounds later and logged
+      once per pid; the 30 s are a margin, not timed.  alexa-on.sh sends each back as true (stock's).  TRIGGERNETRECOVERY in the same receiver calls System.exit: never sent.
+      Then (13:33 UTC, 12 min on) `NetWatchDog` (same class family): its timer is reset only by a passing test of
+      Amazon's, so it fired (`network-watchdog`), `setWifiEnabled(false)` then `true`, wpa_supplicant restarted, ~8 s
+      off.  It skips while Wi-Fi is off, setup is not complete, a MIRRORING_ON / OOBE_STARTED broadcast came, or
+      `Settings.System smartconn_status` contains "enabled"; `WifiDiagsHandler.shouldResetConnection` skips the bounce
+      for that too, and nothing else reads it.  So `system/smartconn_status=enabled` in ANDROID_SETTINGS (persistent,
+      alexa-on.sh deletes it again), the broadcasts kept beside it: SET_ENABLEWIFIDIAGS false stops the tests
+      themselves (`WifiDiagsHandler.handleMessage`: RUN_TEST_CONTINUOUSLY "doNothing, reason=wifidiagsDisabled", the
+      next one not scheduled).  The other Android models from their firmware's code (2026-11-12, the dex in
+      fosservices.odex, athena's compact dex in fosservices.vdex, disassembled): `onNetworkRestartTimeout` and
+      `shouldResetConnection` are instruction for instruction checkers' on cronos, crown and cupcake, athena's the same
+      checks in the same order; the only readers of smartconn_status, and nothing writes it (every APK's and jar's
+      dex looked through too).  cronos, crown, cupcake: setting and both broadcasts; athena's receiver has no
+      SET_ENABLENETBOUNCE (mEnableNetBounce only from its config): setting and SET_ENABLEWIFIDIAGS.  **Open:** a day's
+      run on each of them.
 - [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
       Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
       Of the four supported Shows' extracted firmware images checked here, only athena declares

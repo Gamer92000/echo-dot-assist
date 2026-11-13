@@ -445,6 +445,21 @@ int scene_visible(const struct scene *s)
     return is_home(s->top) || s->now < s->want_home_until;
 }
 
+/* "front" to hassmic: whether the screen's timeout is the UI's now (the screen saver: ring_band.c holds the screen on and
+ * face.c shows the clock when it is up).  Our own face, with no drawer over it and not the setup screen: the clock takes
+ * nothing else's place, and those held on would never go dark (a music page left paused, the drawer left out, an Echo
+ * not set up).  A request, a call or a ringing timer keep it: they end by themselves, the face counts them as something
+ * happening, and each flip is a "settings put" (a VM) in ring_band.c.  The rest keeps the screen's own timeout, as
+ * before the clock.  The UI's count starts as it takes over: an app in front long draws no frames that would have
+ * counted it (scene_prepare), and it closing by itself is no reason for the clock at once */
+static void front_tell(struct scene *s)
+{
+    int f = is_home(s->top) && s->view == V_FACE && !drawer_open(s) && !face_setup(s);
+    if (f == s->front_sent) return;
+    if (f) s->active_at = s->now;
+    s->front_sent = f; send(s, "front %d", f);
+}
+
 /* The activity in front.  An app gone while one is the home app (it ended, crashed, or Back left it): it comes back,
  * three times a minute at most, unless our own screen was asked for. */
 void scene_top(struct scene *s, const char *pkg, long long now)
@@ -453,6 +468,9 @@ void scene_top(struct scene *s, const char *pkg, long long now)
     int was_home = is_home(s->top);
     if (eq(pkg, s->top)) return;
     snprintf(s->top, sizeof s->top, "%s", pkg);
+    if (!is_home(pkg)) scene_active(s, "%s in front", pkg);     /* (here: scene_prepare draws nothing behind an app, and
+                                                                   the log would not say what ended the clock) */
+    front_tell(s);
     if (!is_home(pkg)) {                                        /* the app is in front: what held its place goes */
         s->leaving_until = 0;
         if (s->mp_gave) { s->mp_gave = 0; s->view = V_FACE; }   /* (the music page given back: the face under the app) */
@@ -553,6 +571,7 @@ void scene_touch(struct scene *s, int ev, int x, int y, long long now)
     if (ev == TOUCH_DOWN && !s->screen_on) { s->down = 0; return; }   /* the screen off: no gesture (android.c wakes it) */
     int vis = scene_visible(s) && s->screen_on;
     if (ev == TOUCH_DOWN) {
+        if (!s->saver_on) scene_active(s, "a touch");
         s->wtap = 0;
         s->down = 1; s->x0 = s->x = x; s->y0 = s->y = y; s->t0 = now; s->fired = s->longd = s->dragging = s->slide = 0;
         s->sc = NULL; s->sc_drag = 0; s->pressed = 0;
@@ -815,6 +834,11 @@ struct rect scene_prepare(struct scene *s, long long now, int *next_ms)
     s->cur = !s->cur; s->n[s->cur] = 0; s->nhits = 0; s->nscrolls = 0;
     s->clip = (struct rect){ 0, 0, s->w, s->h };
     int drawer_only = s->backdrop.px && ((s->dr.from_app && drawer_open(s)) || s->leaving_until > now);
+    if (drawer_only || drawer_open(s)) scene_active(s, "the drawer");
+    else if (s->view != V_FACE) scene_active(s, "the music");
+    else if (!is_home(s->top)) scene_active(s, "%s in front", s->top);
+    front_tell(s);                                              /* (a view, the drawer, the face's mode: frames follow) */
+    s->saver_was = s->saver_on; s->saver_on = 0;                /* (face.c sets it while the clock shows) */
     if (drawer_only) {                                          /* pulled over an app: its picture under the drawer */
         fill(s, 0, (struct rect){ 0, 0, s->w, s->h }, BG);
         if (s->backdrop.px) image(s, 1, &s->backdrop, 0, 0, (float)s->backdrop.w, (float)s->backdrop.h, 0);
@@ -888,6 +912,15 @@ static void start_home(struct scene *s)
     }
 }
 
+void scene_active(struct scene *s, const char *why, ...)
+{
+    s->active_at = s->now;
+    if (!s->saver_on && !s->saver_was) return;                 /* the clock did not show: nothing to say */
+    char b[160]; va_list ap; va_start(ap, why); vsnprintf(b, sizeof b, why, ap); va_end(ap);
+    send(s, "log screen saver: the face again: %s", b);       /* (once: what ended it, not what keeps it away) */
+    s->saver_on = s->saver_was = 0;
+}
+
 void scene_msg(struct scene *s, const char *line, long long now)
 {
     char cmd[16] = ""; const char *a = line; size_t k = 0;
@@ -902,13 +935,17 @@ void scene_msg(struct scene *s, const char *line, long long now)
         if (p < 0) return;
         face_pattern(s, p, cmd[1] == '+', ago < 0 ? 0 : ago);
     }
-    else if (eq(cmd, "ev")) s->evol = atoi(a);
+    else if (eq(cmd, "ev")) { if (s->evol >= 0 && atoi(a) != s->evol) scene_active(s, "the volume, %d -> %d", s->evol, atoi(a)); s->evol = atoi(a); }
     else if (eq(cmd, "lv")) s->level = atoi(a) < 0 ? 0 : atoi(a) > 100 ? 100 : atoi(a);
-    else if (eq(cmd, "mute")) s->mute = atoi(a);
-    else if (eq(cmd, "dnd")) s->dnd = atoi(a);
+    else if (eq(cmd, "mute")) { if (atoi(a) != s->mute) scene_active(s, "mic %s", atoi(a) ? "off" : "on"); s->mute = atoi(a); }
+    else if (eq(cmd, "dnd")) { if (atoi(a) != s->dnd) scene_active(s, "Do not disturb %s", atoi(a) ? "on" : "off"); s->dnd = atoi(a); }
     else if (eq(cmd, "oobe")) s->oobe = atoi(a);
     else if (eq(cmd, "mpage")) { int v = atoi(a); s->mpage = v == MP_FACE || v == MP_HOME ? v : MP_OFF; }
     else if (eq(cmd, "h12")) s->h12 = atoi(a);
+    else if (eq(cmd, "ck")) {                                   /* the screen saver: on, the timeout (min, 0 never) */
+        int on = 0, min = 5; sscanf(a, "%d %d", &on, &min);
+        s->clock_big = on == 1; s->saver_min = min < 0 ? 0 : min; scene_active(s, "the settings");
+    }
     else if (eq(cmd, "name")) snprintf(s->name, sizeof s->name, "%s", a);
     else if (eq(cmd, "act")) snprintf(s->act, sizeof s->act, "%s", a);
     else if (eq(cmd, "web")) snprintf(s->web, sizeof s->web, "%s", a);
@@ -920,6 +957,7 @@ void scene_msg(struct scene *s, const char *line, long long now)
     }
     else if (eq(cmd, "timers")) snprintf(s->timers, sizeof s->timers, "%s", a);
     else if (eq(cmd, "peer")) snprintf(s->peer, sizeof s->peer, "%s", a);
+    else if (eq(cmd, "lg")) snprintf(s->lang, sizeof s->lang, "%s", eq(a, "-") ? "" : a);
     else if (eq(cmd, "tz")) { if (a[0]) setenv("TZ", a, 1); else unsetenv("TZ"); tzset(); }
     else if (eq(cmd, "ping")) send(s, "pong %.20s", a);             /* hassmic: this UI's main loop goes on */
     else if (eq(cmd, "mt")) {
@@ -928,6 +966,9 @@ void scene_msg(struct scene *s, const char *line, long long now)
     } else if (eq(cmd, "mp")) {
         long long pos = 0, dur = 0; int st = 0, sp = 1000;
         if (sscanf(a, "%d %lld %lld %d", &st, &pos, &dur, &sp) >= 1) {
+            /* music starting brings the face back (the saver waits); a stop or pause does not: after a lost link
+             * Sendspin's new session says "stopped" again with nothing having played, and woke the face (2026-11-11) */
+            if (st == 1 && s->srv_state != 1) scene_active(s, "music playing");
             s->srv_state = st; s->srv_pos = pos; s->srv_dur = dur; s->srv_speed = sp; s->srv_at = now; s->music = 1;
             if (s->pend_until && st != s->pend_state) s->mdur = dur;     /* older than the tap: the state stays as tapped */
             else { s->mstate = st; s->mpos = pos; s->mdur = dur; s->mspeed = sp; s->mpos_at = now; }   /* (the tap still
@@ -975,6 +1016,7 @@ struct scene *scene_new(int w, int h, int band, const struct ui_platform *p, voi
     for (int i = 0; i < 3; i++) s->relaunch[i] = -3600000;     /* none yet (the clock may be under a minute) */
     s->now = s->last = 0;
     face_init(s, now);
+    s->active_at = now; s->front_sent = -1; s->saver_min = 5;
     music_init(s);
     s->wd.grab = -1;                                           /* (the platform says when it can take the panel) */
     s->m.req_next = (int)((unsigned long long)now % 1000000) * 100;   /* not 1 again after a restart of the UI */

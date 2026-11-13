@@ -1695,12 +1695,27 @@ static void wake_align_load(int slot, const struct core_wake_word *w)
  * language picked on the page in the zone's variety of it where the zone has one (en in London: en-GB) */
 static void speech_locale(const struct core_wake_word *w, char *out, size_t cap)
 {
-    static const char *const langs[][2] = { { "de", "de-DE" }, { "en", "en-US" }, { "fr", "fr-FR" }, { "es", "es-ES" }, { "ja", "ja-JP" } };
+    /* every one of settings.c's speech_langs: those with no model of the aligner's (from "it") find no file for their
+     * locale, and align_resolve takes the word's own, as with no language at all */
+    static const char *const langs[][2] = { { "de", "de-DE" }, { "en", "en-US" }, { "fr", "fr-FR" }, { "es", "es-ES" }, { "ja", "ja-JP" },
+        { "it", "it-IT" }, { "pt", "pt-PT" }, { "nl", "nl-NL" }, { "sv", "sv-SE" }, { "da", "da-DK" }, { "nb", "nb-NO" },
+        { "fi", "fi-FI" }, { "pl", "pl-PL" }, { "ro", "ro-RO" } };
     static const char *const zones[][2] = {      /* by prefix, the first that matches */
         { "Europe/Berlin", "de-DE" }, { "Europe/Vienna", "de-DE" }, { "Europe/Zurich", "de-DE" }, { "Europe/Busingen", "de-DE" },
         { "Europe/Vaduz", "de-DE" }, { "Europe/Paris", "fr-FR" }, { "Europe/Monaco", "fr-FR" }, { "Europe/Madrid", "es-ES" },
         { "Atlantic/Canary", "es-ES" }, { "America/Mexico_City", "es-MX" }, { "America/Monterrey", "es-MX" }, { "America/Tijuana", "es-MX" },
         { "America/Cancun", "es-MX" }, { "America/Merida", "es-MX" }, { "America/Chihuahua", "es-MX" }, { "Asia/Tokyo", "ja-JP" },
+        /* languages the aligner has no model for (their files are not found: the word's own, as before), for the
+         * screen's date (core_speech_language); Brazil's zones before "America/" */
+        { "Europe/Rome", "it-IT" }, { "Europe/San_Marino", "it-IT" }, { "Europe/Vatican", "it-IT" }, { "Europe/Lisbon", "pt-PT" },
+        { "Atlantic/Madeira", "pt-PT" }, { "Atlantic/Azores", "pt-PT" }, { "America/Sao_Paulo", "pt-BR" }, { "America/Bahia", "pt-BR" },
+        { "America/Fortaleza", "pt-BR" }, { "America/Recife", "pt-BR" }, { "America/Belem", "pt-BR" }, { "America/Manaus", "pt-BR" },
+        { "America/Cuiaba", "pt-BR" }, { "America/Campo_Grande", "pt-BR" }, { "America/Maceio", "pt-BR" }, { "America/Araguaina", "pt-BR" },
+        { "America/Porto_Velho", "pt-BR" }, { "America/Boa_Vista", "pt-BR" }, { "America/Santarem", "pt-BR" },
+        { "America/Rio_Branco", "pt-BR" }, { "America/Noronha", "pt-BR" }, { "America/Eirunepe", "pt-BR" }, { "Brazil/", "pt-BR" },
+        { "Europe/Amsterdam", "nl-NL" }, { "Europe/Stockholm", "sv-SE" }, { "Europe/Copenhagen", "da-DK" }, { "Europe/Oslo", "nb-NO" },
+        { "Europe/Helsinki", "fi-FI" }, { "Europe/Warsaw", "pl-PL" }, { "Poland", "pl-PL" }, { "Europe/Bucharest", "ro-RO" },
+        { "Europe/Chisinau", "ro-RO" }, { "Europe/Tiraspol", "ro-RO" },
         { "Europe/London", "en-GB" }, { "Europe/Dublin", "en-GB" }, { "Australia/", "en-AU" }, { "Asia/Kolkata", "en-IN" },
         { "Asia/Calcutta", "en-IN" }, { "Canada/", "en-CA" }, { "America/", "en-US" }, { "US/", "en-US" } };
     const char *l = settings_speech_language(), *zl = NULL; char p[300], zone[96] = ""; FILE *f; size_t ln = strlen(l);
@@ -1714,6 +1729,14 @@ static void speech_locale(const struct core_wake_word *w, char *out, size_t cap)
     if (zl) { snprintf(out, cap, "%s", zl); return; }
     const char *dash = strchr(w->id, '-');
     if (dash && !wake_is_mww(w->manifest)) snprintf(out, cap, "%s", dash + 1);     /* a microWakeWord id is a name, no locale */
+}
+
+void core_speech_language(char *out, size_t cap)
+{
+    struct core_wake_word none; char loc[16];
+    memset(&none, 0, sizeof none);                  /* no word: the setting or the zone only */
+    speech_locale(&none, loc, sizeof loc);
+    snprintf(out, cap, "%.*s", (int)strcspn(loc, "-"), loc);
 }
 
 static void align_resolve(int slot)                 /* capture thread */
@@ -2346,6 +2369,49 @@ void core_alarm_stop(const char *why)
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
+/* What core_transcript compares: lower case, without spaces, punctuation and hyphens ("drop-in"), and the letters of
+ * U+00C0..U+017F and Romanian's ș ț without their marks.  Speech to text writes a word with its marks or without them
+ * ("închide", "inchide"), and capitalises the first one ("Închide": tolower() leaves UTF-8 alone), so every list
+ * entry is compared folded too.  The bytes of ¡ ¿ were taken out one by one before, and with them the second byte of
+ * á (C3 A1): code points now */
+static size_t fold(const char *in, char *out, size_t cap)
+{
+    static const char lat[] = "aaaaaaaceeeeiiiidnooooo_ouuuuy_saaaaaaaceeeeiiiidnooooo_ouuuuy_y"      /* U+00C0..; _ kept */
+                              "aaaaaaccccccccddddeeeeeeeeeegggggggghhhhiiiiiiiiiiiijjkkklllllll"
+                              "lllnnnnnnnnnoooooooorrrrrrssssssssttttttuuuuuuuuuuuuwwyyyzzzzzzs";
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)in; *p; ) {
+        unsigned cp = *p; int len = 1;
+        if (cp >= 0x80) {                   /* a lead byte, the length its high bits say, cut short where one is missing */
+            len = cp >= 0xF0 ? 4 : cp >= 0xE0 ? 3 : 2;
+            for (int i = 1; i < len; i++) if ((p[i] & 0xC0) != 0x80) { len = i; break; }
+            /* two bytes: the code point, which the tables below know.  Longer ones (’ … 日), a stray byte: kept as
+             * they are, whole, so "don’t" is never torn into "dona" and two bytes of nothing */
+            cp = len == 2 && p[0] >= 0xC2 && p[0] <= 0xDF ? (p[0] & 0x1Fu) << 6 | (p[1] & 0x3Fu) : 0x110000;
+        }
+        char c = 0;
+        if (cp < 0x80) c = strchr(" \t.,!?\"'-", (int)cp) ? 0 : (char)tolower((int)cp);
+        else if (cp == 0xA1 || cp == 0xBF) c = 0;                                       /* ¡ ¿ */
+        else if (cp >= 0xC0 && cp < 0x180 && lat[cp - 0xC0] != '_') c = lat[cp - 0xC0];
+        else if (cp >= 0x218 && cp <= 0x21B) c = "sstt"[cp - 0x218];                     /* Ș ș Ț ț */
+        else {                                                                          /* any other: as it is */
+            if (n + (size_t)len >= cap) break;
+            memcpy(out + n, p, (size_t)len); n += (size_t)len; p += len; continue;
+        }
+        if (c) { if (n + 1 >= cap) break; out[n++] = c; }
+        p += len;
+    }
+    out[n] = 0;
+    return n;
+}
+
+static int said(const char *w, const char *const *list, size_t count)
+{
+    char e[64];
+    for (size_t i = 0; i < count; i++) { fold(list[i], e, sizeof e); if (!strcmp(w, e)) return 1; }
+    return 0;
+}
+
 /* "<wake word>, stop" with an engine that has no "stop" keyword (microWakeWord, Home Assistant's): the transcript is the
  * word alone.  Home Assistant has nothing to stop a ringing satellite timer with (it forgot the timer when it
  * finished), so the run is cancelled here, as the button does, before Home Assistant answers it.  Music plays on
@@ -2356,19 +2422,18 @@ void core_alarm_stop(const char *why)
  * question during a ring is not answered */
 int core_transcript(const char *text)
 {
-    static const char *const stops[] = { "stop", "stopp", "stoppen", "stoppa", "halt", "arrête", "arrete", "basta", "para", "pare" };
+    /* as they are spelled: compared folded.  "stop" is Romanian's too; "oprește" what else it says */
+    static const char *const stops[] = { "stop", "stopp", "stoppen", "stoppa", "halt", "arrête", "basta", "para", "pare", "oprește" };
     /* a Drop In ends on these (and on the stops): Home Assistant has no intent for it, and the run is cancelled */
-    static const char *const hangups[] = { "hangup", "endcall", "endthecall", "enddropin", "auflegen", "legauf", "beenden", "anrufbeenden",
-                                           "dropinbeenden", "gesprächbeenden", "raccroche", "raccrocher", "cuelga", "colgar",
-                                           "riattacca", "riaggancia", "ophangen", "hangop", "legop" };     /* the blueprint's languages */
-    char w[32], k[32], kw[64]; size_t n = 0, m = 0;
-    for (const char *p = text; *p && n < sizeof w - 1; p++)        /* lower case, without spaces and punctuation */
-        if (!strchr(" \t.,!?¡¿\"'", *p)) w[n++] = (char)tolower((unsigned char)*p);
-    w[n] = 0;
+    static const char *const hangups[] = { "hang up", "end call", "end the call", "end drop in", "auflegen", "leg auf", "beenden",
+                                           "Anruf beenden", "Drop In beenden", "Gespräch beenden", "raccroche", "raccrocher",
+                                           "cuelga", "colgar", "riattacca", "riaggancia", "ophangen", "hang op", "leg op",
+                                           "închide", "închide apelul", "închide Drop In", "termină apelul", "încheie apelul" };
+                                                                     /* the blueprint's languages */
+    char w[64], k[64], kw[64];
+    size_t n = fold(text, w, sizeof w);
     wake_phrase_bare(kw, sizeof kw);                                /* "Echo", not "Echo (de-DE)" */
-    for (const char *p = kw; *p && m < sizeof k - 1; p++)          /* "Alexa, stop" with the wake word sent too */
-        if (!strchr(" \t.,!?¡¿\"'", *p)) k[m++] = (char)tolower((unsigned char)*p);
-    k[m] = 0;
+    size_t m = fold(kw, k, sizeof k);                               /* "Alexa, stop" with the wake word sent too */
     if (m && n > m && !strncmp(w, k, m)) memmove(w, w + m, n - m + 1);
     /* The wake word sent too and nothing after it: without the word Home Assistant would have heard nothing and ended
      * quietly (core_no_speech).  So here: not speech that stops a ring (timer_stop_any), nor a request for the agent */
@@ -2379,18 +2444,14 @@ int core_transcript(const char *text)
         return 1;
     }
     if (dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE) {
-        int hit = 0;
-        for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
-        for (size_t i = 0; i < sizeof hangups / sizeof hangups[0]; i++) hit |= !strcmp(w, hangups[i]);
-        if (hit) {
+        if (said(w, stops, sizeof stops / sizeof *stops) || said(w, hangups, sizeof hangups / sizeof *hangups)) {
             dropin_hangup("said hang up");
             if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
             core_pipeline_finish();
             return 1;
         }
     }
-    int hit = 0;
-    for (size_t i = 0; i < sizeof stops / sizeof stops[0]; i++) hit |= !strcmp(w, stops[i]);
+    int hit = said(w, stops, sizeof stops / sizeof *stops);
     if (atomic_load(&alarm_on)) {
         if (!hit && !(timer_stop_any && w[0])) return 0;
         core_alarm_stop(hit ? "said stop" : "a request during the ring");

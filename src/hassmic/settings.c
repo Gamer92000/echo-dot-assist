@@ -35,8 +35,13 @@ static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeass
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
-static const char *const speech_langs[6] = { "auto", "de", "en", "fr", "es", "ja" };
-static int speech_lang, wake_adapt = 1;
+/* the aligner's languages first (tools/wakealign/build.sh; main.c speech_locale), then those it has no model for yet,
+ * which it takes the wake word's own for, as before: the screen's date speaks them all (src/ui/lang.c).  Stored by
+ * name, so the list may grow */
+static const char *const speech_langs[] = { "auto", "de", "en", "fr", "es", "ja", "it", "pt", "nl", "sv", "da", "nb", "fi", "pl", "ro" };
+#define SPEECH_LANGS ((int)(sizeof speech_langs / sizeof *speech_langs))
+static _Atomic int speech_lang;                         /* read without the lock: the aligner's and the screen's threads */
+static int wake_adapt = 1;
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -51,6 +56,7 @@ const struct bt_lang bt_langs[] = {
     { "nb", "Norsk", "Koblet til %s", "Koblet fra %s", "Koblet til en Bluetooth-enhet", "Koblet fra en Bluetooth-enhet" },
     { "fi", "Suomi", "Yhdistetty laitteeseen %s", "Yhteys laitteeseen %s katkaistu", "Yhdistetty Bluetooth-laitteeseen", "Yhteys Bluetooth-laitteeseen katkaistu" },
     { "pl", "Polski", "Połączono z %s", "Rozłączono z %s", "Połączono z urządzeniem Bluetooth", "Rozłączono z urządzeniem Bluetooth" },
+    { "ro", "Română", "Conectat la %s", "Deconectat de la %s", "Conectat la un dispozitiv Bluetooth", "Deconectat de la un dispozitiv Bluetooth" },
 };
 const int bt_lang_count = (int)(sizeof bt_langs / sizeof bt_langs[0]);
 static const char *bt_lang_codes[sizeof bt_langs / sizeof bt_langs[0]];
@@ -95,7 +101,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -166,6 +172,11 @@ static const struct setting table[NSET] = {
     [SCREEN_HOLD] = { "screen_text_seconds", "Speech stays for", "Lights", "s", S_INT, 0, 120, 1, 0 },
     /* running timers counted down, a ringing one pulsing, on the same layer */
     [SCREEN_TIMERS] = { "screen_timers", "Timers on screen", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* screen.c, the UI's face.c: a screen saver, the time and date across the screen where it went dark */
+    [SCR_CLOCK]   = { "screen_clock", "Clock when idle", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* the screen's timeout in place of stock's 5 min (mic off and Do not disturb: 1 min at most); 0 never: ring_band.c
+     * sets it, or with the clock on over our own screen, the UI counts it */
+    [SCR_SLEEP]   = { "screen_sleep_minutes", "Screen sleeps after", "Lights", "min", S_INT, 0, 120, 1, 0 },
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
     [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -266,6 +277,8 @@ static int present(enum id i)
     case SCREEN_TEXT: return screen_words_on(-1) >= 0;
     case SCREEN_HOLD: return screen_words_hold(-1) >= 0;
     case SCREEN_TIMERS: return screen_timers_on(-1) >= 0;
+    case SCR_CLOCK: return screen_clock(-1) >= 0;
+    case SCR_SLEEP: return screen_sleep_min(-1) >= 0;
     case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
@@ -311,7 +324,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case UPDATES: *names = update_channels; return 3;
     case ARB_MODE: *names = arb_modes; return 2;
     case WAKE_ENGINE: *names = wake_engines; return 3;
-    case SPEECH_LANG: *names = speech_langs; return 6;
+    case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
     case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
@@ -405,6 +418,8 @@ int settings_get(const struct setting *s)
     case SCREEN_TEXT: return screen_words_on(-1);
     case SCREEN_HOLD: return screen_words_hold(-1);
     case SCREEN_TIMERS: return screen_timers_on(-1);
+    case SCR_CLOCK: return screen_clock(-1);
+    case SCR_SLEEP: return screen_sleep_min(-1);
     default: return 0;
     }
 }
@@ -414,7 +429,7 @@ static void put(enum id i, int v)
 {
     switch (i) {
     case WAKE_ENGINE: core_wake_engine(v); break;
-    case SPEECH_LANG: speech_lang = v; break;
+    case SPEECH_LANG: speech_lang = v; screen_language_changed(); break;
     case WAKE_ADAPT: wake_adapt = v; break;
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
@@ -484,6 +499,8 @@ static void put(enum id i, int v)
     case SCREEN_TEXT: screen_words_on(v); break;
     case SCREEN_HOLD: screen_words_hold(v); break;
     case SCREEN_TIMERS: screen_timers_on(v); break;
+    case SCR_CLOCK: screen_clock(v); break;
+    case SCR_SLEEP: screen_sleep_min(v); break;
     default: break;
     }
 }
@@ -679,7 +696,7 @@ int settings_peek(const char *name, char *out, size_t cap)
 }
 
 int settings_mic_level(void) { return mic_level; }
-const char *settings_speech_language(void) { return speech_lang > 0 && speech_lang < 6 ? speech_langs[speech_lang] : ""; }
+const char *settings_speech_language(void) { int l = speech_lang; return l > 0 && l < SPEECH_LANGS ? speech_langs[l] : ""; }
 int settings_bt_proxy(void) { return bt_proxy; }
 int settings_on(const char *name) { const struct setting *s = settings_find(name); return s && s->type == S_BOOL && settings_get(s); }
 const struct bt_lang *settings_bt_lang(void) { return &bt_langs[bt_lang]; }
