@@ -2,6 +2,23 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-21 — The Echo as a phone (SIP)
+
+- **The Echo as a phone: an extension of your phone system (SIP).** Asterisk, FreePBX, a Fritz!Box or any phone
+  system that takes SIP phones can now ring the Echo, and the Echo can call through it: a doorbell intercom, a desk
+  phone, a softphone. New feature "Phone" (Features, off by default): switch it on and, under "Set up…", give the
+  phone system's address, the extension made for the Echo and its password (sent sealed, kept on the Echo, never
+  shown again, never exported). A call rings as a Drop In that waits for the button, until you answer with the action
+  button, on an Echo Show's screen, with "Answer phone" in Home Assistant or on the settings page; it never connects by
+  itself. Call out with the action `esphome.<echo>_phone_call` (`number:`) or Call… on the page. Home Assistant gets
+  "Phone", "Phone with" ("Portero (60)"), "Phone line" (registered or why not), "Answer phone", "Hang up phone" and
+  the event "Phone result", as Drop In's. The sound is Drop In's: its echo handling, its call volume and its
+  microphone (Amazon's call processing where the Echo has it); Opus
+  (wideband) or G.711. Only the phone system's address can ring the Echo; do not disturb, the microphones off and a
+  Drop In refuse calls. SIP and the audio are not encrypted, as with most desk phones: for a phone system in your
+  own network. UDP 28933 and 28934. No DTMF, transfer, hold or paging yet. Setup and an Asterisk example in the
+  guide ("Phone").
+
 ## 2026-11-18 — The language you speak, from the right time zone
 
 - **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to

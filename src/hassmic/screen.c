@@ -38,6 +38,7 @@
 #include "board.h"
 #include "core.h"
 #include "dropin.h"
+#include "sip.h"
 #include "json.h"
 #include "mass.h"
 #include "ring.h"
@@ -511,7 +512,8 @@ static void command(char *l)
         pthread_mutex_unlock(&core_lock);
     } else if (!strcmp(l, "dropin answer")) {
         dropin_answer();                                          /* a ringing call only: never ends one answered meanwhile */
-    } else if (!strcmp(l, "dropin hangup")) dropin_hangup("the screen");
+        if (sip_running()) sip_answer();                          /* or a phone call: the screen shows both alike */
+    } else if (!strcmp(l, "dropin hangup")) { dropin_hangup("the screen"); if (sip_running()) sip_hangup("the screen"); }
     else if (!strcmp(l, "timer stop")) { pthread_mutex_lock(&core_lock); core_alarm_stop("the screen"); pthread_mutex_unlock(&core_lock); }
     else if (!strcmp(l, "words clear")) screen_words(SCREEN_WORDS_RUN, NULL);   /* tapped away on the screen */
     else if (!strncmp(l, "timers hide ", 12)) { atomic_store(&hide_req, (unsigned)strtoul(l + 12, NULL, 10) + 1); screen_timers_changed(); }
@@ -690,6 +692,7 @@ static void read_core(int slow)
     if (nhidden >= 0 && (nhidden != now_s.nrun || memcmp(hidden, now_s.run, sizeof hidden))) nhidden = -1;
     atomic_store(&keep_on, show && (names[0] || (active && nhidden < 0)));
     if (!dropin_running() || dropin_status(peer, sizeof peer) == DROPIN_IDLE) peer[0] = 0;   /* a call over: no peer */
+    if (!peer[0] && sip_running() && sip_status(peer, sizeof peer) == PHONE_IDLE) peer[0] = 0;   /* a phone call's: who */
     clean(now_s.peer, sizeof now_s.peer, peer);
     if (slow) {                                                   /* every 10 s: what changes rarely */
         now_s.kiosk = kiosk_installed();

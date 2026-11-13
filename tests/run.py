@@ -50,6 +50,7 @@ TESTS = [
     ("improv", [PY, "tests/fake_improv.py"]),
     ("bt-proxy", [PY, "tests/fake_ha_bt_proxy.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
+    ("phone", [PY, "tests/fake_sip.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
     ("web", [PY, "tests/fake_web.py"]),
