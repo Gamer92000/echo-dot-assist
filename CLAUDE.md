@@ -74,6 +74,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
+.venv/bin/python tests/fake_talk_duplex.py    # -D over Wyoming (a realtime client with its own barge-in): the mic through
+                                             # a reply, a wake word then left to the client, the button still cuts it,
+                                             # -D under ESPHome ignored
 .venv/bin/python tests/fake_ma_sendspin.py [--legacy]  # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1, Sendspin 1.0;
                                              # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
                                              # strict: a deviation MA would only log fails; the output's clock

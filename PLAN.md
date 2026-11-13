@@ -3801,4 +3801,7 @@ Run in this order. Each step says what it proves.
       2026.11.12.014742+8dd9dfe over three sessions: microphone RMS while the Echo spoke median 0.004-0.005, p95
       0.011-0.032, peaks 0.07-0.33 (barge-in), 94-99 % of chunks gated; no loop since, and barge-in by voice still cuts
       the reply.  Tests: `tests/fake_talk_duplex.py` (host build, both modes: the stream during a reply, the mid-reply
-      wake word, the run ending at audio-stop).  Open: the action button during a reply, ESPHome (`-D` is Wyoming only).
+      wake word, the run ending at audio-stop; the action button still cuts the reply and a new run begins; `-D` under
+      ESPHome is ignored with a log line).  The front end's listening flag stays set through the reply (the stream
+      never stopped), so its cancellers do not adapt while it plays: what the radar figures above were taken with;
+      `listening(0)` for the reply, as `-w remote` has it, not tried.  Open: ESPHome (`-D` is Wyoming only).

@@ -1262,15 +1262,17 @@ static void trigger(int touch, uint64_t from)
         if (touch) wake_phrase[0] = 0;                          /* the button: the first wake word's assistant */
         sound_request(touch ? SND_TOUCH : SND_WAKE);
         pipeline_start(touch ? 0 : from);
-    } else if (state == SPEAKING && core_duplex) {
-        /* the client has the microphone through the reply and cuts it itself: what follows the wake word is speech to it */
-        fprintf(stderr, "wake word during the reply: left to the client (-D)\n");
     } else if (state == SPEAKING && !touch && stopped_now()) {
         /* its "stop" came during the round to a THINKING run whose reply began before the round ended: the reply is
          * cut as stop_word would have cut it, and no run follows */
         fprintf(stderr, "stop: came during the round, reply cut\n");
         barge_in = 0;
         atomic_store(&flush_playback, 1);
+    } else if (state == SPEAKING && core_duplex && !touch) {
+        /* the client has the microphone through the reply and cuts it itself: what follows the wake word is speech to it.
+         * Not the button: it cuts the reply as without -D (barge-in below).  After the stop branch: a "stop" in the
+         * round cuts the reply under -D too, as stop_word does */
+        fprintf(stderr, "wake word during the reply: left to the client (-D)\n");
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
@@ -2175,7 +2177,10 @@ static void *playback_thread(void *arg)
 
 void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
-    if (!wake_wait && !core_duplex) { atomic_store(&streaming, 0); mic_stopped(); }     /* wake_wait: a chime and then the message */
+    /* wake_wait: a chime and then the message.  -D: the stream stays open, and with it the front end's listening flag
+     * (listening(1) of pipeline_start): its cancellers do not adapt during the reply.  As measured on radar (PLAN.md);
+     * listening(0) for the reply, as -w remote has it, not tried */
+    if (!wake_wait && !core_duplex) { atomic_store(&streaming, 0); mic_stopped(); }
     if (state != SPEAKING) speak_media = media;
     core_set_state(SPEAKING);
     q_push(Q_START, media, rate, channels, NULL, 0);
@@ -3529,6 +3534,12 @@ int main(int argc, char **argv)
         case 'D': core_duplex = 1; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
         default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S] [-D]\n"); return 2;
+    }
+    if (core_duplex && proto != &proto_wyoming) {
+        /* ESPHome: Home Assistant's run has finished listening once its reply plays, and the open stream would keep
+         * wake_listen (-w remote) from starting the run that lets the wake word cut the reply */
+        fprintf(stderr, "-D: Wyoming only, ignored\n");
+        core_duplex = 0;
     }
     core_port = port ? port : proto->port;
     if (!core_name) name_make();
