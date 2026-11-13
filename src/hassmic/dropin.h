@@ -28,11 +28,6 @@ int  dropin_button(void);                       /* the action button: answers a 
 int  dropin_answer(void);                       /* the screen's Answer: a ringing call only (one answered meanwhile stays) */
 int  dropin_status(char *peer, size_t cap);     /* DROPIN_*; peer: the other Echo's node ("" when idle) */
 int  dropin_last(unsigned *attempt);            /* the last call's DROPIN_R_* (-1: none yet); attempt counts calls made */
-/* The capture thread: 16 kHz mono micAsr as it comes, while a call runs (muted: zeros).  own: the Echo plays a sound or
- * a reply of its own: ducked like the far end's voice */
-void dropin_mic(const int16_t *pcm, size_t n, int own);
-float dropin_far_level(void);                   /* the loudest of the far end that can be in the mic now, dBFS (-100: none) */
-int  dropin_far_talking(void);                  /* the other side's voice plays here now (or did, ECHO_MS ago) */
 /* arb's hook: a member's message (arb.h) */
 void dropin_message(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n);
 #endif
