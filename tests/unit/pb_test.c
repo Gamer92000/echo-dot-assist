@@ -24,16 +24,16 @@ int main(void)
     unsigned char buf[64]; struct pb b; struct pbf f; char what[96];
     static const uint64_t vs[] = { 1, 127, 128, 16383, 16384, 1ull << 35, (1ull << 63) - 1, 1ull << 63, UINT64_MAX };
     for (size_t i = 0; i < sizeof vs / sizeof vs[0]; i++) {
-        b = (struct pb){ buf, 0, sizeof buf }; pb_uint(&b, 100000, vs[i]);
+        b = (struct pb){ buf, 0, sizeof buf, 0 }; pb_uint(&b, 100000, vs[i]);
         snprintf(what, sizeof what, "field 100000 = %llu (%zu bytes): read back", (unsigned long long)vs[i], b.n);
         check(first(buf, b.n, &f) && f.field == 100000 && f.wire == 0 && f.v == vs[i], what);
     }
     check(b.n == 3 + 10, "the largest varint takes 10 bytes");
-    b = (struct pb){ buf, 0, sizeof buf }; pb_str(&b, 7, "abc");
+    b = (struct pb){ buf, 0, sizeof buf, 0 }; pb_str(&b, 7, "abc");
     check(first(buf, b.n, &f) && f.field == 7 && f.wire == 2 && f.len == 3 && !memcmp(f.data, "abc", 3), "bytes: read back");
-    b = (struct pb){ buf, 0, sizeof buf }; pb_float(&b, 5, 0.25f);
+    b = (struct pb){ buf, 0, sizeof buf, 0 }; pb_float(&b, 5, 0.25f);
     { uint32_t u; float x = 0.25f; memcpy(&u, &x, 4); check(first(buf, b.n, &f) && f.field == 5 && f.wire == 5 && f.v == u, "fixed32: read back"); }
-    b = (struct pb){ buf, 0, sizeof buf }; pb_sint(&b, 2, -3);
+    b = (struct pb){ buf, 0, sizeof buf, 0 }; pb_sint(&b, 2, -3);
     check(first(buf, b.n, &f) && f.field == 2 && f.v == 5, "zigzag -3: 5");
     static const unsigned char fixed64[] = { 0x09, 1, 2, 3, 4, 5, 6, 7, 8 };
     check(first(fixed64, sizeof fixed64, &f) && f.field == 1 && f.wire == 1, "fixed64: skipped whole");
@@ -60,13 +60,25 @@ int main(void)
     check(!first(field_past, sizeof field_past, &f), "field 2^29: malformed");
     check(!first(field_wrap, sizeof field_wrap, &f), "field 2^32 + 1 (would wrap onto 1): malformed");
     check(!first(field0, sizeof field0, &f), "field 0: malformed");
-    free(held);
+    free(held); held = NULL;
     /* a message bigger than its buffer: marked, so it is never sent cut (proto_esphome.c send_to) */
     unsigned char small[8]; struct pb sb = { small, 0, sizeof small, 0 };
     pb_str(&sb, 9, "Music beat spin");
     check(sb.over && sb.n <= sizeof small, "a string past the buffer: the message marked as not whole");
     sb = (struct pb){ small, 0, sizeof small, 0 }; pb_str(&sb, 9, "Fire");
     check(!sb.over && sb.n == 6, "one that fits: whole");
+    /* a message inside another: the inner one cut makes the outer one not whole (an argument's own buffer) */
+    unsigned char ob[64]; struct pb outer = { ob, 0, sizeof ob, 0 };
+    sb = (struct pb){ small, 0, sizeof small, 0 }; pb_str(&sb, 1, "brightness");
+    pb_msg(&outer, 3, &sb);
+    check(outer.over, "an inner message cut: the outer one marked too");
+    outer = (struct pb){ ob, 0, sizeof ob, 0 }; sb = (struct pb){ small, 0, sizeof small, 0 }; pb_str(&sb, 1, "abc");
+    pb_msg(&outer, 3, &sb);
+    check(!outer.over && first(ob, outer.n, &f) && f.field == 3 && f.len == 5, "an inner message whole: embedded");
+    free(held); held = NULL;
+    /* pb_fits: room for a field whole, tag and length included */
+    outer = (struct pb){ ob, 0, sizeof ob, 0 };
+    check(pb_fits(&outer, 3, 40) && !pb_fits(&outer, 3, 50), "pb_fits: 40 bytes in 64, not 50");
     printf("%s\n", fails ? "pb: FAILED" : "pb: ok");
     return fails != 0;
 }

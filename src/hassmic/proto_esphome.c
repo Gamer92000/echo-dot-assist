@@ -581,7 +581,7 @@ static void send_light_entities(void)
     /* LED by LED: esphome.<node>_light_ring_leds with colors ["#ff0000", "", ...] from the fill's start on; the light's
      * own colour or effect from Home Assistant takes the ring back to one colour */
     if (listed(KEY_RING_LEDS)) { PB(b, 256); PB(a, 48); pb_str(&b, 1, "light_ring_leds"); pb_fixed32(&b, 2, KEY_RING_LEDS);
-      pb_str(&a, 1, "colors"); pb_uint(&a, 2, 7); pb_bytes(&b, 3, a.p, a.n);
+      pb_str(&a, 1, "colors"); pb_uint(&a, 2, 7); pb_msg(&b, 3, &a);
       pb_str(&b, 5, "The light ring LED by LED: \"#rrggbb\" each, \"\" for dark, from where its fill starts"); send_msg(LIST_SERVICE, &b); }
     /* The ring live (ringlive.h, feature "Light ring live"): a light per LED, counted from where the fill starts, and
      * actions for a whole frame, an animation, a design of the library by name, and stop; the library as a select */
@@ -604,7 +604,7 @@ static void send_light_entities(void)
         };
         for (size_t k = 0; k < sizeof svc / sizeof svc[0]; k++) {
             PB(b, 512); pb_str(&b, 1, svc[k].id); pb_fixed32(&b, 2, svc[k].key);
-            for (int a = 0; a < 3 && svc[k].args[a]; a++) { PB(arg, 48); pb_str(&arg, 1, svc[k].args[a]); pb_uint(&arg, 2, svc[k].types[a]); pb_bytes(&b, 3, arg.p, arg.n); }
+            for (int a = 0; a < 3 && svc[k].args[a]; a++) { PB(arg, 64); pb_str(&arg, 1, svc[k].args[a]); pb_uint(&arg, 2, svc[k].types[a]); pb_msg(&b, 3, &arg); }
             pb_str(&b, 5, svc[k].what); send_msg(LIST_SERVICE, &b);
         }
     }
@@ -736,8 +736,8 @@ static void send_setting_entities(void)
         /* the action other Echos hand their network key through: Home Assistant registers it as
          * esphome.<node>_arbitration_key, after the node name we report, whatever the device is called there */
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "arbitration_key"); pb_fixed32(&b, 2, KEY_ARB_SERVICE);
-          pb_str(&a, 1, "network"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
-          a.n = 0; pb_str(&a, 1, "key"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&a, 1, "network"); pb_uint(&a, 2, 3); pb_msg(&b, 3, &a);
+          a.n = 0; a.over = 0; pb_str(&a, 1, "key"); pb_uint(&a, 2, 3); pb_msg(&b, 3, &a);
           pb_str(&b, 5, "Used by other Echos (wake word arbitration), not by people"); send_msg(LIST_SERVICE, &b); }
     }
     if (listed(KEY_ARB_PEERS)) {
@@ -789,7 +789,7 @@ static void send_setting_entities(void)
     /* Drop In (dropin.c): "Drop In with" first, so a trigger on "Drop In" finds it set */
     if (listed(KEY_DROPIN_SERVICE)) {
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "drop_in"); pb_fixed32(&b, 2, KEY_DROPIN_SERVICE);
-          pb_str(&a, 1, "target"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&a, 1, "target"); pb_uint(&a, 2, 3); pb_msg(&b, 3, &a);
           pb_str(&b, 5, "Drop in on another Echo: its name (\"Echo Dot 3 5695c4\", as the device was first named) or node"); send_msg(LIST_SERVICE, &b); }
         { PB(b, 128); pb_str(&b, 1, "drop_in_with"); pb_fixed32(&b, 2, KEY_DROPIN_PEER); pb_str(&b, 3, "Drop In with");
           pb_str(&b, 5, "mdi:account-voice"); send_msg(LIST_TEXT_SENSOR, &b); }
@@ -1222,7 +1222,7 @@ static void send_slots(int to_asker)    /* lock held */
 {
     PB(b, 64); uint64_t a[BLE_MAX_CONN]; int n = ble_connections(a);
     pb_uint(&b, 1, BLE_MAX_CONN - n); pb_uint(&b, 2, BLE_MAX_CONN);
-    if (n) { PB(al, 40); for (int i = 0; i < n; i++) pb_varint(&al, a[i]); pb_bytes(&b, 3, al.p, al.n); }    /* packed */
+    if (n) { PB(al, 40); for (int i = 0; i < n; i++) pb_varint(&al, a[i]); pb_msg(&b, 3, &al); }    /* packed */
     if (to_asker) { send_msg(BLE_CONN_FREE, &b); return; }
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].ble_free) send_to(clients[i].fd, BLE_CONN_FREE, &b);
 }
@@ -1238,7 +1238,7 @@ static void ble_connection(uint64_t addr, int connected, unsigned mtu, int error
 
 static void pb_uuid(struct pb *b, int f, const uint64_t u[2])  /* repeated uint64, packed */
 {
-    PB(v, 20); pb_varint(&v, u[0]); pb_varint(&v, u[1]); pb_bytes(b, f, v.p, v.n);
+    PB(v, 20); pb_varint(&v, u[0]); pb_varint(&v, u[1]); pb_msg(b, f, &v);
 }
 
 /* one message per service, like ESPHome: a big database would not fit into one */
@@ -1249,18 +1249,22 @@ static void ble_db(uint64_t addr, const struct ble_db *db)
     for (int s = 0; s < db->nsvc; s++) {
         const struct ble_svc *sv = &db->svc[s]; struct pb m = { buf, 0, sizeof buf, 0 }, sm = { sb, 0, sizeof sb, 0 };
         pb_uuid(&sm, 1, sv->uuid); pb_uint(&sm, 2, sv->start);
+        int cut = 0;                    /* what does not fit is left out whole: a field cut off inside would make the
+                                         * message unreadable, and Home Assistant drops a link on that (pb.h) */
         for (int c = sv->first; c < sv->first + sv->n; c++) {
             const struct ble_chr *ch = &db->chr[c]; struct pb cm = { cb, 0, sizeof cb, 0 };
             pb_uuid(&cm, 1, ch->uuid); pb_uint(&cm, 2, ch->handle); pb_uint(&cm, 3, ch->props);
             for (int d = ch->first; d < ch->first + ch->n; d++) {
                 struct pb dm = { db_, 0, sizeof db_, 0 };
                 pb_uuid(&dm, 1, db->dsc[d].uuid); pb_uint(&dm, 2, db->dsc[d].handle);
-                pb_bytes(&cm, 4, dm.p, dm.n);
+                if (dm.over || !pb_fits(&cm, 4, dm.n)) { cut = 1; continue; }
+                pb_msg(&cm, 4, &dm);
             }
-            pb_bytes(&sm, 3, cm.p, cm.n);
+            if (cm.over || !pb_fits(&sm, 3, cm.n)) { cut = 1; continue; }
+            pb_msg(&sm, 3, &cm);
         }
-        if (sm.n >= sm.cap - 64) fprintf(stderr, "bluetooth: service %d of %012llx too big, truncated\n", s, (unsigned long long)addr);
-        pb_uint(&m, 1, addr); pb_bytes(&m, 2, sm.p, sm.n);
+        if (cut) fprintf(stderr, "bluetooth: service %d of %012llx too big, truncated\n", s, (unsigned long long)addr);
+        pb_uint(&m, 1, addr); pb_msg(&m, 2, &sm);
         send_gatt(BLE_SERVICES, &m);
     }
     { PB(b, 16); pb_uint(&b, 1, addr); send_gatt(BLE_SERVICES_DONE, &b); }
@@ -1314,9 +1318,9 @@ static void ble_adverts(const struct ble_adv *a, int n)
 {
     PB(b, BLE_BATCH * 64); PB(one, 64);
     for (int i = 0; i < n; i++) {
-        one.n = 0;
+        one.n = 0; one.over = 0;
         pb_uint(&one, 1, a[i].addr); pb_sint(&one, 2, a[i].rssi); pb_uint(&one, 3, a[i].addr_type); pb_bytes(&one, 4, a[i].data, a[i].len);
-        pb_bytes(&b, 1, one.p, one.n);
+        pb_msg(&b, 1, &one);
     }
     pthread_mutex_lock(&core_lock);
     send_ble(BLE_RAW_ADV, &b);
@@ -1354,7 +1358,7 @@ static const struct ble_handler ble_handler = {
 static void pb_map(struct pb *b, int f, const char *k, const char *v)      /* HomeassistantServiceMap */
 {
     PB(e, 400); pb_str(&e, 1, k); pb_str(&e, 2, v);
-    pb_bytes(b, f, e.p, e.n);
+    pb_msg(b, f, &e);
 }
 
 /* The satellite entity is ours by MAC: Home Assistant keys the device on it, entity ids can be renamed.  The name
@@ -1658,10 +1662,10 @@ static void send_device_info(void)
 static void send_device_caps(void)
 {
     PB(b, 160); PB(s, 80);
-    if (bt_proxy()) { pb_uint(&s, 1, BLE_FEATURES); pb_str(&s, 2, ble_mac()); pb_bytes(&b, 1, s.p, s.n); }
-    s.n = 0; pb_uint(&s, 1, VA_FEATURES); pb_bytes(&b, 2, s.p, s.n);
+    if (bt_proxy()) { pb_uint(&s, 1, BLE_FEATURES); pb_str(&s, 2, ble_mac()); pb_msg(&b, 1, &s); }
+    s.n = 0; s.over = 0; pb_uint(&s, 1, VA_FEATURES); pb_msg(&b, 2, &s);
     if (core_sendspin_port) {
-        s.n = 0; pb_uint(&s, 1, SS_FEAT_PAIRING_TOKEN); pb_str(&s, 2, sendspin_client_id()); pb_bytes(&b, 6, s.p, s.n);
+        s.n = 0; s.over = 0; pb_uint(&s, 1, SS_FEAT_PAIRING_TOKEN); pb_str(&s, 2, sendspin_client_id()); pb_msg(&b, 6, &s);
     }
     send_msg(DEVICE_CAPS_RESP, &b);
 }

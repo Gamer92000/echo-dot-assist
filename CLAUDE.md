@@ -279,7 +279,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages, API 1.15's device
   capabilities with Sendspin's client id and the pairing token (request and text sensor: keyed link only), so Music
   Assistant pairs through HA; its protobuf in `pb.h`,
-  header-only for `tests/unit/pb_test.c` under UBSan) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
+  header-only for `tests/unit/pb_test.c` under UBSan; a message that did not fit its buffer (`over`, carried out of
+  inner messages by `pb_msg`) is never sent: HA drops the link on a cut one and connects again, over and over) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
   core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
   earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen; cupcake, Echo Input: OpenSL ES over
