@@ -224,7 +224,8 @@ static int chgrp(const char *gid_s, const char *path)
 {
     char *end; unsigned long gid = strtoul(gid_s, &end, 10); struct stat st;
     if (!*gid_s || *end || !gid || gid > 0x7fffffffUL) { fprintf(stderr, "otatool: chgrp: %s is not a group number\n", gid_s); return 2; }
-    if (stat(path, &st) || !S_ISREG(st.st_mode)) { fprintf(stderr, "otatool: chgrp: %s: %s\n", path, errno ? strerror(errno) : "not a file"); return 1; }
+    if (stat(path, &st)) { fprintf(stderr, "otatool: chgrp: %s: %s\n", path, strerror(errno)); return 1; }
+    if (!S_ISREG(st.st_mode)) { fprintf(stderr, "otatool: chgrp: %s: not a file\n", path); return 1; }
     if (chown(path, (uid_t)-1, (gid_t)gid)) { fprintf(stderr, "otatool: chgrp %lu %s: %s\n", gid, path, strerror(errno)); return 1; }
     return 0;
 }
