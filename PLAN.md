@@ -2442,6 +2442,23 @@ Run in this order. Each step says what it proves.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
+- [~] Calls with Amazon's call microphone (2026-11-13, Echo Dot 3): a user's calls from a Dot 3 sounded dull and full of
+      the room next to a phone's, and worse than stock's Drop In had. micAsr is the ASR path (no NR, no AGC) under our
+      +20..+30 dB gain.  AFE.cfg (`/system/vendor/etc/audio-algorithms/`) has a "Voice" path beside "ASR": VOIP
+      MicPreProcess +6 dB, VAEC, Frequency Masking Lite RES, Recursive Magnitude Estimation NR, Random Filler CNG, FB AGC
+      (target -22 dBFS, +20 dB constant), VOIP Tx Parametric IIR = VOIPTxParametricEQ.cfg (+6 dB peak at 1.9 kHz, -3 dB
+      shelf over 3.5 kHz), Tx limiter; no beamformer.  Its output is **micHfp while a Voip stream is open** (logcat
+      "VoIP mode 1"); without one micHfp is the bare mic (the Drop In entry below saw that case).  micPstn is the bare
+      mic at 8 kHz.  One take on all four streams in call mode, listening mode on, a talker across a kitchen: speech /
+      pauses micRaw -52/-65 dBFS, micAsr -48/-65, micHfp -20/-43, micPstn -52/-65; micHfp 15 dB less over 4 kHz than
+      micAsr.  (An earlier reading of "muffled microphones" was a wrong reference: the bare mic at 30 cm has speech's
+      usual tilt; across the room the room takes 5-8 dB over 4 kHz.)  Calls now send micHfp (`call.c`
+      `callmic_thread`, setting `call_mic`), without micgain, the gate's duck -12 dB.  On the Dot 3 (a SIP call from a
+      phone, a branch with a SIP client on this code): "exactly as I recall" stock's, in G.711 and in Opus.  First try
+      refused the stream: its format getters answer -1.  `fake_ha_dropin.py` 7b: the hall's call microphone (a 700 Hz
+      tone, `HASSMIC_CALL_CAP`) arrives at its own level (-21.8 for -20), switching mid-call goes back to micAsr.
+      Open: Echo to Echo with micHfp on both ends, the -12 dB tuned on a trace, the Dot 2 and Echo 2, a call while
+      music plays.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
       invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock

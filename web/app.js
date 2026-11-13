@@ -406,6 +406,7 @@ const HELP = {
     warnings: () => [...STAY_WARN, ...STAY_TONE_WARN], before: (v) => v === 'on' ? stayDialog() : true },
   drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two of your Echos, as Alexa\'s Drop In. One Echo calls another (the ones on the Echos page), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo on the Echos page. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.',
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below.' },
+  call_mic: { parent: 'drop_in', help: 'What the other Echo hears from this one in a Drop In. Amazon\'s call processing: the microphones as Amazon\'s own calls sent them, with noise reduction, an even level and its echo canceller for calls; a cleaner, steadier voice, a little duller (little over 4 kHz). The assistant\'s: what speech to text gets, through the Echo\'s own gain; brighter, with more of the room. A call running keeps the one it started with, except that switching to the assistant\'s takes effect at once.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
@@ -485,6 +486,7 @@ const SUB = {
   bluetooth_speaker_stay_connected: 'Switching it on again is quick',
   drop_in: 'Talk between two of your Echos',
   drop_in_answer: 'How a call connects',
+  call_mic: 'What the other Echo hears',
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
@@ -494,6 +496,7 @@ const CHOICE_NAMES = {
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  call_mic: { call: 'Amazon\'s call processing', assistant: 'The assistant\'s' },
   music_on_screen: { off: 'Off', face: 'In place of the face', home: 'In place of the home app too' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },

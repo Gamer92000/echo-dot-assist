@@ -352,6 +352,12 @@ Calls are refused with do not disturb on, with the microphones off, or with anot
 Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
 Assistant in between.
 
+**Your side's sound.** On the Echo Dot 3, Dot 2 and Echo 2 a call sends what Amazon's own calls sent: the front end's
+call processing, with noise reduction, an even level and an echo canceller made for calls. It sounds natural and
+steady, a little duller than the assistant's stream (little over 4 kHz). "Call microphone" (Features, under Drop In)
+switches back to the assistant's stream, brighter and with more of the room. The Echo Shows and the Echo Input have
+only the assistant's.
+
 **Echo.** The Echo puts Amazon's audio front end into its call mode, whose echo canceller works on the other side's
 voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
 talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the

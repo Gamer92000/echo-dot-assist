@@ -29,6 +29,10 @@ _rng = np.random.default_rng(1)
 _x = _rng.standard_normal(16000 * 7) * 32768 * 10 ** (-74 / 20)
 for _i in range(0, len(_x), 11200): _x[_i:_i + 2400] *= 10 ** (10 / 20)
 _x.astype("<i2").tofile(QUIET)
+# the call pipeline's microphone (audio_file.c HASSMIC_CALL_CAP, the Dots' micHfp in call mode): a 700 Hz tone at
+# -20 dBFS, as Amazon's AGC leaves a talker; the hall has it, switched off until section 7b
+CALL_CAP = os.path.join(EARCONS, "callmic.raw")
+(32768 * 10 ** (-20 / 20) * np.sqrt(2) * np.sin(2 * np.pi * 700 * np.arange(32000) / 16000)).astype("<i2").tofile(CALL_CAP)
 
 
 def check(cond, what):
@@ -38,7 +42,7 @@ check.failed = False
 
 
 class Echo:
-    def __init__(self, name, port, net=None, speech=False, config="", cap=None):
+    def __init__(self, name, port, net=None, speech=False, config="", cap=None, call_cap=None):
         self.name, self.port, self.state = name, port, tempfile.mkdtemp()
         self.web, self.audio = port + 10, port + 20
         self.node = re.sub(r"[^a-z0-9]", "-", name.lower())
@@ -57,6 +61,7 @@ class Echo:
                         HASSMIC_DROPIN_TIMES="3000 4000")       # no answer after 3 s, lost after 4 s without audio (4 and 5): near
                                                                 # the Echo's, so a stall of the PC under load does not end a call
         if speech or cap: self.env["HASSMIC_CAP"] = cap or SPEECH
+        if call_cap: self.env["HASSMIC_CALL_CAP"] = call_cap
         self.trace = os.path.join(self.state, "dropin.trace")
         self.env["HASSMIC_DROPIN_TRACE"] = self.trace
         self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
@@ -140,8 +145,8 @@ async def main():
     net = f"{int.from_bytes(os.urandom(8), 'little') | 1:016x} " + base64.b64encode(os.urandom(32)).decode()
     # the hall with separate volumes, sounds at 20 under the music's 40 (its ringtone is one of its sounds), calls at
     # their own 40
-    a, b = Echo("Kitchen Echo", 26180, net, speech=True), Echo("Hall Echo", 26181, net,
-                                                               config="separate_volumes=on\nsounds_volume=20\ncall_volume_linked=off\ncall_volume=40\n")
+    a, b = Echo("Kitchen Echo", 26180, net, speech=True), Echo("Hall Echo", 26181, net, call_cap=CALL_CAP,
+                                                               config="separate_volumes=on\nsounds_volume=20\ncall_volume_linked=off\ncall_volume=40\ncall_mic=assistant\n")
     c = Echo("Garage Echo", 26182)                      # outside the network: it hears the two, but nobody lets it in
     d = Echo("Bedroom Echo", 26183, net, cap=QUIET)     # an empty room
     for e in (a, b, c, d): e.start()                       # (it runs from the start: time to join, if it wrongly could)
@@ -298,6 +303,29 @@ async def main():
         loud = [r for r in rows if float(r[1]) > -70]
         check(len(loud) > 20 and not any(r[5] == "1" for r in rows),
               f"the bedroom's sounds ({len(loud)} frames over -70 dBFS) never count as someone talking there")
+        a.press("end_drop_in")
+        check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
+        await asyncio.sleep(0.3)
+
+        # 7b. the call pipeline's microphone (call_mic, the Dots' micHfp): the hall sends it as it comes, without the
+        # assistant's gain; back to the assistant's (its silence) on the page, at once, in the same call
+        r = b.page.set(call_mic="call"); check(r.get("applied") == 1, f"the hall: call_mic=call on the page ({r})")
+        await a.call(b.node)
+        check(await until(lambda: a.dropin()[0] == "connected", 3), "connected")
+        check(await until(lambda: "call: the call pipeline's microphone (micHfp)" in b.text(), 3), "  the hall's log: the call pipeline's microphone")
+        # the kitchen's speech muted (its mic sends zeros, the call goes on): while the far end talks, the hall's echo
+        # gate ducks it, as it should, and the level measured would depend on where the speech file is
+        a.cli.switch_command(a.by["mute"].key, True)
+        await asyncio.sleep(3.5)
+        x = np.fromfile(a.voip, np.int16).astype(float)[-16000 * 2:]
+        t = np.arange(len(x)) / 16000; tdb = 20 * np.log10(abs((x * np.exp(-2j * np.pi * 700 * t)).sum()) * 2 / len(x) / np.sqrt(2) / 32768 + 1e-12)
+        check(-30 < tdb < -14 and tdb > level(a.voip, 2) - 1, f"  the kitchen plays the hall's 700 Hz at its own level ({tdb:.1f} dB of {level(a.voip, 2):.1f} dBFS; -20 sent)")
+        b.page.set(call_mic="assistant")
+        check(await until(lambda: "call: switched to the assistant's: the assistant's microphone for the rest of this call" in b.text(), 2),
+              "  call_mic=assistant mid-call: the assistant's microphone from then on")
+        await asyncio.sleep(2.5)
+        check(level(a.voip, 1) < -60, f"  the kitchen plays the hall's silence again ({level(a.voip, 1):.1f} dBFS)")
+        a.cli.switch_command(a.by["mute"].key, False)
         a.press("end_drop_in")
         check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
         await asyncio.sleep(0.3)

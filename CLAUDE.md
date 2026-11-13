@@ -379,7 +379,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
   `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
   unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream
-  (front end's call mode); mic = micAsr through the pipeline's gain, then a gate (open only while this side talks:
+  (front end's call mode); mic = micHfp where the backend has it (Call audio, below), else micAsr through the pipeline's gain, then a gate (open only while this side talks:
   9 dB over the room and over -58 dBFS, `NEAR_MIN_DB`, or an empty room's noise goes out with the speech gain; echo
   estimate peak-held against the far end's level held after it stops), listening mode only while this side talks
   (`core_dropin_listen`); the far end talks when it plays over -55 dBFS and 25 dB over its own floor (`far_voice`). Core side in `main.c` (`core_dropin`: call LED animations, comms sounds, ringtones via
@@ -396,6 +396,17 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `automation.trigger`, since ServiceNotFound would end the conversation's run with "Done"; the reply from "Drop In
   result" where the Echo has it, else from the timing of the "Drop In" sensor). Keep the entities' states, event
   types, icons and the action's name stable: released blueprints rely on them; a new result is a new event type.
+- **Call audio** (`call.c`, `call.h`): Drop In's audio moved out of `dropin.c` unchanged: the mic gate, echo
+  suppressor and gain (`call_mic` from the capture thread, the owner's `send` per encoded 20 ms frame), the jitter
+  buffer and playout on the Voip stream (`call_rx`, its thread), Opus 16 kHz; `call_begin`/`call_end` the media's
+  generation. Lock order: `dl` before call.c's `ml`.
+  Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`): on the Dots' mixer
+  `micHfp` is Amazon's "Voice" pipeline (AFE.cfg: VAEC, RES, NR, CNG, AGC -22 dBFS, Tx EQ, limiter; no beamformer)
+  once the front end is in call mode (a Voip stream open), the bare mic otherwise. `callmic_thread` opens it after the
+  playout has the Voip stream (`voip_gen`), sends it without micgain and with the gate's duck at -12 dB
+  (`SUPPRESS_HFP_DB`, `NEAR_MIN_HFP_DB`), `call_mic` (micAsr) stands aside (`src_hfp`); no stream or 3 empty reads:
+  micAsr for the rest of the call. Record streams' format getters answer -1 (mixcap.c): never refuse on that.
+  `audio_file.c`: `HASSMIC_CALL_CAP` (tests: the hall's 700 Hz tone in `fake_ha_dropin.py`); Android: none.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs

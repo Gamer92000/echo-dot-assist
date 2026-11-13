@@ -4,6 +4,14 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-13
 
+- **Drop In sounds as Alexa's did: the microphone of Amazon's own calls (Echo Dot 3, Dot 2, Echo 2).** A call sent the
+  stream made for speech to text, turned up by the Echo: dull, with much of the room in it. It now sends what Amazon's
+  front end makes for calls: its own noise reduction, an even level and its echo canceller for calls (measured on a
+  Dot 3: the voice 22 dB over the room, against 17 dB before and 13 dB for the bare microphone). It is a little duller
+  (little over 4 kHz) and much steadier. New setting "Call microphone" (Features, under Drop In): Amazon's call
+  processing (default) or the assistant's stream as before. The Echo Shows and the Echo Input keep the assistant's:
+  their audio has no call stream.
+
 - **Duplex for a realtime agent (`-D`, Wyoming).** With `-D` in `ARGS` the microphone keeps streaming while a reply
   plays, and a wake word during the reply is left to the client: for a client that cuts replies itself, such as
   hermes-talk's Echo surface (`hermes talk echo`), which talks with a realtime voice model straight from the Echo.

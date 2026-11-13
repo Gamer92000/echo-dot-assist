@@ -56,6 +56,16 @@ int  audio_a2dp_aipc(void);
  * than the TTS stream gets (2026-10-08, biscuit: the same speech at -48 dBFS in micRaw left -60..-66 dBFS in micAsr on
  * Voip, -45..-58 on TTS, over a -72 floor).  Like the music stream otherwise; voip_queued_us is what has not played. */
 int       voip_open(unsigned rate, unsigned channels);
+/* A call's own microphone (call.c): on the Dots the mixer's micHfp, which carries Amazon's "Voice" pipeline while the
+ * front end is in call mode (a Voip stream open; AFE.cfg: VoIP echo canceller, residual echo suppressor, noise
+ * reduction, comfort noise, AGC to -22 dBFS, a presence EQ, a limiter; no beamformer) and the bare mic otherwise
+ * (2026-11-13, donut: speech -20 dBFS against -43 in its pauses, where micAsr had -48 and -65; little left over 4 kHz).
+ * 16 kHz mono s16 in 50 ms blocks.  callmic_present: the backend has one (Android's HAL has no such stream: 0).
+ * callmic_read: bytes, 0 nothing yet, -1 the stream is gone */
+int       callmic_present(void);
+int       callmic_open(void);
+int       callmic_read(const void **data);
+void      callmic_close(void);
 int       voip_write(const void *data, size_t len);
 long long voip_queued_us(void);
 void      voip_close(void);

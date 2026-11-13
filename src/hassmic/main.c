@@ -52,6 +52,7 @@
 #include "screen.h"
 #include "davs.h"
 #include "dropin.h"
+#include "call.h"
 #include "duck.h"
 #include "ringstop.h"
 #include "micdenoise.h"
@@ -1989,7 +1990,7 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
 static void on_near_miss(int slot, const char *keyword)
 {
     if (!core_local_wake || !strcasecmp(keyword, "STOP") || (wake_keyword[slot][0] && strcasecmp(keyword, wake_keyword[slot]))) return;
-    if (atomic_load(&dropin_live) && dropin_far_talking()) return;
+    if (atomic_load(&dropin_live) && call_far_talking()) return;
     wake_tell("near_miss");
 }
 
@@ -2034,8 +2035,8 @@ static void on_wake(int slot, const char *keyword, uint64_t begin, uint64_t end)
     }
     /* In a Drop In the other side's voice plays here, and what the echo canceller leaves of its "Alexa" (meant for the
      * Echo over there) can be enough for ours.  While it talks, the wake word is left to that Echo */
-    if (atomic_load(&dropin_live) && dropin_far_talking()) {
-        fprintf(stderr, "wake: %s while the other side of the Drop In talks (%.1f dBFS here), ignored\n", keyword, dropin_far_level());
+    if (atomic_load(&dropin_live) && call_far_talking()) {
+        fprintf(stderr, "wake: %s while the other side of the Drop In talks (%.1f dBFS here), ignored\n", keyword, call_far_level());
         return;
     }
     /* "stop" comes from the decoder that heard its wake word just before; another one on the same model set (one
@@ -3364,6 +3365,13 @@ static void wake_load(void)
     pthread_mutex_lock(&core_lock); wake_loaded_set(); pthread_mutex_unlock(&core_lock);
 }
 
+/* Our own sounds and replies play, or are still in the mic stream: not for a call's other side (call.c ducks them) */
+int core_own_sound(void)
+{
+    return atomic_load(&earcon_sounding) || atomic_load(&sounds_pending) || mono_ms() < atomic_load(&earcon_heard_until)
+           || atomic_load(&tts_on);
+}
+
 static void *capture_thread(void *arg)
 {
     FILE *dump = NULL;
@@ -3434,10 +3442,9 @@ static void *capture_thread(void *arg)
         }
         if (atomic_load(&dropin_live)) {               /* a Drop In: the call gets the mic as the pipeline does; muted, silence */
             static int16_t zeros[1024];
-            int own = atomic_load(&earcon_sounding) || atomic_load(&sounds_pending) || mono_ms() < atomic_load(&earcon_heard_until)
-                      || atomic_load(&tts_on);       /* our own sounds and replies: not for the other side */
-            if (!core_muted()) dropin_mic(pcm, n / 2, own);
-            else for (size_t k = n / 2; k; ) { size_t m = k < 1024 ? k : 1024; dropin_mic(zeros, m, 0); k -= m; }
+            int own = core_own_sound();             /* our own sounds and replies: not for the other side */
+            if (!core_muted()) call_mic(pcm, n / 2, own);
+            else for (size_t k = n / 2; k; ) { size_t m = k < 1024 ? k : 1024; call_mic(zeros, m, 0); k -= m; }
         }
         if (atomic_load(&streaming)) {
             align_ahead();                              /* outside the lock: it takes up to ~0.1 s on an Echo */

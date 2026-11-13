@@ -583,6 +583,12 @@ long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip, 0); }
 
+/* No call stream of its own: the audio HAL's front end gives one input (call.c keeps the assistant's) */
+int  callmic_present(void) { return 0; }
+int  callmic_open(void) { return -1; }
+int  callmic_read(const void **data) { (void)data; return -1; }
+void callmic_close(void) {}
+
 /* On the music stream with everything else of ours (the volume above).  go() says how long the sound is wanted: a
  * ringing timer ends when someone stops it, so what is left of the queue is dropped then, not drained.  Written a
  * slot at a time with go() asked in between, as audio_mixer.c does per buffer: s_write blocks while the queue is
