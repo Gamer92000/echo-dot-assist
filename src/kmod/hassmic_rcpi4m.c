@@ -32,7 +32,12 @@
  * fixmap where module text is read-only).  32-bit ARM: patch_text (built for KGDB on checkers, not exported), which
  * writes under stop_machine and flushes the caches; module text is writable there (no DEBUG_SET_MODULE_RONX), and
  * modules sit within a bl's 32 MB of each other.  hm_rx() reads through probe_kernel_read: a field that is not where
- * expected gives no reading, not an oops.  No module_exit, as hassmic_rcpi.c: a thread may sit in hm_fill.  Layout from
+ * expected gives no reading, not an oops.  No module_exit, as hassmic_rcpi.c: a thread may sit in hm_fill.
+ * The driver is a module and Android unloads and loads it again whenever Wi-Fi goes off and on (Amazon's NetWatchDog
+ * did that every few minutes on an Echo Show 5 until it was told not to; the page's Wi-Fi switch, Improv): the
+ * patched text goes with it and the new copy is unpatched, so the frame counter froze for good (seen 2026-11-13:
+ * AGE 37 h, the driver newer than this module in /proc/modules).  A module notifier hooks the driver again each time
+ * it comes back (MODULE_STATE_LIVE: its init has run, its symbols are listed); GOING only says so.  Layout from
  * the driver in each NS65741 image (PLAN.md, docs/re-checkers.md); module parameters for another build (device.conf
  * KMOD_ARGS).  Built against kernel.org's sources of each kernel with its config (donut: devices/donut/kconfig on
  * arm64's defconfig, AOSP's aarch64-linux-android-4.9; checkers: its own IKCONFIG, AOSP's arm-eabi-4.8, as Amazon's
@@ -74,6 +79,8 @@ module_param(rate_mask, uint, 0444);
 static atomic_t last = ATOMIC_INIT(-1), frames = ATOMIC_INIT(0);    /* last: RCPI | kind << 8, one frame's pair */
 static unsigned long last_jiffies;
 static u8 (*fill)(void *adapter, void *rfb);    /* BOOLEAN nicRxFillRFB(): the caller tests w0 & 0xff */
+static char drv_name[MODULE_NAME_LEN];          /* the module hook_sym is in: hooked again when it is loaded again */
+static int hooked;                               /* the driver loaded now carries the hook */
 
 static void hm_rx(void *rfb)
 {
@@ -96,8 +103,8 @@ static int show(struct seq_file *m, void *v)
 {
     int r = atomic_read(&last);
     if (r < 0) { seq_puts(m, "ERROR = no frame yet\n"); return 0; }
-    seq_printf(m, "RCPI RX0 = %d\nAGE = %u\nFRAMES = %d\nKIND = %x\n", r & 0xff, jiffies_to_msecs(jiffies - ACCESS_ONCE(last_jiffies)),
-               atomic_read(&frames), r >> 8);
+    seq_printf(m, "RCPI RX0 = %d\nAGE = %u\nFRAMES = %d\nKIND = %x\nHOOKED = %d\n", r & 0xff, jiffies_to_msecs(jiffies - ACCESS_ONCE(last_jiffies)),
+               atomic_read(&frames), r >> 8, ACCESS_ONCE(hooked));
     return 0;
 }
 
@@ -163,10 +170,13 @@ static int patch(void *patcher, void *addr, u32 insn)
 }
 #endif
 
-static int __init init_fn(void)
+/* Finds the call in the driver loaded now and patches it.  Process context, the driver live (its init done), nothing
+ * else of ours running in it */
+static int hook(void)
 {
     unsigned long caller = kallsyms_lookup_name(hook_sym), target = kallsyms_lookup_name(fill_sym), site = 0;
     void *patcher = (void *)kallsyms_lookup_name(PATCHER);
+    struct module *drv;
     u32 insn; uint i, n = 0;
     if (!caller || !target || (!patcher && !IS_ENABLED(CONFIG_ARM))) {
         pr_err("hassmic_rcpi4m: %s, %s or %s not in this kernel (Wi-Fi driver loaded?)\n", hook_sym, fill_sym, PATCHER);
@@ -178,12 +188,36 @@ static int __init init_fn(void)
     }
     if (n != 1) { pr_err("hassmic_rcpi4m: %u calls to %s in %s's first %u instructions, not 1: not patched\n", n, fill_sym, hook_sym, scan_max); return -EINVAL; }
     if (make_bl(site, (unsigned long)hm_fill, &insn)) { pr_err("hassmic_rcpi4m: hook out of branch range\n"); return -ERANGE; }
-    if (!proc_create("hassmic_rcpi4m", 0444, NULL, &fops)) return -ENOMEM;
+    preempt_disable();
+    drv = __module_text_address(caller);
+    if (drv) strlcpy(drv_name, drv->name, sizeof drv_name);
+    preempt_enable();
     fill = (void *)target;
-    if (patch(patcher, (void *)site, insn)) {                   /* bl hm_fill */
-        remove_proc_entry("hassmic_rcpi4m", NULL); pr_err("hassmic_rcpi4m: patching failed\n"); return -EIO;
-    }
-    pr_info("hassmic_rcpi4m: %s+%#lx (call to %s) hooked, /proc/hassmic_rcpi4m\n", hook_sym, site - caller, fill_sym);
+    if (patch(patcher, (void *)site, insn)) { pr_err("hassmic_rcpi4m: patching failed\n"); return -EIO; }     /* bl hm_fill */
+    ACCESS_ONCE(hooked) = 1;
+    pr_info("hassmic_rcpi4m: %s+%#lx (call to %s) hooked%s%s, /proc/hassmic_rcpi4m\n", hook_sym, site - caller, fill_sym,
+            drv ? " in " : "", drv ? drv_name : "");
+    return 0;
+}
+
+/* The driver came back: hook its new copy.  Going: the hooked text goes with it (not unpatched: it is freed, and a CPU
+ * may be in it), and until it is back there are no frames; hassmic says so after a minute (wifimotion.c) */
+static int on_module(struct notifier_block *nb, unsigned long state, void *data)
+{
+    struct module *mod = data;
+    if (!drv_name[0] || strcmp(mod->name, drv_name)) return NOTIFY_OK;
+    if (state == MODULE_STATE_GOING) { ACCESS_ONCE(hooked) = 0; pr_info("hassmic_rcpi4m: %s unloading, no frames until it is back\n", drv_name); }
+    else if (state == MODULE_STATE_LIVE) { pr_info("hassmic_rcpi4m: %s loaded again, hooking it again\n", drv_name); hook(); }
+    return NOTIFY_OK;
+}
+static struct notifier_block module_nb = { .notifier_call = on_module };
+
+static int __init init_fn(void)
+{
+    int r;
+    if (!proc_create("hassmic_rcpi4m", 0444, NULL, &fops)) return -ENOMEM;
+    if ((r = hook())) { remove_proc_entry("hassmic_rcpi4m", NULL); return r; }
+    register_module_notifier(&module_nb);
     return 0;
 }
 

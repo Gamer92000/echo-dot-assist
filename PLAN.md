@@ -1913,6 +1913,18 @@ Run in this order. Each step says what it proves.
       `*Uspd.tflite` models, no ultrasound section in AFE.cfg. A `mixer` record stream `ultraSound` exists (reports
       2000 Hz x 9 ch x 32 bit) but the HAL refuses it (`Could not open input stream -22`), and **mixer retries every 10 ms
       for ever after the client has gone** (35 % CPU, logd 18 %) until `stop mixer; start mixer`: do not open it.
+- [x] Wi-Fi motion's hook lost with the driver (2026-11-13): an Echo Show 5 showed the sensor unknown for 37 h with
+      `hassmic_rcpi4m` loaded: `/proc/hassmic_rcpi4m` AGE 134762780 ms, FRAMES frozen at 75444, and `wlan_mt76x8_sdio`
+      newer than our module in `/proc/modules`: Android's Wi-Fi HAL rmmods and insmods the driver on every Wi-Fi off/on
+      (NetWatchDog's restarts before fix/wifi-bounce), the patched `bl` went with the old text, the new copy was
+      unpatched, and the module had no way back (permanent, no exit).  hassmic said nothing: a counter that does not
+      move is "no new frame" (`r == -2`), never a failure.  Now: the module keeps the driver's name
+      (`__module_text_address` of the hooked function) and a module notifier (`register_module_notifier`) runs the same
+      hook again at MODULE_STATE_LIVE of that name (init done, symbols listed), GOING only logs it; `HOOKED` in the proc
+      file.  hassmic: the counter unchanged for 60 s (`FROZEN_MS`; 3 s on the PC) logs why once and sets the sensor
+      unknown (`motion = -1`), and the first new frame resets the detector and the kind levels (a new link may sit at
+      another level).  Test: `fake_ha_esphome_features.py` (the module's lines with a counter, stuck, moving again).
+      Not yet seen on the Echo: a reboot is needed for the new module (the old one stays loaded).
 - [~] Wi-Fi motion, experimental (2026-10-01, `wifimotion.c`): the receive level of the Wi-Fi radio as a motion sensor.
       donut's driver (`wlan_mt76x8_sdio.ko`, MT7668, gen4m) has CSI commands: `SET_CSI <mode 0/1> <wf 0/1> <frame slot
       0-3> <frame type 0 = beacon>` (argc 2 or 5, band fixed 0, role 1; command 0x4c to the firmware, 8 bytes) and

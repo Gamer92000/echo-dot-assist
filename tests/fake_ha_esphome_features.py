@@ -78,6 +78,21 @@ async def main(e):
     rx_stat(112)
     await until(lambda: wstate().state is False, 10)
     check(wstate().state is False, "motion clears after the hold")
+    # the kernel module's readings carry a frame counter; stuck (Android reloaded the Wi-Fi driver under the hook), the
+    # sensor goes unknown after a while (3 s in the PC build, 60 s on the Echo) and comes back with the frames
+    frames = 100
+    def module(rcpi, step):
+        nonlocal frames; frames += step
+        open(e.env["HASSMIC_FAKE_WIFI"], "w").write(f"RCPI RX0 = {rcpi}\nAGE = 12\nFRAMES = {frames}\nKIND = 5\n")
+    for _ in range(12): module(112, 1); await asyncio.sleep(0.1)
+    check(wstate().state is False and not wstate().missing_state, "the module's readings, counted up: still")
+    module(112, 0)
+    await until(lambda: wstate().missing_state and "wifi motion: no frame from the access point for 3 s" in e.log(), 8)
+    check(wstate().missing_state and "wifi motion: no frame from the access point for 3 s" in e.log(), "the counter stuck: unknown, and the log says why")
+    for _ in range(12): module(112, 1); await asyncio.sleep(0.1)
+    await until(lambda: not wstate().missing_state and "wifi motion: frames again" in e.log(), 5)
+    check(not wstate().missing_state and wstate().state is False and "wifi motion: frames again" in e.log(), "frames again: a reading again, still")
+    rx_stat(112)
     c.number_command(wsn.key, 8)
     await until(lambda: last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8")
     check(last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8", "sensitivity set and kept")
@@ -85,4 +100,4 @@ async def main(e):
     c, cby, st3 = await relist(c)
     check("wifi_motion" not in cby and conf().get("wifi_motion") == "off", "switched off again: the entities gone")
 
-run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_SOUND_WINDOW": "3000"})
+run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_SOUND_WINDOW": "3000"}, log=True)

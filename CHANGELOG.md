@@ -13,6 +13,13 @@ What changed for people using the Echo, newest first. Details and measurements a
   stops looking for other Bluetooth devices, until a second after the last request (about 30 seconds at a time, then 3
   seconds of looking); in three runs that took a little more off the loop. Not tried with a desk yet. Thanks to
   lebheisenberg for the report.
+- **Wi-Fi motion survives Wi-Fi going off and on.** On the Echo Dot 3, Echo Show 5 and Echo Show 8 (2nd gen) the
+  sensor reads the Wi-Fi driver through a kernel module of ours, and Android reloads that driver whenever Wi-Fi is
+  switched off and on (which Amazon's watchdog did every few minutes on a Show 5 until yesterday's fix): the module's
+  hook went with the old driver, no frame was counted any more, and the sensor stayed "unknown" for good. The module
+  now hooks the driver again each time it comes back, and should no frame reach it for a minute, the sensor shows
+  unknown and the log says so instead of staying silent. Takes effect after a restart of the Echo (the old module
+  cannot be unloaded).
 
 ## 2026-11-12
 
