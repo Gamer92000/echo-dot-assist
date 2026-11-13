@@ -13,6 +13,9 @@ ESPHome API:
   - the screen held on (a day's timeout) while a timer runs or rings, not for a paused one, back to 5 min after
   - the UI's "words clear" (tapped away) clears them in hassmic; its "timer stop" stops a ring; its "timers hide" lets
     the screen sleep until the timers change
+  - the screen saver: "Screen sleeps after" and "Clock when idle" told as "ck"; with the clock on and the UI's
+    "front 1" (its face in front) the screen is held on (the UI shows the clock when the timeout is up), with an app
+    in front it sleeps as before, 0 minutes never
 """
 import asyncio, os, re, sys, tempfile
 from aioesphomeapi import VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
@@ -150,6 +153,36 @@ async def main(e):
     e.page.set(screen_text="off")
     check(await until(lambda: last("wo ") == "wo 0 1 5" and last("wh ") == "wh " and last("wr ") == "wr ", 5),
           f"switched off: told, the words cleared: {last('wo ')}, {last('wh ')}, {last('wr ')}")
+
+    # the screen saver: "Screen sleeps after" and "Clock when idle", told as "ck"; the clock on and our own screen in
+    # front (the UI's "front"): the screen stays on, the UI counts the timeout and shows the clock; an app in front:
+    # dark after the timeout as before; 0 minutes: never either way
+    NEVER = 2147483                                              # INT_MAX ms, as the log words it in s
+    check(last("ck ") == "ck 0 5" and sleeps(e) == 300, f"off and 5 min by default: {last('ck ')}, sleeps after {sleeps(e)} s")
+    e.page.set(screen_sleep_minutes=2)
+    check(await until(lambda: last("ck ") == "ck 0 2" and sleeps(e) == 120, 5), f"2 min: {last('ck ')}, sleeps after {sleeps(e)} s")
+    e.page.set(screen_clock="on")
+    check(await until(lambda: last("ck ") == "ck 1 2", 5), f"the clock on: told {last('ck ')}")
+    await asyncio.sleep(1.5)
+    check(sleeps(e) == 120, f"the UI has not said our screen is in front: it sleeps as before, after {sleeps(e)} s")
+    with open(fifo, "wb") as q: q.write(b"front 1\n")
+    check(await until(lambda: sleeps(e) == NEVER, 5), f"our own screen in front: held on, the UI shows the clock: {sleeps(e)} s")
+    with open(fifo, "wb") as q: q.write(b"front 0\n")
+    check(await until(lambda: sleeps(e) == 120, 5), f"an app in front: dark after 2 min as before: {sleeps(e)} s")
+    with open(fifo, "wb") as q: q.write(b"front 1\n")
+    check(await until(lambda: sleeps(e) == NEVER, 5), f"our screen again: held on: {sleeps(e)} s")
+    e.page.set(screen_clock="off")
+    check(await until(lambda: last("ck ") == "ck 0 2" and sleeps(e) == 120, 5), f"the clock off: dark after 2 min: {sleeps(e)} s")
+    e.page.set(screen_sleep_minutes=0)
+    check(await until(lambda: last("ck ") == "ck 0 0" and sleeps(e) == NEVER, 5), f"0 min: never: {sleeps(e)} s")
+    e.page.set(screen_sleep_minutes=5)
+    check(await until(lambda: sleeps(e) == 300, 5), f"5 min again: {sleeps(e)} s")
+
+    # the date's language: "Language you speak", told as "lg"; Automatic: the zone's, else none ("-": English)
+    e.page.set(speech_language="ro")
+    check(await until(lambda: last("lg ") == "lg ro", 5), f"Romanian: told {last('lg ')}")
+    e.page.set(speech_language="auto")
+    check(await until(lambda: last("lg ") != "lg ro", 5), f"automatic again: told {last('lg ')}")
 
 
 run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT),

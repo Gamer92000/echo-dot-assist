@@ -129,6 +129,9 @@ void core_speaker(int mode, int pct);            /* not the lock: playing on the
  * picks the active one, and a second one to listen beside it if it likes (its "Wake word 2").  Lock held. */
 #define CORE_WAKE_ACTIVE_MAX 2
 struct core_wake_word { char id[64], name[64], lang[16], manifest[256]; };
+void core_speech_language(char *out, size_t cap);   /* the language spoken here, "ro": the setting, else the time zone's;
+                                                       "".  Not the lock: the setting and state/timezone only (screen.c's
+                                                       writer calls it with its own lock held) */
 int  core_wake_words(const struct core_wake_word **list);  /* count */
 int  core_wake_word(int set);                    /* index of the (first) active one; set >= 0 makes it the only one and
                                                     keeps it, -1 reads */

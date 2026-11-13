@@ -156,7 +156,7 @@ $(OUT)/runas: src/tools/runas.c
 
 # The screen UI (src/ui/, scene.h): a JNI library for app_process, against the NDK's libandroid (ANativeWindow) and
 # libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
-UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/gfx.c
+UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/lang.c src/ui/gfx.c
 UI := src/ui/android.c src/ui/touch.c $(UI_SCENE)
 $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 	@mkdir -p $(OUT)
@@ -370,7 +370,7 @@ unit-ringlive:
 	python3 tests/unit/ringlive_conf.py
 unit-ring_band:
 	@mkdir -p build
-	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/afe_parcel.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
 # volcurve.c with each model's board.c: each names its curve, measured on it or the Dot 2's as a stand-in (a todo line)
 unit-volcurve:
 	@mkdir -p build

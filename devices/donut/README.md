@@ -305,7 +305,7 @@ words are spoken by Home Assistant, which only does that after you tick "Allow t
 actions" in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). The
 "Bluetooth announcements" setting on the settings page turns chime and words off. The words are English until you pick
 another language there (Deutsch, Français, Español, Italiano, Português, Nederlands, Svenska, Dansk, Norsk,
-Suomi, Polski): set it to the language of the Echo's assistant in Home Assistant, whose voice speaks them. Home
+Suomi, Polski, Română): set it to the language of the Echo's assistant in Home Assistant, whose voice speaks them. Home
 Assistant does not tell the Echo which language its assistant uses, so this cannot follow it by itself.
 
 [xda]: https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/

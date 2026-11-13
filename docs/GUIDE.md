@@ -41,7 +41,9 @@ System) off takes any certificate, but then anyone on your network could slip th
   which need not be the wake word's: German voices saying the English "Alexa" were found in 48 of 75 tests with
   German sounds, in 23 with English ones. So "Language you speak" (settings page, Wake word) picks it; automatic goes
   by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain, Mexico: Spanish;
-  Japan; else English), then by the wake word's own language. It also learns from your requests how the word sounds
+  Japan; else English), then by the wake word's own language. The list also has Italian, Portuguese, Dutch, Swedish,
+  Danish, Norwegian, Finnish, Polish and Romanian, which automatic picks by the time zone too: there are no sounds for
+  them yet, so the wake word's own are used, as before; the Echo Show writes its date in the language picked. It also learns from your requests how the word sounds
   in your home (your voices, your room, its microphone: speaker adaptation, as the aligner's models were trained for)
   and finds the end more often from the sixth request on (in tests 74 % right instead of 55 % without it); it forgets
   the oldest as new ones come, and what it learns stays on the Echo ("Learn how the wake word is said here" on the
@@ -342,7 +344,7 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
 The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it
 rings for 30 s instead and only its action button connects. The ring shows Alexa's call animations meanwhile. To end a
 call: the action button, "<wake word>, stop", "<wake word>, hang up" (or "auflegen", "raccroche", "cuelga",
-"riattacca", "ophangen") on either Echo, or "End Drop In".
+"riattacca", "ophangen", "închide") on either Echo, or "End Drop In".
 Music on the Echo pauses when a call connects (it does not resume by itself). The volume buttons work during a call; the wake word too, but not while the other side talks (its "Alexa" for its own
 Echo would wake this one).
 
@@ -503,7 +505,8 @@ Beyond the README's two figures:
   the designer's Ring / Band switch shows a design either way on any Echo.
   Your words, the reply and timers can show on the screen too: [The screen](#the-screen-echo-show), "Words and timers".
   The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
-  the microphones off or in Do not disturb).
+  the microphones off or in Do not disturb); the Screen page's **Screen sleeps after** changes the 5 minutes (0 keeps
+  the screen on), and **Clock when idle** shows the time in place of going dark.
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
 - **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip
   (or one of your own: "Your own sounds", below). On the Echo Show 8 (1st and 2nd gen), the Show 5 2nd gen and the Echo Input a sound
@@ -555,6 +558,15 @@ satellite of its own has to run without its microphone (as a display) while hass
   library or search on it and it stays, as if you had opened it yourself (the drawer's **Home** brings the home app back). Choosing the face or Home yourself (the drawer's **Face** or
   **Home**, the face button on the music page), or going back to the app, keeps the music page away until the music has
   stopped; a face chosen that way stays, as it always has, until the drawer's **Home** brings the home app back.
+- **Clock when idle** (Screen page, card **When idle**, off by default): where the screen would go dark, it shows the
+  time across the whole screen instead, with the date under it (in the language of "Language you speak"), a clock for
+  the nightstand. The wait is the screen's
+  own: **Screen sleeps after** (5 minutes), 1 minute with the mic off or in Do not disturb (the clock then says so on a
+  line under it). Until then the face shows as always; a touch on the clock brings it back (that touch does nothing
+  else), and so does anything the Echo does: a request, a ringing timer (with its **Stop**), a Drop In, the volume,
+  music starting. Music playing shows its bar under the clock. With an app or the music page in front the screen goes dark
+  as before.
+  Brightness follows the Brightness card: **Adaptive brightness** dims the clock at night.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
@@ -738,7 +750,11 @@ name and state.
 ## Bluetooth proxy
 
 Works like an ESPHome `bluetooth_proxy` with `active: true`: scanning, up to 3 connections, "Just Works" pairing only.
-While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
+While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering. While Home
+Assistant talks to a connected device (a desk moving, a lock), scanning pauses too, until a second after the last
+request and for about 30 seconds at a time (then it scans for 3 seconds). Connected devices get the short link
+ESPHome's proxy asks for (about 10 ms; a device that asks for a link of its own gets that one): an exchange took about
+25 ms, measured with a PC as the device (not yet with a desk).
 
 On by default. "Bluetooth proxy" (settings page, Features) switches it off: the Echo then tells Home Assistant it is no
 proxy, so Home Assistant sets up no scanner for it, and the Echo stops scanning and refuses connections. Disabling the
