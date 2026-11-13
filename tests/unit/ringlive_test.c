@@ -350,6 +350,16 @@ int main(void)
     check(!strcmp(t, dark) && !l.on && !ringlive_active(), "  dark, its LEDs off (not at their colour's own level)");
     w0 = ringlive_writes(); put(frame, "00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF\n");
     msleep(600); check(ringlive_writes() == w0, "handed back: ledcontroller's frames left alone");
+    /* a fade to dark whose last frames already read 00 (a dim LED: truncated to nothing before the fade ends): the
+     * dark frame is then what was written last, and the ring must still be handed back (the Dot 2, 2026-11-13: it
+     * stayed ours, and the writer put dark back over what came, until the mute's hold and resume) */
+    put(frame, dark); level = 1;
+    struct live_led dim = { 1, 0.05f, 1, 1, 1 }; ringlive_led_set(0, &dim); msleep(300);
+    ringlive_fade(400); dim.on = 0; ringlive_led_set(0, &dim); msleep(900);
+    w0 = ringlive_writes(); put(frame, "00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF\n");
+    msleep(600); get(t, sizeof t);
+    check(ringlive_writes() == w0 && !strncmp(t, "00FFFF", 6), "a fade that reads 00 before its end: handed back all the same");
+    level = 100; put(frame, dark);
 
     /* "Light ring live" on: Home Assistant's light drawn as the bottom layer, the LEDs over it */
     check(!ringlive_enabled(), "the light not drawn until \"Light ring live\" is on");

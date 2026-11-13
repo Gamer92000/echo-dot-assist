@@ -550,7 +550,9 @@ static void *writer(void *arg)
                     if (content) ringlive_duty(seen[h], pwm[lvl], px[h]); else memset(px[h], 0, 3);
                 }
                 ringlive_text((const unsigned char (*)[3])px, leds, want);
-                int need = strcmp(want, text) || !owned;
+                /* !content: nothing of ours left, the ring goes back even if the dark frame is what was written last
+                 * (a fade's last frames truncate to 00 while it still counts as ours: it stayed ours, Dot 2 2026-11-13) */
+                int need = strcmp(want, text) || !owned || !content;
                 if (!need && now - last_check >= CHECK_MS) {        /* ledcontroller wrote over it? */
                     last_check = now;
                     if (!frame_read(now_back, sizeof now_back) && strcmp(now_back, seen_back)) {
