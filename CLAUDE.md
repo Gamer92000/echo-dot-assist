@@ -687,6 +687,7 @@ prints it.
 DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there before making speech for a test.
 `tools/wakealign/corpus_eval.py` measures the replay's start on it (stock Pryon under qemu, the release's rule, the
 aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
+`tools/pryon-native/` is a PC-side reconstruction of Pryon's wake word engine (front end, the network with its int8 arithmetic, the decision rule) with the log of how each piece was checked against the real library (`LEDGER.md`).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
 `davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
 volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
