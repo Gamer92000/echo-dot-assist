@@ -1105,6 +1105,70 @@ int main(int argc, char **argv)
           assert(k >= 1 && a < 0.5f); nsent = 0; tap(W / 2, H / 2);
           assert(S->face.poke_at != poke && !sent_has("words clear")); }
         msg("wh "); msg("ws -1"); WSTEP(700);
+        /* a card (card.c): where the words would be, opaque, its controls tapped where they were drawn, elsewhere away */
+        { msg("wo 1 1 8"); msg("wh Licht an"); msg("wr Erledigt"); msg("ws -1");
+          msg("cb 5 e 3 1\tKüche\t"); msg("cr 0 s 1 50 1\tLicht\tOn · 50 %"); msg("cr 1 t 0 -1 0\tKaffee\tOff");
+          msg("cr 2 c 1 40 0\tRollo\tOpen · 40 %");
+          assert(!S->cd.ready);                                    /* drawn only once it is all there */
+          msg("ce"); assert(S->cd.ready && S->cd.n == 3 && S->cd.voice && S->cd.r[0].ctl == 's' && S->cd.r[0].level == 50);
+          k = scene_words(S, now, &a, &nx); assert(k == 2 && S->wd.pic == 4); scene_words_draw(S, &wg);
+          if (shots) ppm("card", wb);
+          assert(TEXT_IS("Küche") && TEXT_IS("Erledigt") && TEXT_IS("Licht") && TEXT_IS("Kaffee"));   /* the reply its subtitle */
+          { int op = 0; for (int i = 0; i < W * H; i++) op += (wb[i] >> 24) == 0xFF; assert(op == W * H); }   /* opaque */
+          WSTEP(300);
+          struct chit sw = { { 0, 0, 0, 0 }, 0, 0, 0, 0 }, bar = sw, cov = sw;
+          for (int i = 0; i < S->cd.nhit; i++) { const struct chit *h = &S->cd.hit[i];
+            if (h->row == 1 && h->op == 1) sw = *h;
+            if (h->row == 0 && h->op == 2) bar = *h;
+            if (h->row == 2 && h->op == 3) cov = *h; }
+          assert(!rect_empty(sw.r) && !rect_empty(bar.r) && !rect_empty(cov.r) && bar.x1 > bar.x0);
+          nsent = 0; tap((sw.r.x0 + sw.r.x1) / 2, (sw.r.y0 + sw.r.y1) / 2); assert(sent_has("card tap 5 1 toggle"));
+          nsent = 0; tap(bar.x0 + (bar.x1 - bar.x0) / 4, (bar.r.y0 + bar.r.y1) / 2); assert(sent_prefix("card tap 5 0 level 2"));
+          nsent = 0; tap((cov.r.x0 + cov.r.x1) / 2, (cov.r.y0 + cov.r.y1) / 2); assert(sent_has("card tap 5 2 open"));
+          assert(S->cd.ready);                                     /* a control's tap keeps it */
+          nsent = 0; tap(W - 30, 30); assert(sent_has("card clear 5") && !S->cd.ready);   /* elsewhere: away */
+          WSTEP(700);
+          /* the weather and a message draw; a notification's subtitle is its own, not the reply */
+          msg("cb 6 w 2 0\tWetter\t"); msg("cw rainy\t12°\tRegen"); msg("cf 0 sunny\tMo\t14°\t0 %"); msg("cf 1 snowy\tDi\t2°\t60 %"); msg("ce");
+          assert(S->cd.ready && !S->cd.voice && S->cd.n == 2 && eq(S->cd.d[1].icon, "snowy") && eq(S->cd.d[1].precip, "60 %"));
+          k = scene_words(S, now, &a, &nx); assert(k == 2); scene_words_draw(S, &wg); assert(TEXT_IS("12°") && TEXT_IS("Regen") && TEXT_IS("Di"));
+          if (shots) ppm("card_weather", wb);
+          msg("cb 7 m 0 0\tTür\t"); msg("cm Jemand ist an der Tür"); msg("ce");
+          k = scene_words(S, now, &a, &nx); assert(k == 2); scene_words_draw(S, &wg); assert(TEXT_IS("Jemand ist an der Tür"));
+          /* a list and its buttons: a button's tap is "press", the card stays until hassmic says otherwise */
+          msg("cb 9 l 2 0\tEinkauf\t2"); msg("cl 0\tMilch\t"); msg("cl 1\tEier\tzwölf"); msg("cu 0\tSpäter"); msg("cu 1\tFertig"); msg("ce");
+          assert(S->cd.ready && S->cd.n == 2 && S->cd.nbtn == 2 && eq(S->cd.it[1].detail, "zwölf"));
+          k = scene_words(S, now, &a, &nx); assert(k == 2); scene_words_draw(S, &wg);
+          assert(TEXT_IS("Milch") && TEXT_IS("zwölf") && TEXT_IS("Später") && TEXT_IS("Fertig"));
+          if (shots) ppm("card_list", wb);
+          WSTEP(300);
+          { struct chit b1 = { { 0, 0, 0, 0 }, 0, 0, 0, 0 };
+            for (int i = 0; i < S->cd.nhit; i++) if (S->cd.hit[i].op == 10 && S->cd.hit[i].row == 1) b1 = S->cd.hit[i];
+            assert(!rect_empty(b1.r)); nsent = 0;
+            tap((b1.r.x0 + b1.r.x1) / 2, (b1.r.y0 + b1.r.y1) / 2); assert(sent_has("card tap 9 1 press") && S->cd.ready); }
+          msg("cl 40\tx\tx"); msg("cu 7\tx"); msg("cl 1"); assert(S->cd.nbtn == 2);   /* out of range, no tab: left out */
+          msg("cb 10 m 0 0\tTür\t"); msg("cm Jemand"); msg("ce"); assert(S->cd.nbtn == 0 && !S->cd.it[0].text[0]);   /* a new card: none of the last's */
+          /* a ringing timer over a card (its Stop must be there), the card back after it */
+          msg("wo 0 1 8"); msg("timers Tee"); k = scene_words(S, now, &a, &nx); assert(S->wd.pic == 2);
+          msg("timers "); k = scene_words(S, now, &a, &nx); assert(S->wd.pic == 4 && S->cd.ready);
+          /* without "Timers on screen" the ring and its Stop are the face's: the card out of their way, back after */
+          msg("wo 0 0 8"); msg("timers Tee"); k = scene_words(S, now, &a, &nx); assert(!S->wd.shown && S->cd.ready);
+          msg("timers "); k = scene_words(S, now, &a, &nx); assert(S->wd.shown && S->wd.pic == 4);
+          msg("wo 1 1 8");
+          /* a camera slower than its refresh: each picture comes after the next was asked for, and still shows (a newer
+           * one of the same card); an older one, or another card's, does not */
+          msg("cb 20 m 0 0\tDoor\t"); msg("cm x"); msg("ci card20.0"); msg("ce"); msg("ci card20.1");
+          { unsigned v = S->cd.img.ver;
+            scene_image(S, "card20.0", 800, calloc(4, 4), 2, 2); assert(S->cd.img.ver == v + 1 && !strcmp(S->cd.ikey_shown, "card20.0"));
+            msg("ci card20.2");
+            scene_image(S, "card20.1", 800, calloc(4, 4), 2, 2); assert(S->cd.img.ver == v + 2);
+            scene_image(S, "card20.0", 800, calloc(4, 4), 2, 2); assert(S->cd.img.ver == v + 2);   /* older than shown */
+            scene_image(S, "card19.3", 800, calloc(4, 4), 2, 2); assert(S->cd.img.ver == v + 2); }  /* another card's */
+          /* what does not parse is left out; "cx" takes it away */
+          msg("cr 99 t 1 -1 0\tx\tx"); msg("cr garbage"); msg("cf -1 x"); msg("cb"); assert(!S->cd.ready);
+          msg("cb 8 e 1 0\tA\t"); msg("cr 0 t 1 -1 0\tB\tOn"); msg("ce"); assert(S->cd.ready);
+          msg("cx"); assert(!S->cd.ready); WSTEP(700);
+          msg("wh "); msg("wr "); msg("ws -1"); WSTEP(700); }
         /* the panel grabbable (the Echo): over an app the words want it, and while it is theirs a tap is theirs; a ring
          * there needs no bring-up, its Stop is tapped where it is */
         scene_words_grab(S, 0);

@@ -810,6 +810,8 @@ void ring_light_set(const struct ring_light *l, unsigned flash_ms)
 }
 
 void ring_level(int dbfs10) { atomic_store(&level_db, dbfs10); }
+/* a notice on the screen (cards.c): the screen on, as a pattern turns it on (the band thread, WAKE_EVERY apart) */
+void ring_screen_wake(void) { pthread_mutex_lock(&lock); wake_req = 1; pthread_cond_broadcast(&cv); pthread_mutex_unlock(&lock); }
 
 int ring_band_rows(int set)
 {

@@ -98,7 +98,32 @@ static uint32_t *picture(const char *key, int px)
 
 struct pend { char key[48]; int px; } pend[256]; static int npend;
 static void t_image(void *ctx, const char *key, int px) { (void)ctx; if (npend < 256) { snprintf(pend[npend].key, 48, "%s", key); pend[npend++].px = px; } }
-static void deliver(void) { for (int i = 0; i < npend; i++) scene_image(sc, pend[i].key, pend[i].px, picture(pend[i].key, pend[i].px), pend[i].px, pend[i].px); npend = 0; }
+/* a card's picture: UISHOT_PICTURE=<file>:<w>:<h> (raw RGBA, e.g. a real snapshot through PIL), else a made-up 4:3 one */
+static uint32_t *card_picture(int px, int *w, int *h)
+{
+    const char *e = getenv("UISHOT_PICTURE"); char f[512]; int pw = 0, ph = 0;
+    if (e && sscanf(e, "%511[^:]:%d:%d", f, &pw, &ph) == 3 && pw > 0 && ph > 0) {
+        uint32_t *p = malloc((size_t)pw * ph * 4); FILE *fp = fopen(f, "rb");
+        if (p && fp && fread(p, 4, (size_t)pw * ph, fp) == (size_t)pw * ph) { fclose(fp); *w = pw; *h = ph; return p; }   /* drawn scaled */
+        if (fp) fclose(fp);
+        free(p);
+    }
+    *w = px; *h = px * 3 / 4;
+    uint32_t *p = malloc((size_t)*w * *h * 4);
+    for (int y = 0; y < *h; y++) for (int x = 0; x < *w; x++) {
+        int door = x > *w * 0.38f && x < *w * 0.62f && y > *h * 0.18f, k = door ? 90 : 40 + y * 120 / *h;
+        p[y * *w + x] = door ? rgb(110, 70, 40) : rgb(k / 2, k, k + 30);
+    }
+    return p;
+}
+static void deliver(void)
+{
+    for (int i = 0; i < npend; i++) {
+        if (!strncmp(pend[i].key, "card", 4)) { int w, h; uint32_t *p = card_picture(pend[i].px, &w, &h); scene_image(sc, pend[i].key, pend[i].px, p, w, h); }
+        else scene_image(sc, pend[i].key, pend[i].px, picture(pend[i].key, pend[i].px), pend[i].px, pend[i].px);
+    }
+    npend = 0;
+}
 
 static int want_backdrop;
 static void t_shot(void *ctx) { (void)ctx; want_backdrop = 1; }
@@ -292,7 +317,15 @@ int main(int argc, char **argv)
     sc = scene_new(W, H, BAND, &plat, NULL, now);
     scene_top(sc, UI_HOME_PKG, now);
     line("name Echo Show 5 fdd111"); line("home -"); line("web http://192.168.1.40:28931"); line("ev 40");
-    run(500); png("face");
+    run(500);
+    if (getenv("UISHOT_LINES")) {               /* the screen UI's lines from a file (e.g. build/cardlines' of a real card) */
+        FILE *f = fopen(getenv("UISHOT_LINES"), "r"); char b[2048];
+        if (!f) { perror(getenv("UISHOT_LINES")); return 1; }
+        while (fgets(b, sizeof b, f)) { b[strcspn(b, "\n")] = 0; if (b[0]) scene_msg(sc, b, now); }
+        fclose(f); deliver(); words_png(getenv("UISHOT_NAME") ? getenv("UISHOT_NAME") : "lines", 0);
+        return 0;
+    }
+    png("face");
     /* the screen saver (ck): the clock once a minute (here) passed with nothing happening; mic off (a minute again:
      * the change counts); 12-hour; a request brings the face */
     line("ck 1 1"); run(61000); png("clock");
@@ -316,7 +349,42 @@ int main(int argc, char **argv)
     words_png("timers", 0); words_png("timers_over_app", 1);
     line("tl 1\t2700000 3600 1 Laundry"); words_png("timer_one", 0);
     line("timers Pizza"); words_png("timer_ringing", 0);
-    line("timers "); line("tl 0"); line("wo 0 0 8"); words_png("words_gone", 0);
+    line("timers "); line("tl 0");
+    /* cards (card.c): a request's room, two columns of them, the weather, a message; over the face and an app */
+    line("wh Turn on the kitchen light"); line("wr Turned on the light"); line("ws -1");
+    line("cb 1 e 5 1\tKitchen\t");
+    line("cr 0 s 1 80 1\tKitchen light\tOn · 80 %%"); line("cr 1 t 0 -1 0\tCoffee maker\tOff");
+    line("cr 2 c 1 40 0\tKitchen blinds\tOpen · 40 %%"); line("cr 3 h -1 -1 0\tThermostat\t20.5°C now · set 21.0°C");
+    line("cr 4 r -1 -1 0\tOutside\t18.4 °C"); line("ce");
+    words_png("card_entities", 0); words_png("card_entities_over_app", 1);
+    line("cb 2 e 8 1\tFamily Room\tTurned off the lamps");
+    line("cr 0 t 0 -1 1\tCorner lamp\tOff"); line("cr 1 t 0 -1 1\tCouch lamp\tOff"); line("cr 2 s 1 35 0\tCeiling lights\tOn · 35 %%");
+    line("cr 3 s 0 -1 0\tSpotlight\tOff"); line("cr 4 p 1 -1 0\tTV\tPlaying"); line("cr 5 b -1 -1 0\tMovie night\t");
+    line("cr 6 t 1 -1 0\tFan\tOn"); line("cr 7 r -1 -1 0\tWindow\tClosed"); line("ce");
+    words_png("card_entities_8", 0);
+    line("cb 3 w 5 1\tWeather\tRight now it's 66 degrees and sunny");
+    line("cw sunny\t66°\tHigh 68° · Low 55° · Mostly sunny");
+    line("cf 0 clear-night\tTonight\t55°\t10 %%"); line("cf 1 partlycloudy\tThu\t70° / 52°\t20 %%");
+    line("cf 2 rainy\tFri\t61° / 50°\t70 %%"); line("cf 3 lightning-rainy\tSat\t64° / 49°\t80 %%"); line("cf 4 snowy\tSun\t38° / 30°\t40 %%");
+    line("ce"); words_png("card_weather", 0);
+    line("cb 4 m 0 0\tDoorbell\t"); line("cm Someone is at the front door"); line("ce"); words_png("card_message", 0);
+    line("cb 5 m 0 0\tFront door\tThe doorbell rang at 3:42 PM"); line("cm Someone is at the front door"); line("ci card5.0"); line("ce");
+    words_png("card_picture_waiting", 0); deliver(); words_png("card_picture", 0);
+    line("cb 6 m 0 0\tFront door\t"); line("cm "); line("ci card6.0"); line("ce"); deliver(); words_png("card_picture_alone", 0);
+    line("cb 7 m 0 0\tWasher is done\tFinished at 2:14 PM"); line("cm Ran 52 min and used 0.41 kWh. Time to move the laundry to the dryer.");
+    line("cu 0\tRemind me in 15 min"); line("cu 1\tDone"); line("ce"); words_png("card_buttons", 0);
+    line("cb 8 m 0 0\tFront door\tDoorbell · 3:42 PM"); line("cm Someone is at the front door"); line("ci card8.0");
+    line("cu 0\tDismiss"); line("ce"); deliver(); words_png("card_picture_buttons", 0);
+    line("cb 9 l 5 1\tToday\tFriday, November 13 · 5 events");
+    line("cl 0\tSchool holiday\tAll day · Kids"); line("cl 1\tDentist\t9:30 AM · Personal");
+    line("cl 2\tVolleyball practice\t4:00 PM – 6:00 PM · School sports"); line("cl 3\tDinner with friends\t7:00 PM · Family");
+    line("cl 4\tFootball game\t8:15 PM · Sports"); line("ce"); words_png("card_list", 0);
+    line("cb 10 l 9 1\tShopping list\t9 items");
+    line("cl 0\tMilk\t"); line("cl 1\tEggs\tA dozen, large"); line("cl 2\tBananas\t"); line("cl 3\tCoffee beans\t"); line("cl 4\tPaper towels\t");
+    line("cl 5\tOlive oil\t"); line("cl 6\tGreek yogurt\tPlain"); line("cl 7\tApples\tHoneycrisp"); line("cl 8\tBread\t");
+    line("ce"); words_png("card_list_12", 0);
+    line("cx"); line("wh "); line("wr "); line("ws -1");
+    line("wo 0 0 8"); words_png("words_gone", 0);
     music_data(); run(400); png("face_music");
     line("ck 1 1"); run(61000); png("clock_music"); line("ck 0 5"); run(300);
     pull(300); png("drawer");

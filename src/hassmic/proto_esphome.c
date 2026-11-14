@@ -90,6 +90,7 @@
 #include "noise.h"
 #include "pb.h"
 #include "sendspin.h"
+#include "cards.h"
 #include "clock.h"
 #include "update.h"
 #include "wifimotion.h"
@@ -153,7 +154,8 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
-       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST };
+       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST,
+       KEY_CARD_SHOW, KEY_CARD_CLEAR };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -619,6 +621,8 @@ static int listed(int key)
     case KEY_SCR_AUTO: case KEY_SCR_LEVEL: case KEY_SCR_ADJUST: return settings_find("screen_brightness_auto") != NULL;
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
+    case KEY_CARD_SHOW: case KEY_CARD_CLEAR: return cards_on(-1) > 0;      /* a model with a screen (cards.c), cards on: off,
+                                                                   the actions are gone and Home Assistant sends no card */
     case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
     case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in"))) return 0;    /* calls only with Drop In */
         /* fall through */
@@ -728,6 +732,15 @@ static void send_setting_entities(void)
      * player plays, so an automation had to start the music again */
     { PB(b, 128); pb_str(&b, 1, "stop_ringing"); pb_fixed32(&b, 2, KEY_TIMER_STOP); pb_str(&b, 3, "Stop ringing");
       pb_str(&b, 5, "mdi:timer-off-outline"); send_msg(LIST_BUTTON, &b); }
+    /* cards on the screen (cards.c): show_card's card is a JSON string (cards.c says what it holds), clear_card takes it away */
+    if (listed(KEY_CARD_SHOW)) {
+        { PB(b, 256); PB(a, 48); pb_str(&b, 1, "show_card"); pb_fixed32(&b, 2, KEY_CARD_SHOW);
+          pb_str(&a, 1, "card"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&b, 5, "A card on the screen: JSON (version 2: entities, weather, message or list; docs/cards.md), as hassmic_cards sends it"); send_msg(LIST_SERVICE, &b); }
+        { PB(b, 128); PB(a, 48); pb_str(&b, 1, "clear_card"); pb_fixed32(&b, 2, KEY_CARD_CLEAR);
+          pb_str(&a, 1, "id"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&b, 5, "Takes the card with this id off the screen (empty: the card that shows)"); send_msg(LIST_SERVICE, &b); }
+    }
     /* Drop In (dropin.c): "Drop In with" first, so a trigger on "Drop In" finds it set */
     if (listed(KEY_DROPIN_SERVICE)) {
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "drop_in"); pb_fixed32(&b, 2, KEY_DROPIN_SERVICE);
@@ -907,7 +920,7 @@ static void send_mp_state(void)         /* lock held */
     send_state(MEDIA_PLAYER_STATE, &b);
 }
 
-static int http_get_host(const char *host, const char *port, const char *path)
+static int http_get_host(const char *host, const char *port, const char *path, long long *clen)
 {
     char req[1400], line[1024]; int v6 = strchr(host, ':') != NULL;
     int fd = net_connect(host, port, 4);
@@ -922,23 +935,65 @@ static int http_get_host(const char *host, const char *port, const char *path)
         size_t i = 0; char c;
         while (i < sizeof line - 1 && read(fd, &c, 1) == 1 && c != '\n') line[i++] = c;
         line[i] = 0;
-        if (first && !strstr(line, " 200")) { fprintf(stderr, "media: http://%s:%s%s -> %s\n", host, port, path, line); close(fd); return -1; }
+        if (first && !strstr(line, " 200")) {           /* (tokens left out of the log, which the page serves: url_shown) */
+            fprintf(stderr, "media: http://%s:%s%.*s%s -> %s\n", host, port, url_shown(path), path, path[url_shown(path)] ? "..." : "", line);
+            close(fd); return -1;
+        }
         if (i <= 1) return fd;                          /* "\r": end of headers */
+        if (clen && !strncasecmp(line, "Content-Length:", 15)) *clen = strtoll(line + 15, NULL, 10);
     }
 }
 
-static int http_get(const char *url)    /* returns a socket positioned at the body, or -1 */
+/* returns a socket positioned at the body, or -1; clen (may be NULL): the body's length where an http:// response
+ * says it, else left alone (over HTTPS curl logs a short body, but the socket ends as after a whole one) */
+static int http_get_len(const char *url, long long *clen)
 {
     char host[256], port[8] = "80"; const char *p = url, *path;
     if (!strncasecmp(p, "https://", 8)) return https_open(url);     /* Home Assistant serving HTTPS itself (https.c) */
-    if (strncmp(p, "http://", 7)) { fprintf(stderr, "media: only http:// and https:// are supported: %s\n", url); return -1; }
+    if (strncmp(p, "http://", 7)) {
+        fprintf(stderr, "media: only http:// and https:// are supported: %.*s%s\n", url_shown(url), url, url[url_shown(url)] ? "..." : "");
+        return -1;
+    }
     p += 7; path = strchr(p, '/');
     snprintf(host, sizeof host, "%.*s", (int)(path ? path - p : (long)strlen(p)), p);
     char *colon = strrchr(host, ':'), *close_br = strrchr(host, ']');
     if (colon && close_br > colon) colon = NULL;                            /* "[fe80::1]": the colons are the address */
     if (colon) { *colon = 0; snprintf(port, sizeof port, "%s", colon + 1); }
     if (host[0] == '[' && (close_br = strchr(host, ']'))) { *close_br = 0; memmove(host, host + 1, strlen(host)); }
-    return http_get_host(host, port, path ? path : "/");
+    return http_get_host(host, port, path ? path : "/", clen);
+}
+
+static int http_get(const char *url) { return http_get_len(url, NULL); }
+
+/* cards.c's pictures (a doorbell's snapshot): the whole body of an http(s) URL Home Assistant put in a card, at most max
+ * bytes, malloc'd (NULL: failed).  Any thread, no lock: a socket of its own, as a media job's */
+uint8_t *esphome_fetch(const char *url, size_t max, size_t *n)
+{
+    long long clen = -1;
+    int fd = http_get_len(url, &clen);
+    if (fd < 0) return NULL;
+    size_t cap = 65536, have = 0; uint8_t *b = malloc(cap); int bad = !b;
+    while (!bad) {
+        if (have == cap) {
+            if (cap >= max) { bad = 1; break; }                /* larger than any picture we would show */
+            size_t nc = cap * 2 > max ? max : cap * 2; uint8_t *nb = realloc(b, nc);
+            if (!nb) { bad = 1; break; }
+            b = nb; cap = nc;
+        }
+        ssize_t r = recv(fd, b + have, cap - have, 0);
+        if (r < 0 && errno == EINTR) continue;
+        if (r < 0) bad = 1;
+        if (r <= 0) break;
+        have += (size_t)r;
+    }
+    close(fd);
+    if (!bad && clen >= 0 && (long long)have != clen) {        /* closed early (a camera's timeout): half a picture is
+                                                                   a failed fetch, not one to show */
+        fprintf(stderr, "card: picture cut short: %zu of %lld bytes\n", have, clen); bad = 1;
+    }
+    if (bad || !have) { free(b); return NULL; }
+    *n = have;
+    return b;
 }
 
 static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: let go of, it must not play */
@@ -1400,7 +1455,7 @@ static void mute_changed(int muted) { (void)muted; send_setting(KEY_MUTE); setti
 static void wake_event(const char *event);
 static void on_event(const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", said[1024] = "", code[48] = ""; int cont = 0, stream_now = 0;
+    struct pbf f, g; unsigned type = 0; char key[48], val[1024], text[512] = "", said[1024] = "", code[48] = "", convid[96] = ""; int cont = 0, stream_now = 0;
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) type = f.v;
         else if (f.field == 2 && f.wire == 2) {
@@ -1410,6 +1465,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
             if (!strcmp(key, "code")) snprintf(code, sizeof code, "%s", val);
             if (!strcmp(key, "text")) snprintf(said, sizeof said, "%s", val);    /* whole: text holds 512 bytes of all three */
             if (!strcmp(key, "continue_conversation") && !strcmp(val, "1")) cont = 1;
+            if (!strcmp(key, "conversation_id")) snprintf(convid, sizeof convid, "%s", val);
             if (!strcmp(key, "tts_start_streaming") && !strcmp(val, "1")) stream_now = 1;
             if (!strcmp(key, "url")) snprintf(tts_url, sizeof tts_url, "%s", val);
         }
@@ -1436,7 +1492,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
         if (core_transcript(text)) { screen_words(SCREEN_WORDS_RUN, NULL); break; }
         screen_words(SCREEN_WORDS_HEARD, said);
         core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
-    case EV_INTENT_END: if (cont) core_restart_after(); break;
+    case EV_INTENT_END: cards_conversation(convid); if (cont) core_restart_after(); break;
     case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); screen_words(SCREEN_WORDS_REPLY, said); break;
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
         /* fall through */
@@ -1741,7 +1797,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         else if (cmd == UPDATE_CMD_INSTALL && c >= 0 && clients[c].keyed) update_install();
         else if (cmd == UPDATE_CMD_INSTALL) fprintf(stderr, "update: install refused, the request did not come over the keyed connection\n");
     } break;
-    case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
+    case SUBSCRIBE_HA_ACTIONS: if (c >= 0) { clients[c].actions = 1; if (listed(KEY_CARD_SHOW)) cards_resend_state(); } break;
     case SUBSCRIBE_HA_STATES: if (c >= 0) clients[c].ha_states = 1; break;
     case HA_STATE: {
         /* a state we asked for (arb_request): only from Home Assistant itself, the client holding the device key */
@@ -1756,6 +1812,41 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     } break;
     case EXECUTE_SERVICE: {
         unsigned key = 0; int argn = 0, nc = 0; char args[2][256] = { "", "" }, colors[RING_LEDS_MAX][16]; struct pbf g;
+        {   /* show_card: its card, longer than the 255 bytes the others take (CARD_JSON_MAX) */
+            const unsigned char *q = p; unsigned k = 0; const unsigned char *arg = NULL; size_t argl = 0;
+            while (pb_next(&q, end, &f)) {
+                if (f.field == 1) k = (unsigned)f.v;
+                else if (f.field == 2 && f.data && !arg) {
+                    const unsigned char *r = f.data;
+                    while (pb_next(&r, f.data + f.len, &g)) if (g.field == 4 && g.data) { arg = g.data; argl = g.len; }
+                }
+            }
+            if (k == KEY_CARD_SHOW || k == KEY_CARD_CLEAR) {
+                if (!listed(KEY_CARD_SHOW)) break;
+                if (k == KEY_CARD_CLEAR) {
+                    char id[96];                        /* (a card's id is 63 bytes at most: a longer one is none
+                                                           of them, never "" = whatever shows) */
+                    if (arg && argl >= sizeof id) { fprintf(stderr, "card: clear_card: an id of %zu bytes, no card's\n", argl); break; }
+                    size_t l = arg ? argl : 0;
+                    memcpy(id, arg ? (const char *)arg : "", l); id[l] = 0;
+                    cards_clear(id, "clear_card"); break;
+                }
+                if (!arg || argl >= CARD_JSON_MAX) {
+                    const char *why = arg ? "longer than 8 KB" : "no card", *kv[2] = { "reason", why };
+                    fprintf(stderr, "card: refused: %s\n", why); esphome_event("esphome.hassmic_card_refused", kv, 1); break;
+                }
+                char *js = malloc(argl + 1), e[160];
+                if (!js) break;
+                memcpy(js, arg, argl); js[argl] = 0;
+                if (cards_show(js, e, sizeof e)) {             /* told to Home Assistant too: its logbook says why */
+                    fprintf(stderr, "card: refused: %s\n", e);
+                    const char *kv[2] = { "reason", e };
+                    esphome_event("esphome.hassmic_card_refused", kv, 1);
+                }
+                free(js);
+                break;
+            }
+        }
         while (pb_next(&p, end, &f)) {
             if (f.field == 1) key = (unsigned)f.v;
             else if (f.field == 2 && f.data && argn < 2) {
@@ -1969,6 +2060,28 @@ static int arb_scan(const char *tag_id)
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions && clients[i].keyed) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
     return n ? 0 : -1;
 }
+
+/* lock held: cards.c's.  An action run (needs "Allow the device to perform Home Assistant actions", or Home Assistant
+ * raises a repair instead); an event (esphome.*: Home Assistant fires it for any device it adopted, with the device's
+ * id, before the permission check).  What does not fit the message is
+ * refused, never cut (pb.h drops a field's payload that does not fit after its header: Home Assistant would get a message
+ * it cannot decode and close the link) */
+static int ha_action(const char *name, const char *const *kv, int n, int event)
+{
+    size_t need = strlen(name) + 16;
+    for (int i = 0; i < 2 * n; i++) need += strlen(kv[i]) + 8;
+    if (need > 1024) { fprintf(stderr, "%s %s: too long to send\n", event ? "event" : "action", name); return -1; }
+    PB(b, 1024); int sent = 0;
+    pb_str(&b, 1, name);
+    for (int i = 0; i < n; i++) pb_map(&b, 2, kv[2 * i], kv[2 * i + 1]);
+    if (event) pb_uint(&b, 5, 1);
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions && (!have_key || clients[i].keyed)) { send_to(clients[i].fd, HA_ACTION, &b); sent++; }
+    return sent ? 0 : -1;
+}
+
+int esphome_event(const char *event, const char *const *kv, int n) { return ha_action(event, kv, n, 1); }
+
+int esphome_action(const char *service, const char *const *kv, int n) { return ha_action(service, kv, n, 0); }
 
 /* lock held: ask Home Assistant once for an entity's state (needs no permission: HA answers any device) */
 static int arb_request(const char *entity)

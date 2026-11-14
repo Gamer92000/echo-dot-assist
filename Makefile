@@ -156,7 +156,7 @@ $(OUT)/runas: src/tools/runas.c
 
 # The screen UI (src/ui/, scene.h): a JNI library for app_process, against the NDK's libandroid (ANativeWindow) and
 # libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
-UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/lang.c src/ui/gfx.c
+UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/card.c src/ui/lang.c src/ui/gfx.c
 UI := src/ui/android.c src/ui/touch.c $(UI_SCENE)
 $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 	@mkdir -p $(OUT)
@@ -202,7 +202,7 @@ WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/cards.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
@@ -241,7 +241,7 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release
+	screen ui touch json pb cards uninstall_boot sysinstall_aligners resample fork_release
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -395,9 +395,17 @@ unit-screen:
 build/uishot: tools/uishot.c $(UI_SCENE) src/ui/scene.h src/ui/ui.h src/ui/gfx.h
 	@mkdir -p build
 	cc -O2 -Wall -Wextra $$(pkg-config --cflags freetype2) tools/uishot.c $(UI_SCENE) -o $@ $$(pkg-config --libs freetype2) -lz -lm
+# a real card's JSON as the lines the screen UI gets (for build/uishot's UISHOT_LINES): tools/cardlines.c says how
+build/cardlines: tools/cardlines.c src/hassmic/cards.c src/hassmic/cards.h src/hassmic/json.c
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -Isrc/hassmic -Isrc/include tools/cardlines.c src/hassmic/json.c -lm -lpthread -o $@
 unit-json:
 	@mkdir -p build
 	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all tests/unit/json_test.c src/hassmic/json.c -o build/json_test && build/json_test
+# the cards Home Assistant pushes (cards.c: show_card, clear_card) and the UI's taps, with stand-ins for the screen and ESPHome
+unit-cards:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic -Isrc/include tests/unit/cards_test.c src/hassmic/json.c -lm -lpthread -o build/cards_test && build/cards_test
 # the ESPHome API's protobuf reader (pb.h) on what anyone on the network may send
 unit-pb:
 	@mkdir -p build

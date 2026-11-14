@@ -59,4 +59,10 @@ int  screen_keep_on(void);
 int  screen_clock(int set);
 int  screen_sleep_min(int set);
 int  screen_saver(void);
+
+/* A card (cards.c, the UI's card.c): its lines for the UI as cards.c made them ("cb ... ce", or "cx" for none),
+ * kept and sent whenever they change and to a new UI.  Any thread.  screen_card_hold: the card keeps the screen on (a
+ * card until tapped away only for a while: cards.c) */
+void screen_card(const char *lines);
+void screen_card_hold(int on);
 #endif

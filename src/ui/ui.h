@@ -127,6 +127,29 @@ struct drawer { float pos, t, grab, vy; long long ty; int pulling, from_app, go;
 /* ---------------------------------------------------------------- words.c's model */
 
 #define WTIMERS 8
+/* a card Home Assistant pushed (card.c; hassmic's cards.c): a row's control by letter (r t s c h p b), on -1 (not a
+ * switch) 0 1, level 0..100 or -1; where its controls were drawn, for taps */
+#define CROWS 8
+#define CDAYS 5
+#define CHITS 32
+#define CITEMS 12
+#define CBTNS 3
+struct crow { char name[64], value[64]; int ctl, on, level, focus; };
+struct cday { char icon[24], label[32], temps[32], precip[16]; };
+struct citem { char text[96], detail[64]; };
+struct chit { struct rect r; int row, op, x0, x1; };   /* op: card.c's; x0..x1: a slider's track */
+struct card {
+    int seq, kind, n, voice, ready;             /* voice: a request's (its reply the subtitle where none came); ready: its "ce"
+                                                   came (until then, or after "cx", none shows) */
+    char title[128], subtitle[256];
+    struct crow r[CROWS]; struct cday d[CDAYS]; struct citem it[CITEMS];
+    char btn[CBTNS][40]; int nbtn;              /* its buttons ("cu"), along the bottom */
+    char w_icon[24], w_temp[32], w_detail[96], msg[600];
+    char ikey[40], ikey_shown[40];              /* a message's picture: the one asked for ("ci"), the one in img */
+    struct ui_image img;                        /* (its own, not the image cache's: the words layer draws seldom) */
+    struct chit hit[CHITS]; int nhit;           /* where its controls were drawn (the layer's = ours) */
+};
+
 /* a running timer: end on our clock (active), left in ms (paused) */
 struct wtimer { char name[64]; int total, active; long long end, left; };
 struct words {
@@ -193,6 +216,7 @@ struct scene {
     struct drawer dr;
     struct music m;
     struct words wd;
+    struct card cd;                             /* the card (card.c), drawn on the words layer */
     /* touch */
     int down, x0, y0, x, y, edge, fired, longd, dragging, slide, wtap; long long t0; struct scroller *sc; int sc_drag, sc_axis;   /* slide: on a slider, not decided yet; longd: 2 held long, 1 and taken (or let go of: no tap) */
     unsigned rnd;
@@ -290,6 +314,18 @@ void drawer_close_now(struct scene *s);                        /* gone at once, 
 int  words_msg(struct scene *s, const char *cmd, const char *a);   /* 1: one of its messages (wo wh wr ws tl) */
 int  words_shown(const struct scene *s);                           /* the layer is up over our own screen: its touches */
 void words_tap(struct scene *s, int x, int y);                     /* a tap on it */
+/* text on the layer, as words.c draws it (card.c's too): the platform's width of n bytes, wrapped to maxw at spaces
+ * (lines stored up to max, all counted), drawn at x, y */
+struct wline { const char *a; int n; };
+float words_width(struct scene *s, const char *str, size_t n, float px, int bold);
+int   words_wrap(struct scene *s, const char *t, float px, int bold, float maxw, struct wline *out, int max);
+void  words_put(struct scene *s, struct gfx *g, const char *str, size_t n, float px, int bold, float maxw, float x, float y, uint32_t rgb);
+
+/* card.c */
+int  card_msg(struct scene *s, const char *cmd, const char *a);    /* 1: one of its messages (cx cb cr cw cf cm ci cl cu ce) */
+int  card_image(struct scene *s, const char *key, uint32_t *px, int w, int h);  /* a picture for it: 1 taken (key card...) */
+void card_draw(struct scene *s, struct gfx *g);                    /* into the words layer's buffer, over its shade */
+void card_tap(struct scene *s, int x, int y);                      /* a tap on it: a control, else the card away */
 
 /* music.c */
 void music_view(struct scene *s, float dt, int *moving, long long *due);

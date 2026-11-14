@@ -70,5 +70,6 @@ int  ring_rotation(int set);                /* LEDs the fill's start is turned b
  * bar as stock's does (capture thread, core_lock held).  ring_band_rows: the band's height in rows, 0 off (the screen
  * all the apps'); -1 where the ring is LEDs.  set < 0 reads. */
 void ring_level(int dbfs10);
+void ring_screen_wake(void);            /* the Echo Show's screen on (a card that came, cards.c); a ring has none to wake */
 int  ring_band_rows(int set);
 #endif
