@@ -200,6 +200,21 @@ long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
 
+/* A call's microphone: $HASSMIC_CALL_CAP looped at real-time speed, as the capture (none without it, as on Android) */
+static FILE *callcap; static short callblock[800];
+int  callmic_present(void) { return getenv("HASSMIC_CALL_CAP") != NULL; }
+int  callmic_open(void) { const char *p = getenv("HASSMIC_CALL_CAP"); if (!callcap && p) callcap = fopen(p, "rb"); return callcap ? 0 : -1; }
+int  callmic_read(const void **data)
+{
+    if (!callcap) return -1;
+    size_t n = fread(callblock, 2, 800, callcap);
+    if (n < 800) { memset(callblock + n, 0, (800 - n) * 2); rewind(callcap); }
+    usleep(50000);
+    *data = callblock;
+    return sizeof callblock;
+}
+void callmic_close(void) { if (callcap) fclose(callcap); callcap = NULL; }
+
 /* The Bluetooth speaker's route: nothing to move on the PC; btout.c's sockets and encoder run as on the device */
 int  audio_a2dp_route(int on, uint64_t addr, const char *name) { (void)addr; (void)name; fprintf(stderr, "btout: output %s\n", on ? "to the speaker" : "to the Echo"); return 0; }
 int  audio_a2dp_lost(uint64_t addr) { (void)addr; return 0; }

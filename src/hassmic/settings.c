@@ -4,6 +4,8 @@
 #include "a2dp.h"
 #include "arb.h"
 #include "dropin.h"
+#include "call.h"
+#include "audio.h"
 #include "duck.h"
 #include "https.h"
 #include "ble.h"
@@ -33,6 +35,7 @@ static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
 static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
+static const char *const call_mics[2] = { "call", "assistant" };         /* call_mic_source() 1, 0 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
 /* the aligner's languages first (tools/wakealign/build.sh; main.c speech_locale), then those it has no model for yet,
@@ -102,7 +105,7 @@ static int colour_actual(void)
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -208,6 +211,9 @@ static const struct setting table[NSET] = {
     /* dropin.c keeps them in memory, state/config on disk */
     [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
+    /* call.c keeps it: a call's microphone from Amazon's call pipeline (micHfp) or the assistant's (micAsr); only where
+     * the backend has the first (the Dots' mixer) */
+    [CALL_MIC]    = { "call_mic", "Call microphone", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* https.c keeps it: media from a Home Assistant that serves HTTPS itself (issue #30) */
     [HTTPS_VERIFY] = { "https_verify", "Check HTTPS certificates", "System", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -266,6 +272,7 @@ static int present(enum id i)
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
+    case CALL_MIC: return callmic_present() && dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
     case MULTI_PRESS: return !board.action_combo;               /* the Shows: no action key, the volume pair stands in */
@@ -326,6 +333,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case WAKE_ENGINE: *names = wake_engines; return 3;
     case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
+    case CALL_MIC: *names = call_mics; return 2;
     case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
@@ -400,6 +408,7 @@ int settings_get(const struct setting *s)
     case REQUEST_TEXT: return request_text;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
+    case CALL_MIC: return call_mic_source(-1) ? 0 : 1;
     case SPK_GAIN: return spkgain_get();
     case DUCK: return duck_db;
     case DUCK_OTHERS: return duck_for_others(-1);
@@ -481,6 +490,7 @@ static void put(enum id i, int v)
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
+    case CALL_MIC: call_mic_source(v == 0); break;
     case SPK_GAIN: spkgain_set(v); break;
     case DUCK: duck_db = v; break;
     case DUCK_OTHERS: duck_for_others(v); break;
