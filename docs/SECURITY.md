@@ -9,7 +9,7 @@ What protects an Echo running hassmic, and where that ends. Nobody has audited a
 |---|---|
 | **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out. `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. On the screen models the Kiosk Satellite app too, while "Kiosk Satellite internet access" is on (default; one rule for that app's uid, nothing else of Amazon's or the system's gets out through it). |
 | **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only; with "Kiosk Satellite DLNA renderer" on (off by default), also its DLNA renderer's port (the one the app's own setting names, so any the app picks), from private addresses only and only while the app listens there; the renderer has no login (DLNA has none) |
-| **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port); with "Kiosk Satellite DLNA renderer" on, 1900 (SSDP searches to 239.255.255.250, from private addresses) while the Kiosk Satellite app holds that port and nothing else on the Echo does (looked at every 5 s) |
+| **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio, 28933 and 28934: the phone's SIP and its audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port); with "Kiosk Satellite DLNA renderer" on, 1900 (SSDP searches to 239.255.255.250, from private addresses) while the Kiosk Satellite app holds that port and nothing else on the Echo does (looked at every 5 s) |
 | **In, ICMP** | ping (echo request) from private and link-local addresses only; answers to the Echo's own traffic |
 
 **Kiosk Satellite**, where you install it, is an app you trust like adb. Its update helper runs the app's own code as the shell user, every few minutes, so the app and each update of it can do what an adb shell can, `pm grant` included. It also gets storage and location without asking. The "microphone" and "camera" switches are Android's permissions, no wall against the app itself. Setup and `scripts/kiosk-install.sh` check who signed the APK against a pinned certificate on the PC, before it reaches the Echo; a copy you install by hand and the app's own updates are not checked by this project. The helper's provider is exported with no manifest permission, so another app on the Echo might reach it: install nothing else you do not trust. Ports 2324 and 6053 are open only while the app is installed, its DLNA renderer's only while you switch that on and the renderer listens. Its page on 2324 asks for a login once the app's remote admin password is set (seen on 2026.10.45): set one. Beyond that its pages are the app's own, and this project has not reviewed them.
@@ -99,6 +99,17 @@ hands to Music Assistant, which then pairs by itself) and the older "Sendspin pa
 state until then. Before adoption someone on the network could set a key first and then ask, but that takes the Echo
 from Home Assistant, which you would notice. The token is also in the Echo's log, read over adb, and at the end of
 `scripts/setup.sh`. The settings page never shows it, and its log viewer blanks it.
+
+## Phone
+
+Off by default. On, the Echo registers with one phone system and takes calls only from that system's address (any
+other gets "Forbidden"); every call rings until someone answers on the Echo or from Home Assistant, so a call alone
+never opens the microphone. Calls out go only through that system, which decides what the Echo may reach. The
+extension's password is kept in `state/phone` (readable by hassmic only), sent from the page sealed for this Echo,
+never shown again and in no export; it goes to the phone system only as a digest (MD5, as SIP has it). SIP and the
+call's audio (RTP) are not encrypted, as with most desk phones: anyone on the network who can read its traffic hears
+a call, and anyone who can send from the phone system's address can ring the Echo. Keep the phone system in your own
+network.
 
 ## Arbitration between Echos
 

@@ -407,6 +407,11 @@ const HELP = {
   drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two of your Echos, as Alexa\'s Drop In. One Echo calls another (the ones on the Echos page), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo on the Echos page. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.',
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
+  phone: { icon: 'phone', ha: ['Phone', 'Phone with', 'Phone line', 'Answer phone', 'Hang up phone', 'Phone result', 'the action phone_call'],
+    help: 'The Echo as an extension of your phone system: Asterisk, FreePBX, a Fritz!Box or any other that takes SIP phones. Give it an extension of its own (below), and a doorbell, a desk phone or a softphone can ring it, and it can call them. A call rings, as a Drop In does, until someone answers with the action button, on the screen or from Home Assistant ("Answer phone"); hang up with the action button, "<wake word>, stop", "hang up" or "Hang up phone". Call out from Home Assistant: the action phone_call with the number. Opus (wideband) or G.711 (A-law, mu-law), whichever the phone system offers first. Only the phone system\'s own address can ring the Echo. Do not disturb and the microphones off refuse calls, and a Drop In and a phone call never run at once.',
+    note: 'SIP and its audio go unencrypted, as with most desk phones: use it with a phone system in your own network.',
+    status: () => phoneBox().el },
+  call_mic: { help: 'What the other side of a call (Drop In or the phone) hears from this Echo. Amazon\'s call processing: the microphones as Amazon\'s own calls sent them, with noise reduction, an even level and its echo canceller for calls; a cleaner, steadier voice, a little duller (little over 4 kHz). The assistant\'s: what speech to text gets, through the Echo\'s own gain; brighter, with more of the room. A call running keeps the one it started with, except that switching to the assistant\'s takes effect at once.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
   // not a setting: the System card's Restart button (main.c core_reboot)
@@ -485,6 +490,8 @@ const SUB = {
   bluetooth_speaker_stay_connected: 'Switching it on again is quick',
   drop_in: 'Talk between two of your Echos',
   drop_in_answer: 'How a call connects',
+  phone: 'The Echo as an extension of your phone system (SIP)',
+  call_mic: 'What the other side of a call hears',
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
@@ -495,6 +502,7 @@ const CHOICE_NAMES = {
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
   music_on_screen: { off: 'Off', face: 'In place of the face', home: 'In place of the home app too' },
+  call_mic: { call: 'Amazon\'s call processing', assistant: 'The assistant\'s' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
@@ -1520,7 +1528,7 @@ function buildVolumes(el) {
     btns.forEach((b) => { const on = (b.dataset.v === 'on') === split; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
     oneBox.classList.toggle('hidden', split); sepBox.classList.toggle('hidden', !split);
     for (const x of [...one, ...sep]) x.paint();
-    calls.el.classList.toggle('hidden', !settingValue('drop_in'));       // no calls without Drop In
+    calls.el.classList.toggle('hidden', !settingValue('drop_in') && !settingValue('phone'));       // no calls without Drop In or the phone
   }
   const card = h('div', { class: 'card vol' },
     h('div', { class: 'vol-head' }, h('h3', {}, 'Volume ', saved), h('div', { class: 'seg', role: 'group', 'aria-label': 'Volume' }, btns)),
@@ -3070,6 +3078,90 @@ function massDialog() {
       h('p', { class: 'help' }, 'The token goes only there. An IP address is surer than a name: a name (a .local one above all) goes to whoever answers to it on the network.')));
   m.foot.append(h('button', { onclick: () => m.dlg.close() }, 'Cancel'), go);
   m.show(); tok.focus();
+}
+
+// ---------------------------------------------------------------- the phone (sip.c): its account, its calls
+
+const PHONE_LINE = { off: 'Not registered', connecting: 'Registering…', registered: 'Registered', refused: 'Refused', unreachable: 'Not reachable' };
+let phBox = null;
+
+function phoneBox() {
+  if (!phBox) phBox = { el: h('div', { class: 'ph-box' }) };
+  const ph = state.phone; if (!ph) { phBox.el.replaceChildren(); return phBox; }
+  const acct = !!(ph.server && ph.user);
+  const line = !acct ? 'No account yet' : !ph.on ? 'Off' : PHONE_LINE[ph.line] || ph.line;
+  const sub = !acct ? 'give it the extension your phone system set up for it' : [`${ph.user} at ${ph.server}`, ph.line !== 'registered' && ph.on ? ph.text : null].filter(Boolean).join(' · ');
+  const call = ph.state === 'ringing' ? `Ringing: ${ph.peer}` : ph.state === 'calling' ? `Calling ${ph.peer}…` : ph.state === 'connected' ? `In a call with ${ph.peer}` : null;
+  const b = (label, ic, fn, cls) => h('button', { class: 'small' + (cls ? ' ' + cls : ''), onclick: fn }, ic ? icon(ic) : null, label);
+  const btns = [
+    ph.state === 'ringing' ? b('Answer', 'phone', () => phoneSend('answer'), 'primary') : null,
+    ph.state !== 'idle' ? b('Hang up', null, () => phoneSend('hangup')) : null,
+    ph.state === 'idle' && acct && ph.on ? b('Call…', 'phone', phoneCallDialog) : null,
+    b(acct ? 'Account…' : 'Set up…', 'sliders', phoneDialog),
+  ].filter(Boolean);
+  phBox.el.replaceChildren(
+    h('p', { class: ph.line === 'refused' || ph.line === 'unreachable' ? 'f-bad' : 'f-model' }, h('b', {}, line), sub ? ' · ' + sub : ''),
+    call ? h('p', { class: 'f-model' }, h('b', {}, call)) : null,
+    h('div', { class: 'btns' }, btns));
+  return phBox;
+}
+
+async function phoneSend(what, ...args) {
+  try {
+    const r = (await echo.call('POST', '/api/phone', (ctr) => {
+      if (what !== 'account') return [what, ...args.map((a) => hex(enc.encode(a)))].join(' ');
+      const [server, user, pw] = args;
+      const x = (v) => v ? hex(enc.encode(v)) : '-';
+      if (pw === '-' || pw === '=') return `account ${x(server)} ${x(user)} ${pw}`;
+      const t = enc.encode(pw), p = new Uint8Array(Math.ceil((t.length + 1) / 64) * 64); p.set(t);   // padded: its length stays inside
+      return `account ${x(server)} ${x(user)} ${hex(seal(echo.k, ctr, p))}`;
+    })).json();
+    state.phone = r; phoneBox();
+    if (what === 'account') toast(args[0] ? 'Saved: the Echo registers now' : 'Account removed');
+    return true;
+  } catch (e) { toast(errText(e)); return false; }
+}
+
+function phoneDialog() {
+  const m = modal('Phone account', 'phone'), ph = state.phone || {};
+  const server = h('input', { id: 'ph-server', type: 'text', placeholder: '192.168.1.5', value: ph.server || '', autocomplete: 'off', spellcheck: 'false' });
+  const user = h('input', { id: 'ph-user', type: 'text', placeholder: '70', value: ph.user || '', autocomplete: 'off', spellcheck: 'false' });
+  const pw = h('input', { id: 'ph-pw', type: 'password', placeholder: ph.password ? 'Leave empty to keep it' : 'The extension\'s password', autocomplete: 'new-password' });
+  const go = h('button', { class: 'primary', onclick: async () => {
+    const sv = server.value.trim(), us = user.value.trim(), p = pw.value;
+    if (!sv || !us) { toast('Give the phone system\'s address and the extension'); return; }
+    if (!/^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(sv)) { toast('The address: a host name or IP address, and :port if it is not 5060'); server.focus(); return; }
+    if (!/^[A-Za-z0-9._+*#-]+$/.test(us)) { toast('The extension: letters, digits and . _ + - * # only'); user.focus(); return; }
+    if (/[\x00-\x1f\x7f]/.test(p) || enc.encode(p).length > 127) { toast('That password cannot be used: 127 characters at most, no control characters'); return; }
+    go.disabled = true;
+    if (await phoneSend('account', sv, us, p || (ph.password ? '=' : '-'))) m.dlg.close(); else go.disabled = false;
+  } }, 'Save');
+  const remove = ph.server ? h('button', { onclick: async () => { if (await phoneSend('account', '', '', '-')) m.dlg.close(); } }, 'Remove') : null;
+  m.body.append(
+    h('p', { class: 'help' }, 'Set up an extension for this Echo in your phone system first (Asterisk: a PJSIP endpoint with an AOR and a password; a Fritz!Box: a new IP telephone), then give it here.'),
+    h('div', { class: 'field' }, h('label', { for: 'ph-server' }, 'Phone system'), server,
+      h('p', { class: 'help' }, 'Its address, and :port if it is not 5060. Only this address can ring the Echo.')),
+    h('div', { class: 'field' }, h('label', { for: 'ph-user' }, 'Extension (user name)'), user),
+    h('div', { class: 'field' }, h('label', { for: 'ph-pw' }, 'Password'), pw,
+      h('p', { class: 'help' }, 'Sent sealed for this Echo and kept on it; the page never shows it again.')));
+  m.foot.append(...[remove, h('button', { onclick: () => m.dlg.close() }, 'Cancel'), go].filter(Boolean));
+  m.show(); (ph.server ? pw : server).focus();
+}
+
+function phoneCallDialog() {
+  const m = modal('Call', 'phone-call');
+  const num = h('input', { id: 'ph-num', type: 'text', inputmode: 'tel', placeholder: '60', autocomplete: 'off', spellcheck: 'false' });
+  const go = h('button', { class: 'primary', onclick: async () => {
+    const n = num.value.trim();
+    if (!/^[A-Za-z0-9._+*#-]+$/.test(n)) { toast('A number or extension: digits, letters and . _ + - * # only'); return; }
+    go.disabled = true;
+    if (await phoneSend('call', n)) m.dlg.close(); else go.disabled = false;
+  } }, 'Call');
+  num.onkeydown = (ev) => { if (ev.key === 'Enter') go.click(); };
+  m.body.append(h('div', { class: 'field' }, h('label', { for: 'ph-num' }, 'Number or extension'), num,
+    h('p', { class: 'help' }, 'The Echo calls it through the phone system; answer and talk on the Echo.')));
+  m.foot.append(h('button', { onclick: () => m.dlg.close() }, 'Cancel'), go);
+  m.show(); num.focus();
 }
 
 // ---------------------------------------------------------------- Wi-Fi (wifi.c; root's scripts/device/wifi.sh scans and switches)

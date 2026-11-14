@@ -52,6 +52,9 @@ struct proto {
                                                  * the server goes on with what it has (stop() aborts the run) */
     void (*reply_cut)(void);                    /* may be NULL: the reply playing is cut (flush) while the run goes on: stop
                                                  * fetching it now, not at the server's next chunk */
+    void (*phone_changed)(int state, const char *peer);    /* may be NULL: a phone call's state (PHONE_*), each in turn */
+    void (*phone_result)(const char *result);   /* may be NULL: what came of a phone call this Echo made (phone_results) */
+    void (*phone_line)(int line);               /* may be NULL: the phone's registration (LINE_*) changed */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -226,7 +229,14 @@ void   core_bt_pairing(int on);                             /* the Bluetooth spe
 void   core_dropin(int state, const char *peer, int outgoing);
 void   core_dropin_result(int result, const char *peer, int here);
 void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
+int    core_own_sound(void);                                /* our sounds or a reply play (or are still in the mic): any thread */
 const char *core_dropin_refusal(int incoming);
+/* The phone (sip.c), not the lock: as core_dropin and core_dropin_result (PHONE_*, PHONE_R_*); core_phone_line: the
+ * registration's state (LINE_*).  A call is a call: the ring, the sounds and the listening mode are Drop In's, and only
+ * one of the two runs at a time (call.h call_claim); core_dropin_listen and core_dropin_refusal serve both */
+void   core_phone(int state, const char *peer, int outgoing);
+void   core_phone_result(int result, const char *peer, int here);
+void   core_phone_line(int line);
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
                                                                stdout, which lands in out, or 20 s have passed (then it is

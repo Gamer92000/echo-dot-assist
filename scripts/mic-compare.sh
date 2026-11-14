@@ -34,4 +34,4 @@ adb shell 'kill -TTIN $(pidof hassmic)'; lasp 0
 wait
 adb pull $B/state/capture.raw "$OUT/micAsr.raw" > /dev/null 2>&1
 echo "listening mode: $LISTEN" > "$OUT/info.txt"
-python3 tools/mic-compare.py "$OUT"
+${PYTHON:-python3} tools/mic-compare.py "$OUT"

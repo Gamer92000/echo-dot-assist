@@ -163,6 +163,40 @@ long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
 
+/* micHfp: a stream of its own beside micAsr (the mixer gives each type to one client) */
+static MixerHandle callmic; static int callmic_held;
+int callmic_present(void) { return 1; }
+int callmic_open(void)
+{
+    if (callmic) return 0;
+    callmic = MixerOpenRec("micHfp");
+    if (!callmic) return -1;
+    /* record streams answer -1 to the getters (mixcap.c); micHfp was measured at 16 kHz mono pcm16 (2026-11-13).  Only a
+     * format it does report, and another one, is refused */
+    int rate = (int)MixerGetRate(callmic), ch = (int)MixerGetNumCh(callmic), bits = (int)MixerGetSampleSizeBits(callmic);
+    if ((rate > 0 && rate != CAP_RATE) || (ch > 0 && ch != 1) || (bits > 0 && bits != 16)) {
+        fprintf(stderr, "audio: micHfp is %d Hz, %d ch, %d bits: not ours\n", rate, ch, bits);
+        MixerClose(callmic); callmic = NULL; return -1;
+    }
+    return 0;
+}
+int callmic_read(const void **data)
+{
+    int status = 0; unsigned n = 0;
+    if (!callmic) return -1;
+    if (callmic_held) { MixerReleaseBufRec(callmic); callmic_held = 0; }
+    void *p = MixerGetBufRec(callmic, &status, &n);
+    if (!p) return 0;
+    callmic_held = 1; *data = p;
+    return (int)n;
+}
+void callmic_close(void)
+{
+    if (callmic_held) MixerReleaseBufRec(callmic);
+    if (callmic) MixerClose(callmic);
+    callmic = NULL; callmic_held = 0;
+}
+
 static int always(void) { return 1; }
 void (*audio_earcon_started)(unsigned lead_ms);
 

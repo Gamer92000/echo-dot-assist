@@ -2442,6 +2442,160 @@ Run in this order. Each step says what it proves.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
+- [ ] The Echo as a SIP phone (2026-11-11): an extension of the home's own phone system (Asterisk, a Fritz!Box), for a
+      doorbell intercom and calls between the Echos and desk phones or softphones. Not stock's calling (`commsd`,
+      Amazon's cloud), which stays unmapped. First Drop In's audio moved to `call.c` unchanged (`fake_ha_dropin.py`
+      passes as before: gate, echo suppressor, gain, jitter buffer, playout), with G.711 beside Opus (Sun's g711.c
+      laws, every value within its step; a 63-tap Kaiser FIR 2:1, 300-3400 Hz within 0.1 dB through 8 kHz and back, a
+      5 kHz tone's alias -70 dB: `tests/unit/call_test.c`) and `call_claim` so a phone call and a Drop In never run at
+      once. Then `sip.c`: our own small UA (RFC 3261 over UDP, digest RFC 2617 with `hash.c`'s new MD5, checked against
+      RFC 1321's vectors and RFC 2617 3.5's example), RTP (RFC 3550, symmetric, no RTCP), Opus over RTP (RFC 7587:
+      opus/48000/2 in the SDP, 16 kHz inside; `maxplaybackrate=16000`). Calls in ring until answered (never at once:
+      a call from anywhere on a phone system should not open a room's microphone), only from the server's address.
+      `tests/fake_sip.py`: a fake PBX written from the RFCs, not from sip.c (73 checks: registration through a
+      challenge, a wrong password not flooding, calls in with A-law and with Opus as Asterisk offers it (type 107),
+      a 1 kHz tone played at -19.9 dBFS for -20 sent, the Echo's speech back at -19 dBFS, BYE either way, CANCEL, 603,
+      486 during a call, 480 with do not disturb, 403 from another address; calls out through a 407, ringing, 200,
+      BYE; busy; CANCEL after 180; the page's account).
+      Device (2026-11-11..13, donut, Asterisk 23.5 on the LAN): registered (digest qop=auth, Asterisk's qualify
+      Avail), rings with the doorbell's ring group, calls both ways from Zoiper (G.711) and Linphone (Opus, no
+      transcoding: 3028 frames in, none missing, longest gap 61 ms); the call microphone (entry below) "exactly as I
+      recall" stock's.  `tests/asterisk_real.py`: the same against a throwaway Asterisk container.
+      Open: a Fritz!Box, FreePBX, the Dot 2, Echo 2 and the Shows. Not done: DTMF (RFC 4733), paging
+      (`answer-after`/`Alert-Info` on a setting), transfer, hold, SRTP/TLS, a late offer (an INVITE without SDP: 488
+      now), more than one account, G.722, an "answer at once" setting.
+- [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
+      calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
+      invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock
+      libopus has the encoder on donut, biscuit, radar; 4 symbols more in `stubs/libopus.syms`), XChaCha20-Poly1305
+      under a per-call key (X25519 of ephemeral keys, BLAKE2b keyed with `arb_derive("hassmic drop in 1")`). HA: action
+      `drop_in(target)` (keyed link only), text sensors "Drop In"/"Drop In with", button "End Drop In", listed while
+      the setting `drop_in` is on; `drop_in_answer` auto/ask; page `POST /api/dropin` and a button per member.
+      Blueprint `blueprints/automation/drop_in.yaml` (conversation trigger). The first version asked for
+      manufacturer "Amazon", but HA takes manufacturer and model from `project_name` (`hassmic`, `echo-dot-2`) and
+      ignores field 12, so it found none and HA said "Done" (#20; the reporter's real HA 2026.9.4, three biscuits,
+      called fine with the manufacturer test gone). Then made robust against what HA lets people change and what HA
+      does on errors (all read in HA 2026.10.1's source):
+      - Echos: devices of ESPHome entities and of every `assist_satellite` (`integration_entities('esphome')` first
+        takes the entities of a config entry *titled* "esphome", if any) with manufacturer `hassmic` or `Amazon`
+        (`async_get_manufacturer_model`) or a known model. Their "Drop In" sensor: the sensor whose state is one of
+        `dropin_states`, preferring icon `mdi:phone-in-talk` (kept in the state while unavailable: `entity.py`
+        `__async_calculate_state`), then an id ending in `drop_in`; icon or id alone when the state cannot tell
+        (unavailable, disabled). Others only with all three. Entity ids never needed.
+      - The action: HA registers `esphome.<device_info.name with - as _>_<service>` (`build_service_name`); the device
+        registry's `name` is `friendly_name` as reported, rewritten on every connection (`async_get_or_create` passes
+        `name`), never `name_by_user`. So the slug of `name` (umlauts spelled out like `node_of`), else model + last 3
+        MAC bytes from the `mac` connection (`format_mac`: lowercase). `tests/blueprint_dropin.py` holds every board's
+        project to `hassmic.<slug of default_name>`. Target: the device's `name`, which `dropin_call` runs through
+        `node_of` like the target did (every Drop In build has `name_make`, so name and node agree).
+      - ServiceNotFound is a configuration error that `continue_on_error` does not catch (`script.py`
+        `CONFIGURATION_ERRORS`), and a failed run gives the conversation `None` = "Done" (`conversation/trigger.py`).
+        No template can test for an action (no `has_service`). So the call goes through `automation.trigger` on the
+        automation itself with `variables: dropin_call`: that run makes only the call; `async_trigger` catches
+        ServiceNotFound (and makes a repair naming the action) and HomeAssistantError, and the sentence's run goes on.
+        Run variables beat the automation's `variables` (`ScriptVariables.async_render`), so the call run is told
+        apart by them. Without `this` the action is called directly with `continue_on_error`.
+      - Success: wait (4 s, `ANSWER_MS`) for the source's sensor in calling/ringing/connected, then (5 s) for it to
+        leave calling or the target's to ring; idle again = refused. A refusal within milliseconds can reach HA
+        without any "calling" (the loop thread reports the state it finds), so a refusal is told after 4 s.
+      - Replies 9 per language (a list set by hand with fewer takes English for the rest); the target picked by area
+        (HA's `area_id`: aliases, case, spaces; or slugs with and without umlauts spelled out), then name, floor, a
+        word; the source matching first answers "This is the Echo in …"; of several Echos the idle one with Drop In.
+        Waits read in their own sequence (HA before 2025.4 scoped variables per nested sequence).
+      Checked: `tests/blueprint_dropin.py` (jinja2 sandbox + HA's extensions as stand-ins, HA's `_parse_result`, a
+      runner for the actions incl. ServiceNotFound and state changes in order; 63 checks). And a real HA 2026.10.1
+      (scratch venv, own network namespace) with three `build/hassmic-host` (`unshare -rm` + a bind-mounted
+      `/sys/class/net/wlan0/address` for distinct MACs), one of them the released 2026.10.08.213741 build: by area
+      with the sensor's entity id renamed and the device renamed, German, "this Echo", busy, no Echo, a name given in
+      HA, the old build as caller and callee, do not disturb (refused: "did not go through" after 4.0 s), the callee
+      stopped ("offline" after 4.0 s), and an Echo whose name slugs differently ("…Ł"): first name not found in its
+      own run (repair created), second name called, "Calling Küche" after 4.0 s; no sentence run ended in an error.
+      Calls that start answer in 10-20 ms.
+      Then (same day) what came of a call, told by the Echo, for replies at once and with the reason:
+      - `dropin.c` queues every state and result for the core in order (`ev_push`, drained by the loop's
+        `tell_core`). With one flag and the state the loop found, a refusal within its 20 ms poll (do not disturb on
+        loopback: 1 ms) went idle -> idle: HA never saw "calling" and `core_dropin` played nothing. Now the first
+        invite goes out only after the core was told "calling" (`invited`; `ANSWER_MS` counts from it), so HA always
+        has "calling" first, and calling -> idle plays `SND_CALL_OFF`. A call refused here (not a member, muted,
+        busy) has a result too and plays the same sound (`core_dropin_result`, `here`).
+      - Results (`dropin_results`, the event types): connected, ringing, busy, do_not_disturb, microphones_off,
+        drop_in_off, declined, not_answered (from the callee's refusal words, the same in every build), no_answer
+        (4 s), not_found, busy_here, microphones_off_here, cancelled, failed. HA: event entity "Drop In result"
+        (`KEY_DROPIN_RESULT`, listed with the other Drop In entities). An event entity because its state is the
+        event's time, forced past the last one (`event/__init__.py` `_trigger_event`): every call changes it, the
+        same result twice included, and the blueprint tells this call's from older ones by the state alone; its
+        `event_types` is a capability attribute, kept while unavailable (`entity.py`), so the blueprint finds it by
+        its types whatever its id. Settings page: `result` and `attempt` in the status; a toast says why a call
+        from the page did not connect.
+      - ESPHome action responses, weighed and left out: HA registers `supports_response` (field 4 of
+        ListEntitiesServicesResponse) since 2026.1 (core f306cde, 2025-12-06, aioesphomeapi 43.0.0; STATUS = 100
+        maps to HA's NONE, OPTIONAL/ONLY to the same), and an older HA ignores the field (protobuf, `convert`
+        returns None for unknown values), so registering would not break. But with anything but NONE HA waits for
+        an ExecuteServiceResponse on every call (30 s, `DEFAULT_EXECUTE_SERVICE_TIMEOUT`) and raises when it says
+        `success: false`: existing automations would block or fail where they now go on. And the blueprint's call
+        runs in a run of its own (ServiceNotFound), which `automation.trigger` gives no response back from: the
+        result has to come through an entity anyway, which every HA version has. The HelloRequest's API version would
+        not tell either: aioesphomeapi sent 1.13 both before and with responses, 1.14 only from 2025-12-29.
+      - Blueprint: with "Drop In result" on the source, the first wait (did the action reach the Echo) is 2 s instead
+        of 4 where another action name is left to try ("calling" or a result arrives within moments), 6 s for the
+        last (a slow Wi-Fi must not make a call that started "did not go through"), then up to 6 s for the result,
+        which picks the reply: five more per language (do not disturb, microphones off there, here, not in the
+        network, did not answer). Without it (released builds), the old waits. `tests/blueprint_dropin.py` 81 checks,
+        incl. both kinds as caller and callee and the seconds the waits that run out cost.
+      - `tests/ha_real_dropin.py`: the same in a real HA, reproducible (`--setup`: `build/ha-venv` with
+        homeassistant 2026.10.1 + the requirements of the integrations it loads, from their manifests; run in
+        `unshare -rn` with only `lo`, multicast on it for HA's zeroconf, which fails at start without; http on
+        127.0.0.1 through `.storage/http`; onboarding and the ESPHome config flow through the API; four Echos, one
+        the released 2026.10.08.213741 built from its tag). 26 checks, about 40 s: calls start in 0.01-0.05 s;
+        do not disturb told in 0.03 s ("Hall has do not disturb on"; HA saw the caller's calling then idle), the
+        released caller's the same refusal in 4.01 s as before; a released callee's refusal from this build in
+        0.04 s; this Echo muted 0.02 s; the action under the second name 2.04 s (was 4.0); a stopped callee "offline"
+        in 4.05 s; the only run with an error is the call run under the wrong name.
+      Device (biscuit, PC host as the other end on the LAN, `HASSMIC_ARB_ADDR=192.168.103.255`):
+      - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
+        tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
+        on Voip against -45..-58 on TTS (floor -72). Voip follows MainVolume (+9 dB from 30 to 60). micHfp is the bare
+        mic (floor -46), not a call Tx stream.
+      - Connect 4 ms after the invite (auto). Jitter: micAsr comes in 50 ms blocks, frames leave in bursts of 2-3; a
+        3-frame prebuffer started level with the bursts and stayed a frame ahead: 639 of 802 frames came after their
+        turn. Now 4 frames from the oldest and an underrun conceals without moving on: 0 of 805 missing, 9 waits at the
+        start, longest gap 63-68 ms.
+      - Listening mode on for the whole call froze the canceller before it knew the Voip path: residual -46..-62 in
+        micAsr; off for the whole call -63..-69. Now only while this side talks (`core_dropin_listen`, 1.5 s hangover).
+      - Echo back to the caller, natural speech (OmniVoice, German, 1.5 s pauses), 20 s: first try (80th percentile duck
+        before the gain) sent -47..-55 back; the gain undid the duck (+24 dB at micAsr level), the echo estimate let the
+        far end's onsets through, the room went out at -48 in its pauses (gain on the floor), and an echo tail 14 dB
+        over the room 0.3-1 s after each sentence opened the gate. Now: gain first, then a gate (open only while this
+        side talks, -25 dB else, own sounds -40), echo estimate peak-held 2 dB/s, far level held falling 20 dB/s,
+        3 frames of double talk to pass: gate never opened by the echo, -64 dBFS mean back against -26 for speech.
+        `HASSMIC_DROPIN_TRACE=<file>` writes the gate's inputs per frame.
+      fake_ha_dropin: auto and ask, button / stop / "Auflegen" / HA / page, refusals (DND, off, outside the network, no
+      such name), a vanished peer ends the call after 5 s; every state HA gets in order and each call's result
+      (declined, cancelled, muted here, busy here, no answer after 4.1 s).
+      Echo to Echo (same day, all three on the build): biscuit -> donut from the page, connected 8 ms after the invite,
+      10 s, 509 frames played on each side, 0 missing, longest gap 44-48 ms.
+      Open (device): a talker at the called Echo (does speech open the gate fast
+      enough, is the ARA with listening mode toggled fine), the wake word in VoIP mode, call LED animations' look,
+      the blueprint with real Echos (it ran in a real HA against PC Echos, above), and whether 2 s is enough over a
+      busy Wi-Fi for "calling" to reach HA (the blueprint then tries the second action name only where it differs:
+      never on an Echo with its own name).
+- [~] Calls with Amazon's call microphone (2026-11-13, Echo Dot 3): a user's calls from a Dot 3 sounded dull and full of
+      the room next to a phone's, and worse than stock's Drop In had. micAsr is the ASR path (no NR, no AGC) under our
+      +20..+30 dB gain.  AFE.cfg (`/system/vendor/etc/audio-algorithms/`) has a "Voice" path beside "ASR": VOIP
+      MicPreProcess +6 dB, VAEC, Frequency Masking Lite RES, Recursive Magnitude Estimation NR, Random Filler CNG, FB AGC
+      (target -22 dBFS, +20 dB constant), VOIP Tx Parametric IIR = VOIPTxParametricEQ.cfg (+6 dB peak at 1.9 kHz, -3 dB
+      shelf over 3.5 kHz), Tx limiter; no beamformer.  Its output is **micHfp while a Voip stream is open** (logcat
+      "VoIP mode 1"); without one micHfp is the bare mic (the Drop In entry below saw that case).  micPstn is the bare
+      mic at 8 kHz.  One take on all four streams in call mode, listening mode on, a talker across a kitchen: speech /
+      pauses micRaw -52/-65 dBFS, micAsr -48/-65, micHfp -20/-43, micPstn -52/-65; micHfp 15 dB less over 4 kHz than
+      micAsr.  (An earlier reading of "muffled microphones" was a wrong reference: the bare mic at 30 cm has speech's
+      usual tilt; across the room the room takes 5-8 dB over 4 kHz.)  Calls now send micHfp (`call.c`
+      `callmic_thread`, setting `call_mic`), without micgain, the gate's duck -12 dB.  On the Dot 3 (a SIP call from a
+      phone, a branch with a SIP client on this code): "exactly as I recall" stock's, in G.711 and in Opus.  First try
+      refused the stream: its format getters answer -1.  `fake_ha_dropin.py` 7b: the hall's call microphone (a 700 Hz
+      tone, `HASSMIC_CALL_CAP`) arrives at its own level (-21.8 for -20), switching mid-call goes back to micAsr.
+      Open: Echo to Echo with micHfp on both ends, the -12 dB tuned on a trace, the Dot 2 and Echo 2, a call while
+      music plays.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
       invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock

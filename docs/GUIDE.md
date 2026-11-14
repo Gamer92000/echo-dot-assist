@@ -352,10 +352,87 @@ Calls are refused with do not disturb on, with the microphones off, or with anot
 Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
 Assistant in between.
 
+**Your side's sound.** On the Echo Dot 3, Dot 2 and Echo 2 a call (a Drop In or a phone call) sends what Amazon's own
+calls sent: the front end's call processing, with noise reduction, an even level and an echo canceller made for
+calls. It sounds natural and steady, a little duller than the assistant's stream (little over 4 kHz). "Call
+microphone" (Features) switches back to the assistant's stream, brighter and with more of the room. The Echo Shows and the Echo Input have
+only the assistant's.
+
 **Echo.** The Echo puts Amazon's audio front end into its call mode, whose echo canceller works on the other side's
 voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
 talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the
 one here is clearly louder than the echo of the other: as on a speakerphone, take turns.
+
+## Phone
+
+The Echo as one extension of your phone system: Asterisk, FreePBX, a Fritz!Box, or any other that takes SIP phones.
+A doorbell, a desk phone or a softphone can then ring the Echo, and the Echo can call them. Off by default (Features,
+"Phone").
+
+**Set it up.** Make an extension for the Echo in the phone system, then on the Echo's settings page: Features, Phone
+on, "Set up…": the phone system's address (and `:port` if it is not 5060), the extension and its password. The
+password goes sealed for this Echo and stays on it; the page never shows it again, and it is in no export. "Phone
+line" in Home Assistant (and the page) then says `registered`, or why not: `refused` (the password or the extension
+is wrong; the Echo then tries again only every 5 minutes, so the phone system's fail2ban never sees a flood),
+`unreachable` (no answer, or the name does not resolve), `connecting`, `off`.
+
+For Asterisk with PJSIP, an endpoint like any phone's (names, extension and password are examples):
+
+```ini
+; pjsip.conf
+[echo-kitchen]
+type = aor
+max_contacts = 1
+remove_existing = yes
+qualify_frequency = 30
+
+[echo-kitchen]
+type = auth
+username = echo-kitchen
+password = <a password of its own>
+
+[echo-kitchen]
+type = endpoint
+context = from-internal        ; whatever your phones use: the Echo can call what it allows
+disallow = all
+allow = opus, alaw, ulaw        ; opus: wideband between Echos and softphones; G.711 for everything else
+direct_media = no
+rtp_symmetric = yes
+rewrite_contact = yes
+auth = echo-kitchen
+aors = echo-kitchen
+acl = local-only                ; or a permit for your LAN: the Echo is a phone at home
+```
+
+```ini
+; extensions.conf: ring it as extension 71, and with the doorbell's ring group
+exten => 71,1,Dial(PJSIP/echo-kitchen,40)
+```
+
+Asterisk needs `codec_opus` and `codec_resample` loaded to put an Opus call through to a G.711 phone. A Fritz!Box:
+Telephony › Telephony Devices › Configure New Device › Telephone (with or without answering machine) › LAN/WLAN (IP
+telephone); its user name and password go into the Echo, the Fritz!Box's address is the server.
+
+**A call to the Echo** rings, as a Drop In does that waits for the action button, until someone answers: the action
+button, Answer on the screen of an Echo Show, "Answer phone" in Home Assistant or Answer on the settings page. It rings
+for 60 s at most (the phone system usually gives up first). "Hang up phone" while it rings declines it. Calls are
+refused (busy, or unavailable) during another call or Drop In, with do not disturb on, and with the microphones off.
+Only the phone system's own address can ring the Echo: anything else on the network gets "Forbidden".
+
+**A call from the Echo**: the action `esphome.<echo>_phone_call` with `number:` the extension or number (digits,
+letters and `* # + . _ -`; the phone system decides what it may reach), or Call… on the settings page. "Phone result"
+says what came of it, as Drop In's does: `connected`, `ringing`, `busy`, `declined`, `not_answered`, `not_found`,
+`unavailable`, `no_line` (no account, or the phone off), `busy_here`, `microphones_off_here`, `cancelled` or `failed`.
+
+During a call "Phone" says `connected` and "Phone with" whom ("Portero (60)": the caller's name and number). End it
+with the action button, "<wake word>, stop", "<wake word>, hang up" (as for Drop In), "Hang up phone", or from the
+other end. The call's sound is Drop In's: the same echo handling, volume ("Call volume" with separate volumes) and
+microphone (Amazon's call processing where the Echo has it, "Call microphone"; see Drop In).
+Codecs: Opus (wideband, 16 kHz) or G.711 A-law and mu-law (narrowband, a phone's), whichever comes first in what the
+phone system offers. No DTMF, transfer, hold or paging yet.
+
+Plain SIP and RTP, as with most desk phones: no TLS, no SRTP. Use it with a phone system in your own network, not one
+on the internet. Ports: UDP 28933 (SIP) and 28934 (the call's audio), `-c` in `hassmic.conf`'s `ARGS` to move them.
 
 ## Buttons and light ring
 

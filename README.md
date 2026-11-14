@@ -54,6 +54,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Only the nearest Echo answers           | ✅ decided in the cloud        | ✅ decided on your network                            |
 | Timers, announcements, follow-ups       | ✅                             | ✅                                                    |
 | Drop In between Echos                   | ✅ through Amazon              | ✅ [on your network](docs/GUIDE.md#drop-in)           |
+| Phone calls                             | Alexa calling, through Amazon  | ✅ [through your own phone system](docs/GUIDE.md#phone) (SIP) |
 | Multiroom music                         | Amazon speaker groups          | [Music Assistant](docs/GUIDE.md#music) (Sendspin)     |
 | Bluetooth speaker for your phone        | SBC                            | SBC, AAC, aptX, aptX HD                               |
 | Plays on a Bluetooth speaker            | ✅                             | ✅                                                    |

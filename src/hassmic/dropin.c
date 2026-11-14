@@ -22,28 +22,17 @@
  * stream is the call's keepalive, LOST_MS without one ends it.  The other side's address comes from its message, then
  * from its authenticated audio (an address that changed mid-call follows).
  *
- * Mic: micAsr, what the pipeline gets.  Playback on the mixer's Voip stream, which puts the front end in its call mode
- * (audio.h).  The front end's listening mode only while this side talks (main.c core_dropin_listen says why): its level
- * NEAR_DB over the room's floor and, while the far end plays, over the echo to expect; on with the first such frame,
- * off LISTEN_HANG_MS after the last.  What the echo canceller leaves of the far end would come back to the other side
- * as an echo, so an echo suppressor here ducks the mic by SUPPRESS_DB while the far end plays, unless this side is
- * clearly louder than the echo has been for DOUBLE_TALK_N frames in a row (double talk passes): the echo's level against
- * what we play is held at its peak while the far end talks, falling 2 dB/s.  A percentile of it (the first try) let the
- * echo's onsets through whenever the far end started again after a pause, and took them for this side talking: listening
- * mode then froze the canceller and more came through.  Our own sounds and replies are ducked the same way.  Then
- * the pipeline's gain (micgain.c) goes first, learning the talker only while the far end is quiet: micAsr runs some
- * 30 dB under speech level, and a gain that took the echo's onsets for a talker lifted them by up to 27 dB (2026-10-08).
+ * The audio itself (codec, gate, echo suppressor, jitter buffer, playout) is call.c's, shared with the phone (sip.c);
+ * a call claims it (call_claim) from calling or ringing on, so the Echo is in one call at a time.
  */
 #include "dropin.h"
 #include "arb.h"
-#include "audio.h"
+#include "call.h"
 #include "core.h"
-#include "micgain.h"
 #include "ws.h"
 #include "../third_party/monocypher.h"
 #include <arpa/inet.h>
 #include <errno.h>
-#include <math.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -55,24 +44,7 @@
 #include <time.h>
 #include <unistd.h>
 
-/* libopus: linked from the stock firmware on the device (every model has the encoder), from the system on the PC */
-typedef struct OpusEncoder OpusEncoder;
-typedef struct OpusDecoder OpusDecoder;
-OpusEncoder *opus_encoder_create(int32_t Fs, int channels, int application, int *error);
-int32_t opus_encode(OpusEncoder *st, const int16_t *pcm, int frame_size, unsigned char *data, int32_t max_data_bytes);
-int opus_encoder_ctl(OpusEncoder *st, int request, ...);
-void opus_encoder_destroy(OpusEncoder *st);
-OpusDecoder *opus_decoder_create(int32_t Fs, int channels, int *error);
-int opus_decode(OpusDecoder *st, const unsigned char *data, int32_t len, int16_t *pcm, int frame_size, int decode_fec);
-void opus_decoder_destroy(OpusDecoder *st);
-enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXITY = 4010, OPUS_SET_INBAND_FEC = 4012,
-       OPUS_SET_PACKET_LOSS_PERC = 4014, OPUS_SET_SIGNAL = 4024, OPUS_SIGNAL_VOICE = 3001 };
-
-#define RATE        16000
-#define FRAME       320                 /* 20 ms */
-#define MAXPKT      400                 /* an Opus frame at 24 kbit/s is ~60 bytes */
-#define BITRATE     24000               /* wideband speech; FEC rides inside it */
-#define LOSS_PERC   10                  /* what the encoder plans FEC for: Wi-Fi, no retries on a busy channel */
+#define MAXPKT      CALL_PKT
 #define INVITE_MS   250
 #define ANSWER_MS   4000                /* no word from the callee at all: not there */
 #define RING_MS     30000               /* ask: how long it rings */
@@ -80,39 +52,6 @@ enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXIT
 #define LOST_MS     5000                /* live, no audio for this long: the other Echo is gone */
 /* HASSMIC_DROPIN_TIMES="<answer ms> <lost ms>" (tests: an Echo that vanishes or never answers, without the waits) */
 static int answer_ms = ANSWER_MS, lost_ms = LOST_MS;
-#define JB          32                  /* jitter buffer slots (frames) */
-/* Frames held before playing.  micAsr comes in 50 ms blocks, so frames leave the other Echo two or three at a time
- * every 50 ms: three frames held (the first try) let the playout catch up with every burst and run a frame ahead of
- * arrivals for the rest of the call (2026-10-08, biscuit: 639 of 802 frames came after their turn, longest gap 64 ms).
- * Four from the oldest, and an underrun stretches (concealment without moving on) until the depth suits the link */
-#define PREBUF      4
-#define MAXBUF      12                  /* more than this waiting (clock drift, a stall): skip ahead */
-#define QUEUE_US    40000               /* what may wait in the mixer's ring */
-#define PLC_FRAMES  5                   /* loss concealment for this long, silence after */
-#define REF_N       64                  /* played frames remembered for the echo suppressor */
-/* How long what we play stays in the mic stream, from when our queue says it plays: the mixer's own latency, speaker,
- * room, canceller.  300 ms (the first guess) ended before the echo's tail did: the tail then counted as this side
- * talking and held the gate open through the other side's pauses (2026-10-08, biscuit, natural speech) */
-#define ECHO_MS     600
-#define FAR_DB      -55.0f              /* the far end talks */
-#define SUPPRESS_DB -25.0f              /* the room, and the echo, while this side does not talk */
-#define SUPPRESS_OWN_DB -40.0f          /* our own sounds (the connect chime came back at -50 dBFS ducked by 25) */
-#define DOUBLE_TALK_DB 6.0f             /* the near end this much over the echo estimate passes... */
-#define DOUBLE_TALK_N 3                 /* ...for this many frames in a row: an echo's onset is shorter */
-#define NEAR_DB     9.0f                /* this side talks: this far over the room's floor */
-/* ...and at least this loud in micAsr.  An empty room's floor is -74 dBFS: sounds of -65..-70 passed NEAR_DB, opened the
- * gate and got the speech gain (+24 dB) put on them: the far Echo sent -40..-54 dBFS of amplified room noise, which the
- * other end took for the far end talking (wake word ignored, its listening mode never on: STT heard nothing; trace of a
- * call with an empty master bedroom, 2026-10-15).  Quiet speech in micAsr is -55 and up */
-#define NEAR_MIN_DB -58.0f
-/* The far end talks when it plays this far over its own floor (what it sent in its pauses: the noise of its room
- * after its gain, -88..-38 dBFS in that call), and over FAR_DB: an older build on the other side still sends that noise */
-#define FAR_OVER_DB 25.0f
-/* What we play, held after it stops and falling 20 dB/s: the echo's tail outlasts ECHO_MS.  In every pause of the other
- * side a tail 14 dB over the room came 0.3 to 1 s after its last word and passed for this side talking (trace,
- * 2026-10-08).  A reply 0.5 s after the other side stops passes at -48 dBFS in micAsr, a quiet one after a second */
-#define FAR_FALL    0.4f
-#define LISTEN_HANG_MS 1500
 
 enum { M_INVITE = 1, M_ACCEPT, M_RINGING, M_REFUSE, M_BYE };
 const char *const dropin_states[4] = { "idle", "calling", "ringing", "connected" };
@@ -121,7 +60,6 @@ const char *const dropin_results[DROPIN_NRESULTS] = { "connected", "ringing", "b
                                                       "microphones_off_here", "cancelled", "failed" };
 
 static pthread_mutex_t dl = PTHREAD_MUTEX_INITIALIZER;   /* everything below; taken after core_lock, before arb's */
-static pthread_cond_t live_cond = PTHREAD_COND_INITIALIZER;
 static atomic_int notify;                                 /* the loop tells the core (core_dropin): callers may hold core_lock */
 static int sock = -1, running, enabled = 1, ask;
 static uint16_t my_port;
@@ -134,19 +72,12 @@ static struct {
     uint32_t ip; uint16_t port;                         /* the other Echo's audio address (network byte order ip) */
     uint8_t esk[32], epk[32], key[32];
     long long since, sig_at, rx_at, live_at;
-    uint32_t tx_seq;
-    unsigned rx, lost, late, played;                    /* frames in; played without their packet; arrived after their turn */
-    long long gap_max, arr_at;                          /* the longest wait between two packets, ms */
-} c;
-static uint32_t play_next;                              /* the playout's next frame, for counting late ones */
+    int media;                                          /* call.c's generation while connected, -1 before */
+} c = { .media = -1 };
 static struct { int left; long long at; uint8_t to[8]; uint8_t p[ARB_MSG_MAX]; size_t n; } bye;
 /* Calls that ended: an invite the caller repeated before it heard of the end (a decline, a hang-up while it rang) must
  * not start the call again */
 static uint8_t ended[4][8]; static unsigned ended_n;
-static struct slot { uint32_t seq; int len; uint8_t d[MAXPKT]; } jb[JB];
-static uint32_t jb_hi, jb_lo; static int jb_any;      /* the newest frame in, the first of the call */
-static struct { long long t; float db; } ref[REF_N];
-static unsigned ref_n;
 /* What the core is told, in order, by the loop (tell_core): every state a call passes through and what came of every
  * call this Echo made.  With only the state the loop found then (the first version), a call refused within the loop's
  * 20 ms (the other Echo in do not disturb, on the same LAN) went from idle to idle: Home Assistant never saw "calling",
@@ -160,13 +91,6 @@ static long long now_ms(void)
 {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
-}
-
-static float level_db(const int16_t *s, size_t n)
-{
-    double sum = 0;
-    for (size_t i = 0; i < n; i++) sum += (double)s[i] * s[i];
-    return (float)(10 * log10(sum / (n ? n : 1) / (32768.0 * 32768.0) + 1e-10));
 }
 
 /* dl held: a state for the core (-1: none) and what came of the call this Echo made (result -1: nothing yet; here: it
@@ -237,13 +161,14 @@ static int derive(const uint8_t peer_epk[32])
     return 0;
 }
 
+static void send_audio(const uint8_t *frame, size_t len, uint32_t seq, void *arg);
+
 static void go_live(long long now)
 {
     ev_push(DROPIN_LIVE, c.node, c.outgoing, c.outgoing ? DROPIN_R_CONNECTED : -1, 0);
-    c.state = DROPIN_LIVE; c.live_at = c.rx_at = now; c.tx_seq = 0; c.rx = c.lost = c.late = c.played = 0; c.gap_max = c.arr_at = 0; play_next = 0;
-    memset(jb, 0, sizeof jb); jb_any = 0; ref_n = 0; memset(ref, 0, sizeof ref);
+    c.state = DROPIN_LIVE; c.live_at = c.rx_at = now;
+    c.media = call_begin(CALL_DROPIN, CODEC_OPUS, send_audio, NULL);
     fprintf(stderr, "drop in: connected with %s\n", c.node);
-    pthread_cond_broadcast(&live_cond);
 }
 
 /* result: what came of a call this Echo made that had not connected (ignored for any other) */
@@ -251,9 +176,12 @@ static void end_call(const char *why, int tell, int result)
 {
     if (c.state == DROPIN_IDLE) return;
     ev_push(DROPIN_IDLE, "", c.outgoing, c.state == DROPIN_CALLING && c.outgoing ? result : -1, 0);
-    if (c.state == DROPIN_LIVE) fprintf(stderr, "drop in: ended with %s after %lld s (%s); %u frames in, %u played, %u of them missing "
-                                        "(%u came too late), longest gap %lld ms\n", c.node, (now_ms() - c.live_at) / 1000, why, c.rx, c.played,
-                                        c.lost, c.late, c.gap_max);
+    if (c.state == DROPIN_LIVE) {
+        struct call_stats st; call_stats(&st); call_end(c.media); c.media = -1;
+        fprintf(stderr, "drop in: ended with %s after %lld s (%s); %u frames in, %u played, %u of them missing "
+                "(%u came too late), longest gap %lld ms\n", c.node, (now_ms() - c.live_at) / 1000, why, st.rx, st.played,
+                st.lost, st.late, st.gap_max);
+    }
     else fprintf(stderr, "drop in: %s %s: %s\n", c.outgoing ? "call to" : "call from", c.node, why);
     if (tell) {
         bye.n = msg(bye.p, M_BYE, why); memcpy(bye.to, c.peer, 8);
@@ -262,7 +190,7 @@ static void end_call(const char *why, int tell, int result)
     memcpy(ended[ended_n++ % 4], c.id, 8);
     c.state = DROPIN_IDLE; c.gen++; c.keyed = 0; c.rang = 0;
     crypto_wipe(c.esk, sizeof c.esk); crypto_wipe(c.key, sizeof c.key);
-    pthread_cond_broadcast(&live_cond);
+    call_release(CALL_DROPIN);
 }
 
 static void fresh_call(const uint8_t peer[8], const char *node, uint32_t ip, int outgoing)
@@ -354,6 +282,7 @@ int dropin_call(const char *target, char *err, size_t errsz)
     else if (!enabled) { snprintf(err, errsz, "Drop In is off on this Echo"); r = DROPIN_R_FAILED; }
     else if (no) { snprintf(err, errsz, "%s", no); r = DROPIN_R_MUTED_HERE; }
     else if (c.state) { snprintf(err, errsz, "already in a Drop In with %s", c.node); r = DROPIN_R_BUSY_HERE; }
+    else if (call_claim(CALL_DROPIN)) { snprintf(err, errsz, "already in a phone call"); r = DROPIN_R_BUSY_HERE; }
     if (r >= 0) { ev_push(-1, node, 1, r, 1); pthread_mutex_unlock(&dl); return -1; }
     fresh_call(id, node, ip, 1);
     ws_random(c.id, 8);
@@ -418,15 +347,16 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
         }
         { int old = 0; for (int i = 0; i < 4; i++) old |= !memcmp(ended[i], id, 8);
           if (old) break; }                             /* a late copy of an invite for a call that is over */
-        if (!enabled || no || c.state || !port || !node[0]) {
-            const char *why = !enabled ? "Drop In is off there" : no ? no : c.state ? "busy in another Drop In" : "no address";
+        if (!enabled || no || c.state || !port || !node[0] || call_claim(CALL_DROPIN)) {
+            /* in a phone call: busy, in the words every build with Drop In knows */
+            const char *why = !enabled ? "Drop In is off there" : no ? no : c.state || (port && node[0]) ? "busy in another Drop In" : "no address";
             fprintf(stderr, "drop in: call from %s refused: %s\n", node[0] ? node : "an Echo", why);
             send_to(from, id, M_REFUSE, why);
             break;
         }
         fresh_call(from, node, ip, 0);
         memcpy(c.id, id, 8); c.port = htons((uint16_t)port);
-        if (derive(epk)) { send_to(from, id, M_REFUSE, "no key"); c.state = DROPIN_IDLE; break; }
+        if (derive(epk)) { send_to(from, id, M_REFUSE, "no key"); c.state = DROPIN_IDLE; call_release(CALL_DROPIN); break; }
         if (ask) { c.state = DROPIN_RINGING; ev_push(DROPIN_RINGING, c.node, 0, -1, 0);
                    fprintf(stderr, "drop in: %s calls, ringing until the action button\n", node); send_msg(M_RINGING, NULL); }
         else { fprintf(stderr, "drop in: %s drops in\n", node); answer(); }
@@ -457,208 +387,43 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
     crypto_wipe(epk, sizeof epk);
 }
 
-/* ---------------------------------------------------------------- audio out: the mic */
+/* ---------------------------------------------------------------- audio */
 
-/* The echo suppressor's and the gain's state, and the encoder: the capture thread's own */
-static OpusEncoder *enc;
-static int enc_gen = -1;
-static struct micgain gain;
-static float es_c, es_g;                /* echo against what we play, dB (peak held); the gain applied, linear */
-static int dt_n;                        /* frames in a row over the echo estimate */
-static float far_hold;                  /* what we play, held: falls FAR_FALL dB a frame */
-static float far_floor;                 /* the quietest the far end has played lately (dl): drops at once, rises 1.5 dB/s */
-static float floor_db;                  /* the room in micAsr */
-static long long near_until;            /* this side talked until then (+ LISTEN_HANG_MS) */
-static int listen_on;                   /* what we last asked of core_dropin_listen */
-static long long listen_at;
-static int16_t mic[FRAME]; static size_t mic_n;
-
-static float far_db(long long now)       /* the loudest we played that can still be in the mic stream */
+/* call.c's capture side: a frame encoded, sealed and sent (no lock of call.c's held) */
+static void send_audio(const uint8_t *frame, size_t len, uint32_t seq, void *arg)
 {
-    float m = -100;
-    for (unsigned i = 0; i < REF_N; i++) if (ref[i].t && ref[i].t <= now && now - ref[i].t < ECHO_MS && ref[i].db > m) m = ref[i].db;
-    return m;
-}
-
-static int far_voice(float db, float floor)     /* a level of the far end that is a voice, not its room's noise */
-{
-    return db > FAR_DB && db > floor + FAR_OVER_DB;
-}
-
-float dropin_far_level(void)
-{
-    pthread_mutex_lock(&dl);
-    float r = c.state == DROPIN_LIVE ? far_db(now_ms()) : -100;
-    pthread_mutex_unlock(&dl);
-    return r;
-}
-
-int dropin_far_talking(void)
-{
-    pthread_mutex_lock(&dl);
-    int r = c.state == DROPIN_LIVE && far_voice(far_db(now_ms()), far_floor);
-    pthread_mutex_unlock(&dl);
-    return r;
-}
-
-static void send_frame(const int16_t *pcm, int own)
-{
-    uint8_t pkt[17 + MAXPKT + 16], op[MAXPKT], nonce[24] = { 0 }, key[32]; struct sockaddr_in to; int gen;
+    uint8_t pkt[17 + MAXPKT + 16], nonce[24] = { 0 }, key[32]; struct sockaddr_in to;
+    (void)arg;
+    if (len > MAXPKT) return;
     pthread_mutex_lock(&dl);
     if (c.state != DROPIN_LIVE || !c.keyed || !c.port) { pthread_mutex_unlock(&dl); return; }
-    gen = c.gen;
-    float far = far_db(now_ms()), ffloor = far_floor;
     memcpy(key, c.key, 32);
     memcpy(pkt, "HMD1", 4); memcpy(pkt + 4, c.id, 8); pkt[12] = (uint8_t)!c.outgoing;
-    uint32_t seq = c.tx_seq++;
     for (int i = 0; i < 4; i++) pkt[13 + i] = (uint8_t)(seq >> 8 * i);
     memset(&to, 0, sizeof to); to.sin_family = AF_INET; to.sin_addr.s_addr = c.ip; to.sin_port = c.port;
     pthread_mutex_unlock(&dl);
-
-    if (enc_gen != gen) {                           /* a new call: a fresh encoder, gain and suppressor */
-        int e = 0;
-        if (enc) opus_encoder_destroy(enc);
-        enc = opus_encoder_create(RATE, 1, OPUS_APPLICATION_VOIP, &e);
-        if (!enc) { fprintf(stderr, "drop in: no Opus encoder (%d)\n", e); crypto_wipe(key, sizeof key); return; }
-        opus_encoder_ctl(enc, OPUS_SET_BITRATE, BITRATE); opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC, 1);
-        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
-        opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
-        micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, 1);
-        es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = -70; near_until = 0; listen_on = 0; listen_at = 0; enc_gen = gen;
-    }
-    int16_t f[FRAME];
-    memcpy(f, pcm, sizeof f);
-    /* echo suppression: the far end talks and the mic is not clearly louder than its echo has been */
-    float m = level_db(f, FRAME), target = 1; long long now = now_ms(); int farend, near;
-    far_hold = far > far_hold - FAR_FALL ? far : far_hold - FAR_FALL;
-    farend = far_voice(far_hold, ffloor);
-    int over = farend && m >= far_hold + es_c + DOUBLE_TALK_DB;
-    dt_n = over ? dt_n + 1 : 0;
-    if (farend && !own && dt_n < DOUBLE_TALK_N) {       /* echo, as far as we can tell (not our own sounds): its peak */
-        float x = m - far_hold;
-        es_c = x > es_c ? x : es_c - 0.04f;
-        if (es_c < -60) es_c = -60;
-        if (es_c > 0) es_c = 0;
-    }
-    floor_db = m < floor_db ? (m > -90 ? m : -90) : floor_db + 0.03f;     /* drops at once, rises 1.5 dB/s */
-    near = !own && m > floor_db + NEAR_DB && m > NEAR_MIN_DB && (!farend || dt_n >= DOUBLE_TALK_N);
-    /* A gate: open while this side talks (and LISTEN_HANG_MS after, unless the far end plays), else ducked.  Ducked only
-     * while the far end played (the first try), the gain lifted the room in its pauses from -72 to -48 dBFS while the
-     * rest went out at -70: hiss that came and went with every sentence of the other side (2026-10-08) */
-    if (own) target = powf(10, SUPPRESS_OWN_DB / 20);
-    else if (!near && (farend || now >= near_until)) target = powf(10, SUPPRESS_DB / 20);
-    /* the gain first: after the ducking it would give the 25 dB back (+24 dB at micAsr's level, measured) */
-    gain.hold = own || farend;                          /* the talker's level is learnt while the other side is quiet */
-    micgain_run(&gain, f, f, FRAME);
-    float step = (target - es_g) / FRAME;              /* within a frame: a word's onset is not cut */
-    for (int i = 0; i < FRAME; i++) { if ((step < 0 && es_g > target) || (step > 0 && es_g < target)) es_g += step; f[i] = (int16_t)(f[i] * es_g); }
-    if (near) near_until = now + LISTEN_HANG_MS;
-    int want = now < near_until;
-    if (want != listen_on && now - listen_at >= 250) { listen_on = want; listen_at = now; core_dropin_listen(want); }
-    /* HASSMIC_DROPIN_TRACE=<file>: the gate's inputs and decisions per frame, for tuning on a device (export it in
-     * hassmic.conf): ms, mic dB, far dB, echo estimate, floor, this side talks, own sound, double talk run, gate, gain */
-    { static FILE *tr; if (!tr && getenv("HASSMIC_DROPIN_TRACE")) tr = fopen(getenv("HASSMIC_DROPIN_TRACE"), "w");
-      if (tr) { fprintf(tr, "%lld %.1f %.1f %.1f %.1f %d %d %d %.2f %.1f\n", now, m, far, es_c, floor_db, near, own, dt_n, target, gain.gain_db); fflush(tr); } }
-    int32_t len = opus_encode(enc, f, FRAME, op, sizeof op);
-    if (len <= 0) { crypto_wipe(key, sizeof key); return; }
     memcpy(nonce, pkt + 4, 13);
-    crypto_aead_lock(pkt + 17, pkt + 17 + len, key, nonce, pkt, 17, op, (size_t)len);
+    crypto_aead_lock(pkt + 17, pkt + 17 + len, key, nonce, pkt, 17, frame, len);
     crypto_wipe(key, sizeof key);
-    if (sendto(sock, pkt, (size_t)(17 + len + 16), 0, (struct sockaddr *)&to, sizeof to) < 0 && errno != EAGAIN) {
+    if (sendto(sock, pkt, 17 + len + 16, 0, (struct sockaddr *)&to, sizeof to) < 0 && errno != EAGAIN) {
         static long long logged;
         if (now_ms() - logged > 5000) { logged = now_ms(); fprintf(stderr, "drop in: send: %s\n", strerror(errno)); }
     }
 }
 
-void dropin_mic(const int16_t *pcm, size_t n, int own)
-{
-    if (!running || dropin_status(NULL, 0) != DROPIN_LIVE) { mic_n = 0; return; }
-    while (n) {
-        size_t k = FRAME - mic_n < n ? FRAME - mic_n : n;
-        memcpy(mic + mic_n, pcm, k * 2); mic_n += k; pcm += k; n -= k;
-        if (mic_n == FRAME) { send_frame(mic, own); mic_n = 0; }
-    }
-}
-
-/* ---------------------------------------------------------------- audio in */
-
 static void on_audio(const uint8_t *p, size_t n, const struct sockaddr_in *from)
 {
-    uint8_t nonce[24] = { 0 }; uint32_t seq = 0;
+    uint8_t nonce[24] = { 0 }, frame[MAXPKT]; uint32_t seq = 0; int media;
     if (n < 17 + 1 + 16 || n > 17 + MAXPKT + 16 || memcmp(p, "HMD1", 4)) return;
     for (int i = 0; i < 4; i++) seq |= (uint32_t)p[13 + i] << 8 * i;
     pthread_mutex_lock(&dl);
     if (c.state != DROPIN_LIVE || !c.keyed || memcmp(p + 4, c.id, 8) || p[12] != (uint8_t)c.outgoing) { pthread_mutex_unlock(&dl); return; }
-    if (jb_any && (int32_t)(seq - jb_hi) < -JB) { pthread_mutex_unlock(&dl); return; }          /* far too old */
-    struct slot *s = &jb[seq % JB];
     memcpy(nonce, p + 4, 13);
-    if (crypto_aead_unlock(s->d, p + n - 16, c.key, nonce, p, 17, p + 17, n - 17 - 16)) { pthread_mutex_unlock(&dl); return; }
-    s->seq = seq; s->len = (int)(n - 17 - 16);
-    if (!jb_any || (int32_t)(seq - jb_hi) > 0) jb_hi = seq;
-    if (!jb_any || (int32_t)(seq - jb_lo) < 0) jb_lo = seq;
-    long long now = now_ms();
-    if (c.arr_at && now - c.arr_at > c.gap_max) c.gap_max = now - c.arr_at;
-    if (jb_any && (int32_t)(seq - play_next) < 0) c.late++;
-    jb_any = 1; c.rx++; c.rx_at = c.arr_at = now;
+    if (crypto_aead_unlock(frame, p + n - 16, c.key, nonce, p, 17, p + 17, n - 17 - 16)) { pthread_mutex_unlock(&dl); return; }
+    c.rx_at = now_ms(); media = c.media;
     c.ip = from->sin_addr.s_addr; c.port = from->sin_port;     /* authenticated: where it is now */
     pthread_mutex_unlock(&dl);
-}
-
-/* The playout thread: one frame per 20 ms into the Voip stream, from the jitter buffer, with Opus's FEC and loss
- * concealment for what is missing, silence before the first frame and after a long gap */
-static void *playout(void *arg)
-{
-    (void)arg;
-    for (;;) {
-        pthread_mutex_lock(&dl);
-        while (c.state != DROPIN_LIVE) pthread_cond_wait(&live_cond, &dl);
-        int gen = c.gen; long long t0 = now_ms();
-        far_floor = -70;
-        pthread_mutex_unlock(&dl);
-        int e = 0, open = voip_open(RATE, 1) == 0, started = 0, missing = 0, skipped = 0, stretched = 0;
-        OpusDecoder *dec = opus_decoder_create(RATE, 1, &e);
-        if (!open) fprintf(stderr, "drop in: cannot open the Voip stream\n");
-        if (!dec) fprintf(stderr, "drop in: no Opus decoder (%d)\n", e);
-        uint32_t next = 0;
-        for (;;) {
-            uint8_t pkt[MAXPKT]; int len = 0, fec = 0; int16_t pcm[FRAME];
-            while (open && voip_queued_us() > QUEUE_US) usleep(4000);
-            pthread_mutex_lock(&dl);
-            if (c.state != DROPIN_LIVE || c.gen != gen) { pthread_mutex_unlock(&dl); break; }
-            if (!started && jb_any && (jb_hi - jb_lo >= PREBUF - 1 || now_ms() - t0 > 300)) { started = 1; next = jb_lo; }
-            if (started && (int32_t)(jb_hi - next) > MAXBUF) { next = jb_hi - (PREBUF - 1); skipped++; }
-            if (started) {
-                struct slot *s = &jb[next % JB], *s1 = &jb[(next + 1) % JB];
-                if (s->len && s->seq == next) { len = s->len; memcpy(pkt, s->d, (size_t)len); }
-                else if ((int32_t)(jb_hi - next) <= 0) stretched++;         /* nothing newer yet: wait, concealing */
-                else if (s1->len && s1->seq == next + 1) { len = s1->len; memcpy(pkt, s1->d, (size_t)len); fec = 1; }
-                if (len || (int32_t)(jb_hi - next) > 0) {                  /* played, or lost for good: on to the next */
-                    if (!len || fec) c.lost++;
-                    s->len = 0;
-                    next++; c.played++; play_next = next;
-                }
-            }
-            pthread_mutex_unlock(&dl);
-            int got = 0;
-            if (dec && len) got = opus_decode(dec, pkt, len, pcm, FRAME, fec);
-            else if (dec && started && missing < PLC_FRAMES) got = opus_decode(dec, NULL, 0, pcm, FRAME, 0);
-            missing = len ? 0 : missing + 1;
-            if (got != FRAME) memset(pcm, 0, sizeof pcm);
-            long long q = open ? voip_queued_us() : 0;
-            if (open && voip_write(pcm, sizeof pcm) < 0) { fprintf(stderr, "drop in: the Voip stream failed\n"); voip_close(); open = 0; }
-            if (!open) usleep(20000);
-            pthread_mutex_lock(&dl);
-            float pdb = level_db(pcm, FRAME);
-            ref[ref_n++ % REF_N].t = now_ms() + q / 1000; ref[(ref_n - 1) % REF_N].db = pdb;   /* when it plays */
-            far_floor = pdb < far_floor ? (pdb > -90 ? pdb : -90) : far_floor + 0.03f;
-            pthread_mutex_unlock(&dl);
-        }
-        if (skipped || stretched) fprintf(stderr, "drop in: playout skipped ahead %d times (more than %d ms waiting), waited %d times for a late frame\n",
-                                          skipped, MAXBUF * 20, stretched);
-        if (open) voip_close();
-        if (dec) opus_decoder_destroy(dec);
-    }
-    return NULL;
+    call_rx(media, seq, frame, n - 17 - 16);
 }
 
 /* ---------------------------------------------------------------- the loop: audio in, retries, timeouts */
@@ -718,7 +483,7 @@ int dropin_start(int port)
     running = 1;
     if (pthread_create(&t, NULL, loop, NULL)) { running = 0; return -1; }
     pthread_detach(t);
-    if (!pthread_create(&t, NULL, playout, NULL)) pthread_detach(t);
+    if (call_start()) fprintf(stderr, "drop in: no playout thread\n");
     fprintf(stderr, "drop in: port %d\n", port);
     return 0;
 }

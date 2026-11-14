@@ -51,8 +51,13 @@
  *   music assistant  DeviceCapabilitiesResponse names our Sendspin client id with PAIRING_TOKEN, and the token goes
  *                    to Home Assistant on request over the keyed connection: Music Assistant pairs with it by itself
  *                    (send_device_caps, send_sendspin_token).  The diagnostic text sensor stays for older ones
+ *   phone            the action "phone_call" (esphome.<node>_phone_call, number: an extension) calls through the
+ *                    phone system (sip.c); "Phone" says idle / calling / ringing / connected, "Phone with" whom
+ *                    ("Portero (60)"), "Phone line" whether the account is registered; the buttons "Answer phone" and
+ *                    "Hang up phone", the event entity "Phone result" (phone_results).  Listed while the feature is on
  *   volumes          the media player's volume is the music's (Home Assistant's media too); with separate volumes the
- *                    numbers "Assistant volume", "Sounds volume", "Timer volume" and "Call volume" (with Drop In) hold
+ *                    numbers "Assistant volume", "Sounds volume", "Timer volume" and "Call volume" (with Drop In or
+ *                    the phone) hold
  *                    the others (main.c), each only while that kind has a volume of its own rather than following the
  *                    music's
  */
@@ -78,6 +83,7 @@
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
+#include "sip.h"
 #include "settings.h"
 #include "ble.h"
 #include "ring.h"
@@ -153,7 +159,8 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
-       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST };
+       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST,
+       KEY_PHONE_SERVICE, KEY_PHONE_STATE, KEY_PHONE_PEER, KEY_PHONE_LINE, KEY_PHONE_ANSWER, KEY_PHONE_END, KEY_PHONE_RESULT };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -425,6 +432,9 @@ static void send_setting(int key)       /* lock held */
         pb_float(&b, 2, (float)total); pb_uint(&b, 3, !on); send_state(SENSOR_STATE, &b); } break;
     case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: { PB(t, 128); char peer[64]; int st = dropin_status(peer, sizeof peer);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_DROPIN_STATE ? dropin_states[st] : peer); send_state(TEXT_SENSOR_STATE, &t); } break;
+    case KEY_PHONE_STATE: case KEY_PHONE_PEER: case KEY_PHONE_LINE: { PB(t, 160); char peer[96]; int st = sip_status(peer, sizeof peer);
+        pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_PHONE_STATE ? phone_states[st] : key == KEY_PHONE_PEER ? peer : phone_lines[sip_line()]);
+        send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: { PB(t, sizeof last_heard + 16);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_LAST_HEARD ? last_heard : last_reply); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LIGHT: {
@@ -620,12 +630,15 @@ static int listed(int key)
     case KEY_LUX: return have_light && settings_on("light_sensor");
     case KEY_LIGHT: return ring_custom();
     case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
-    case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in"))) return 0;    /* calls only with Drop In */
+    case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in")) && !(sip_running() && settings_on("phone"))) return 0;   /* calls only with Drop In or the phone */
         /* fall through */
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME:       /* one that follows the music has none */
         return settings_on("separate_volumes") && !core_kind_linked(key - KEY_ASSIST_VOLUME, -1);
     case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: case KEY_DROPIN_RESULT:
         return dropin_running() && settings_on("drop_in");
+    case KEY_PHONE_SERVICE: case KEY_PHONE_STATE: case KEY_PHONE_PEER: case KEY_PHONE_LINE: case KEY_PHONE_ANSWER: case KEY_PHONE_END:
+    case KEY_PHONE_RESULT:
+        return sip_running() && settings_on("phone");
     default: return 1;
     }
 }
@@ -746,6 +759,26 @@ static void send_setting_entities(void)
         { PB(b, 512); pb_str(&b, 1, "drop_in_result"); pb_fixed32(&b, 2, KEY_DROPIN_RESULT); pb_str(&b, 3, "Drop In result");
           pb_str(&b, 5, "mdi:phone-check");
           for (int i = 0; i < DROPIN_NRESULTS; i++) pb_str(&b, 9, dropin_results[i]);
+          send_msg(LIST_EVENT, &b); }
+    }
+    /* The phone (sip.c): "Phone with" first, as Drop In's */
+    if (listed(KEY_PHONE_SERVICE)) {
+        { PB(b, 256); PB(a, 48); pb_str(&b, 1, "phone_call"); pb_fixed32(&b, 2, KEY_PHONE_SERVICE);
+          pb_str(&a, 1, "number"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&b, 5, "Call a number (an extension) through the phone system"); send_msg(LIST_SERVICE, &b); }
+        { PB(b, 128); pb_str(&b, 1, "phone_with"); pb_fixed32(&b, 2, KEY_PHONE_PEER); pb_str(&b, 3, "Phone with");
+          pb_str(&b, 5, "mdi:card-account-phone"); send_msg(LIST_TEXT_SENSOR, &b); }
+        { PB(b, 128); pb_str(&b, 1, "phone"); pb_fixed32(&b, 2, KEY_PHONE_STATE); pb_str(&b, 3, "Phone");
+          pb_str(&b, 5, "mdi:phone"); send_msg(LIST_TEXT_SENSOR, &b); }
+        { PB(b, 128); pb_str(&b, 1, "phone_line"); pb_fixed32(&b, 2, KEY_PHONE_LINE); pb_str(&b, 3, "Phone line");
+          pb_str(&b, 5, "mdi:phone-check"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
+        { PB(b, 128); pb_str(&b, 1, "answer_phone"); pb_fixed32(&b, 2, KEY_PHONE_ANSWER); pb_str(&b, 3, "Answer phone");
+          pb_str(&b, 5, "mdi:phone-incoming"); send_msg(LIST_BUTTON, &b); }
+        { PB(b, 128); pb_str(&b, 1, "hang_up_phone"); pb_fixed32(&b, 2, KEY_PHONE_END); pb_str(&b, 3, "Hang up phone");
+          pb_str(&b, 5, "mdi:phone-hangup"); send_msg(LIST_BUTTON, &b); }
+        { PB(b, 512); pb_str(&b, 1, "phone_result"); pb_fixed32(&b, 2, KEY_PHONE_RESULT); pb_str(&b, 3, "Phone result");
+          pb_str(&b, 5, "mdi:phone-log");
+          for (int i = 0; i < PHONE_NRESULTS; i++) pb_str(&b, 9, phone_results[i]);
           send_msg(LIST_EVENT, &b); }
     }
     if (core_web_port) { PB(b, 128); pb_str(&b, 1, "web_ui_address"); pb_fixed32(&b, 2, KEY_WEB_URL); pb_str(&b, 3, "Web UI address");
@@ -1655,6 +1688,7 @@ static void send_all_settings(void)
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_setting(KEY_NEXT_TIMER_NAME); send_setting(KEY_NEXT_TIMER_LENGTH); send_setting(KEY_NEXT_TIMER);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
+        send_setting(KEY_PHONE_PEER); send_setting(KEY_PHONE_STATE); send_setting(KEY_PHONE_LINE);
         send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
         send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
         send_light_states();
@@ -1732,6 +1766,8 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
                                        else if (f.field == 1 && f.v == KEY_RESTART) core_reboot("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_TIMER_STOP) core_alarm_stop("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_DROPIN_END && listed(KEY_DROPIN_END)) dropin_hangup("Home Assistant's button");
+            else if (f.field == 1 && f.v == KEY_PHONE_ANSWER && listed(KEY_PHONE_ANSWER)) sip_answer();
+            else if (f.field == 1 && f.v == KEY_PHONE_END && listed(KEY_PHONE_END)) sip_hangup("Home Assistant's button");
         break; }
     case UPDATE_COMMAND: {
         unsigned key = 0, cmd = 0;
@@ -1774,6 +1810,13 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             char e[120];
             if (c < 0 || !clients[c].keyed) fprintf(stderr, "drop in: refused, the action did not come over the keyed connection\n");
             else if (dropin_call(args[0], e, sizeof e)) fprintf(stderr, "drop in: %s: %s\n", args[0], e);
+            break;
+        }
+        /* a phone call from Home Assistant: only over the keyed link, as Drop In */
+        if (key == KEY_PHONE_SERVICE && listed(KEY_PHONE_SERVICE)) {
+            char e[120];
+            if (c < 0 || !clients[c].keyed) fprintf(stderr, "phone: call refused, the action did not come over the keyed connection\n");
+            else if (sip_call(args[0], e, sizeof e)) fprintf(stderr, "phone: %s: %s\n", args[0], e);
             break;
         }
         /* the network key only from Home Assistant itself: a client holding the device key (without one, anyone on the
@@ -2021,6 +2064,24 @@ static void dropin_result(const char *result)   /* lock held */
     if (listed(KEY_DROPIN_RESULT)) send_state(EVENT, &b);
 }
 
+static void phone_changed(int st, const char *peer)    /* lock held: whom first, as dropin_changed */
+{
+    PB(t, 160);
+    pb_fixed32(&t, 1, KEY_PHONE_PEER); pb_str(&t, 2, peer);
+    if (listed(KEY_PHONE_PEER)) send_state(TEXT_SENSOR_STATE, &t);
+    t.n = 0; pb_fixed32(&t, 1, KEY_PHONE_STATE); pb_str(&t, 2, phone_states[st]);
+    if (listed(KEY_PHONE_STATE)) send_state(TEXT_SENSOR_STATE, &t);
+}
+
+static void phone_result(const char *result)    /* lock held */
+{
+    PB(b, 64); pb_fixed32(&b, 1, KEY_PHONE_RESULT); pb_str(&b, 2, result);
+    if (listed(KEY_PHONE_RESULT)) send_state(EVENT, &b);
+}
+
+static void phone_line(int line) { (void)line; send_setting(KEY_PHONE_LINE); }    /* lock held */
+
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut,
+                                     phone_changed, phone_result, phone_line };

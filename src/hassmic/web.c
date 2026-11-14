@@ -47,6 +47,7 @@
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
+#include "sip.h"
 #include "artifacts.h"
 #include "board.h"
 #include "davs.h"
@@ -603,6 +604,7 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer); unsigned at; int res = dropin_last(&at);
         n = app(o, n, cap, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
+    if (sip_running()) { n = app(o, n, cap, ",\"phone\":"); n += sip_status_json(o + n, cap - n); }    /* never the password */
     n = app(o, n, cap, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
     if (screen_present()) {                                       /* the screen: its home app, its music pages */
         n = app(o, n, cap, ",\"screen\":"); n += screen_status_json(o + n, cap - n);
@@ -1048,6 +1050,41 @@ static void mass_api(int fd, struct req *r)
     respond_s(fd, r, rc ? 500 : 200, "application/json", NULL, o, n);
 }
 
+/* /api/phone  POST, signed (sip.c), answered with the phone's status:
+ *   "account <server hex | -> <user hex | -> <password sealed, hex | - | =>"   the account ("-": none; the password "-":
+ *                                                     none, "=": keep it), sealed as a Wi-Fi password; never sent back
+ *   "call <number hex>"   "answer"   "hangup"                                   */
+static void phone_api(int fd, struct req *r)
+{
+    char what[16] = "", a[300] = "", b[200] = "", ph[600] = "", err[200] = "", ej[260], o[1200];
+    uint8_t sealed[256], pass[257]; char server[150] = "", user[100] = ""; int k, rc = 0, pl = 0;
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!sip_running() || strcmp(r->method, "POST")) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    k = sscanf(r->body ? r->body : "", "%15s %299s %199s %599s", what, a, b, ph);
+    if (!strcmp(what, "account") && k == 4) {
+        int sl = 0, ul = 0;
+        if ((strcmp(a, "-") && (sl = unhex_any((uint8_t *)server, sizeof server - 1, a)) < 0) || (strcmp(b, "-") && (ul = unhex_any((uint8_t *)user, sizeof user - 1, b)) < 0)
+            || (strcmp(ph, "-") && strcmp(ph, "=") && ((pl = unhex_any(sealed, sizeof sealed, ph)) < 0 || unseal(r, sealed, (size_t)pl, pass)))) {
+            crypto_wipe(sealed, sizeof sealed); crypto_wipe(pass, sizeof pass); respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return;
+        }
+        server[sl] = 0; user[ul] = 0;
+        if (!strcmp(ph, "-")) pl = 0;
+        pass[pl] = 0;                                   /* the page pads with zeros: a password has none */
+        rc = sip_account(server, user, !strcmp(ph, "=") ? NULL : (const char *)pass, err, sizeof err);
+        crypto_wipe(sealed, sizeof sealed); crypto_wipe(pass, sizeof pass);
+    } else if (!strcmp(what, "call") && k == 2) {
+        char num[80]; int nl = unhex_any((uint8_t *)num, sizeof num - 1, a);
+        if (nl < 0) { respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return; }
+        num[nl] = 0;
+        rc = sip_call(num, err, sizeof err);
+    } else if (!strcmp(what, "answer") && k == 1) { if (!sip_answer()) { rc = -1; snprintf(err, sizeof err, "no call is ringing"); } }
+    else if (!strcmp(what, "hangup") && k == 1) sip_hangup("settings page");
+    else { respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return; }
+    if (rc) { jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej); respond_sjson(fd, r, 409, o); return; }
+    size_t n = sip_status_json(o, sizeof o);
+    respond_s(fd, r, 200, "application/json", NULL, o, n);
+}
+
 /* /api/wifi        GET   the network now, the last scan, the last switch (wifi.c)
  * /api/wifi/scan   POST  root scans                                              -> {"id"}
  * /api/wifi/join   POST  "<ssid hex> <password sealed, hex | ->": root switches,  -> {"id"}
@@ -1255,6 +1292,7 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
     else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);
+    else if (!strcmp(r.path, "/api/phone")) phone_api(fd, &r);
     else if (!strcmp(r.path, "/api/screen")) screen_api(fd, &r);
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound/", 11)) sound_api(fd, &r);
