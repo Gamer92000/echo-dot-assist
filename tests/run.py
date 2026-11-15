@@ -60,6 +60,7 @@ TESTS = [
     ("davs", [PY, "tests/fake_web_davs.py"]),
     ("ota-push", ["sh", "tests/ota_push_test.sh"]),
     ("ring", [PY, "tests/fake_ha_ring.py"]),
+    ("ring-acs", [PY, "tests/fake_ha_ring_acs.py"]),
     ("ring-designs", [PY, "tests/fake_web_ring.py"]),
     ("artifacts", [PY, "tests/fake_web_artifacts.py"]),
     ("wyoming", [PY, "tests/fake_ha.py"]),

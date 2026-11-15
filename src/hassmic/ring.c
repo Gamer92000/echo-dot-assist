@@ -34,6 +34,16 @@
  * light itself).
  * Colours are as seen, through the light's gamma.  Made from state/ring-applied, which only changes when the page
  * applies (root then installs the set again and restarts ledcontroller): a design edited meanwhile does not change it.
+ * Binary animations (ACS, the Echo Dot 5; found by stock's acs_animation_list.txt): the same animations as files
+ * "<index>.<name>.animation_bin" (acs_* below), which the LED HAL sends once at ledcontroller's start to the LED
+ * manager on the SCP co-processor, there kept whole in a heap of 800 kB shared with everything else it runs; stock's
+ * 115 take about 380 kB of it, and it refuses an init past about 400 animations (2026-11-15: 400 loaded, 440 not).
+ * So ours are made as text as everywhere and encoded on the way out, the listening ring's turns, the Assistant's volume
+ * steps and the designs as on the Dots, but no palette and no LEDs' own layers: Home Assistant's light is drawn when it
+ * changes, as one animation (the whole ring in an effect, a fill, or LED by LED, exact to the palette's colours), into one
+ * of two slots of ours in layer 0, "hassmic_light_a"/"_b", whose frames the LED manager lets ledcontroller replace in
+ * place: src/ledshim/ledshim.c, in ledcontroller, takes them on "@hassmic-led" (shim_update).  The new slot shows
+ * before the old one goes, as the palette's patterns did.
  */
 #include "ring.h"
 #include "ringdesign.h"
@@ -48,7 +58,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -132,6 +146,159 @@ static char *slurp(const char *file)
     if (!b.p) bput(&b, "%s", "");
     if (b.bad) { free(b.p); return NULL; }
     return b.p;
+}
+
+/* ---------------------------------------------------------------- binary animations (ACS) */
+
+/* The Echo Dot 5's format, read from its LED HAL (libace_ledmgr.so mpcClient_validateAnimDataHeader 0x4e84) and the
+ * SCP's loader (animationResource_loadBinaryAnimation), every stock file round-tripped (2026-11-15): big-endian,
+ * "animagic" "totl" <u32 frames>, then per frame an optional "loop" (the loop starts there, as the text's "loop"
+ * line) and "fram" <u32 ms> and 12 x R,G,B, the text's pixels as they are (no gamma in the file: donut's F30 is
+ * ff 33 00; 25 of stock's are donut's text byte for byte).  Stock's index files: acs_animation_list.txt
+ * ("<i>.<name>.animation_bin" a line, every i below the count; the HAL loads file i into the SCP's slot i),
+ * acs_animation_count.txt (the count, no newline), acs_animation_name_list.txt ("name," in index order: what makes a
+ * name playable; the SCP fails its init unless as many names as animations), acs_auto_stop_conf.txt ("<name> 0|1",
+ * ledcontroller's: 1 for exactly those of stock's whose loop is black, the ones that end by themselves) and
+ * layer_config_common.txt (the JSON's layers flattened, highest first: what the SCP composes by; stock's is its JSON
+ * byte for byte, which uxeventd alone reads).  A name may not hold a dot, nor be over 30 characters. */
+#define ACS_LEDS 12
+static int line_pixels(const char *l, const char **px);
+static const char *layer_open(const char *t, const char *layer);
+static const char *const acs_files[] = { "acs_animation_list.txt", "acs_animation_count.txt", "acs_animation_name_list.txt",
+                                         "acs_auto_stop_conf.txt", "layer_config_common.txt" };
+
+/* stock's index file: the copy root kept before our first install, else the one in place (stock's then) */
+static char *acs_stock(const char *name)
+{
+    char file[512], rel[96];
+    snprintf(rel, sizeof rel, "%s.pre-hassmic", name); path(file, sizeof file, rel);
+    char *t = slurp(file);
+    if (!t) { snprintf(rel, sizeof rel, "led-resources/%s", name); path(file, sizeof file, rel); t = slurp(file); }
+    return t;
+}
+
+static int acs(void)
+{
+    char *t = acs_stock("acs_animation_list.txt");
+    free(t);
+    return t != NULL;
+}
+
+static uint32_t be32(const unsigned char *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+
+/* a binary animation as text, NULL if it is not one */
+static char *acs_text(const unsigned char *b, size_t n)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    struct buf o = { 0 }; size_t p = 16; uint32_t k = 0, fr;
+    if (n < 16 || memcmp(b, "animagic", 8) || memcmp(b + 8, "totl", 4)) return NULL;
+    fr = be32(b + 12);
+    while (p < n && k < fr) {
+        if (n - p >= 4 && !memcmp(b + p, "loop", 4)) { bcat(&o, "loop\n", 5); p += 4; continue; }
+        if (n - p < 8 + 3 * ACS_LEDS || memcmp(b + p, "fram", 4)) break;
+        char line[16 + 7 * ACS_LEDS]; int m = snprintf(line, 16, "%u:", (unsigned)be32(b + p + 4));
+        for (int i = 0; i < ACS_LEDS; i++) {
+            if (i) line[m++] = ',';
+            for (int c = 0; c < 3; c++) { unsigned v = b[p + 8 + 3 * i + c]; line[m++] = hex[v >> 4]; line[m++] = hex[v & 15]; }
+        }
+        line[m++] = '\n'; bcat(&o, line, m);
+        p += 8 + 3 * ACS_LEDS; k++;
+    }
+    if (k != fr || p != n || o.bad) { free(o.p); return NULL; }
+    if (!o.p) bcat(&o, "", 0);
+    return o.p;
+}
+
+/* text into the binary form (out, bytes): 0, or -1 for a frame not of 12 pixels or a pixel not 3 or 6 hex digits.
+ * *ends: its loop is black (or it has a "loop" with nothing lit after it): ledcontroller's auto-stop */
+static int acs_encode(struct buf *out, const char *text, int *ends)
+{
+    uint32_t frames = 0; int loop = 0, lit_loop = 0, has_loop = 0; size_t head = out->n;
+    bcat(out, "animagictotl\0\0\0\0", 16);
+    for (const char *l = text; *l; ) {
+        const char *e = strchr(l, '\n'), *px; size_t len = e ? (size_t)(e - l) : strlen(l);
+        if (len >= 4 && !strncmp(l, "loop", 4)) { loop = 1; has_loop = 1; }
+        else if (line_pixels(l, &px)) {
+            unsigned char f[8 + 3 * ACS_LEDS]; int i = 0; unsigned ms = (unsigned)strtoul(l, NULL, 10);
+            if (line_pixels(l, &px) != ACS_LEDS) return -1;
+            memcpy(f, "fram", 4); f[4] = ms >> 24; f[5] = ms >> 16; f[6] = ms >> 8; f[7] = ms;
+            for (const char *c = px; c < l + len && i < ACS_LEDS; i++) {
+                size_t w = strcspn(c, ",\n\r");
+                if (w != 3 && w != 6) return -1;
+                for (int ch = 0; ch < 3; ch++) {
+                    char d[3] = { 0 };
+                    if (w == 3) d[0] = d[1] = c[ch]; else memcpy(d, c + 2 * ch, 2);
+                    char *x; long v = strtol(d, &x, 16);
+                    if (*x) return -1;
+                    f[8 + 3 * i + ch] = (unsigned char)v;
+                    if (v && has_loop) lit_loop = 1;
+                }
+                c += w; if (*c == ',') c++; else { i++; break; }
+            }
+            if (i != ACS_LEDS) return -1;
+            if (loop) { bcat(out, "loop", 4); loop = 0; }
+            bcat(out, (const char *)f, sizeof f); frames++;
+        }
+        if (!e) break;
+        l = e + 1;
+    }
+    if (!frames || out->bad) return -1;
+    unsigned char *h = (unsigned char *)out->p + head + 12;
+    h[0] = frames >> 24; h[1] = frames >> 16; h[2] = frames >> 8; h[3] = frames;
+    *ends = has_loop && !lit_loop;
+    return 0;
+}
+
+/* an animation of the set in place (stock: of stock's, from its index kept before ours) as text, NULL if none: a
+ * text file "<name>.animation", else the binary of that name in the index */
+static char *anim_text(const char *name, int stock)
+{
+    char file[512], rel[160];
+    snprintf(rel, sizeof rel, "led-resources/%s.animation", name); path(file, sizeof file, rel);
+    char *t = slurp(file);
+    if (t) return t;
+    char *list = stock ? acs_stock("acs_animation_list.txt") : NULL;
+    if (!list) { path(file, sizeof file, "led-resources/acs_animation_list.txt"); list = slurp(file); }
+    for (const char *l = list; l && *l; ) {
+        const char *e = strchr(l, '\n'), *dot = strchr(l, '.'); size_t len = e ? (size_t)(e - l) : strlen(l), k = strlen(name);
+        if (dot && dot < l + len && (size_t)(l + len - dot) == k + 15 && !strncmp(dot + 1, name, k) && !strncmp(dot + 1 + k, ".animation_bin", 14)) {
+            snprintf(rel, sizeof rel, "led-resources/%.*s", (int)len, l); path(file, sizeof file, rel);
+            FILE *f = fopen(file, "rb"); unsigned char b[65536]; size_t n = 0;
+            if (f) { n = fread(b, 1, sizeof b, f); fclose(f); }
+            t = n && n < sizeof b ? acs_text(b, n) : NULL;
+            break;
+        }
+        if (!e) break;
+        l = e + 1;
+    }
+    free(list);
+    return t;
+}
+
+/* the layer config's JSON (stock's with ours) flattened as the SCP reads it: "NumberOfLayers:<n>," then each layer from
+ * the highest, "Layer:<k>, Total:<names>," and its names each with a comma */
+static int acs_layers(struct buf *out, const char *json)
+{
+    const char *nl = strstr(json, "\"numberOfLayers\""), *v; char *e;
+    if (!nl || !(v = strchr(nl, ':'))) return -1;
+    int layers = (int)strtol(v + 1, &e, 10);
+    if (e == v + 1 || layers < 1 || layers > 99) return -1;
+    bput(out, "NumberOfLayers:%d,", layers);
+    for (int k = layers - 1; k >= 0; k--) {
+        char key[8]; const char *open, *close; int total = 0; struct buf names = { 0 };
+        snprintf(key, sizeof key, "%d", k);
+        if (!(open = layer_open(json, key)) || !(close = strchr(open, ']'))) return -1;
+        for (const char *q = open; (q = memchr(q, '"', close - q)); total++) {
+            const char *r = memchr(q + 1, '"', close - q - 1);
+            if (!r) { free(names.p); return -1; }
+            bput(&names, "%.*s,", (int)(r - q - 1), q + 1);
+            q = r + 1;
+        }
+        bput(out, "Layer:%d, Total:%d,%s", k, total, names.p ? names.p : "");
+        int bad = names.bad; free(names.p);
+        if (bad) return -1;
+    }
+    return out->bad ? -1 : 0;
 }
 
 /* ---------------------------------------------------------------- the palette */
@@ -508,6 +675,11 @@ struct gen {
     char why[200];                          /* a design left out, and why */
     int leds;                               /* the ring's, from stock's listening ring */
     int noleds;                             /* in: without the LEDs' own layers (no room for them) */
+    int acs, acs_base, acs_n;               /* binary animations: stock's count, ours so far */
+#define ACS_MAX 400                         /* animations the LED manager took at most, stock's included */
+#define ACS_SCP_MAX (320 << 10)             /* what ours may keep of its heap (ours now: ~43 kB) */
+    size_t acs_bytes, acs_frames;           /* ours: what the SCP keeps of them */
+    struct buf acs_list, acs_names, acs_auto;   /* ours' lines of the index files */
 };
 static int leds = 12;                       /* of the set installed (take(), under the lock); every model's has 12 */
 
@@ -515,16 +687,49 @@ static void emit(struct gen *g, const char *name, const struct buf *b)
 {
     if (b->bad) { fprintf(stderr, "ring: out of memory making %s\n", name); g->failed = 1; return; }
     const char *p = b->p ? b->p : "";
-    sha256_update(&g->h, name, strlen(name) + 1);
-    sha256_update(&g->h, p, b->n + 1);
+    size_t n = b->n, k = strlen(name);
+    char file[512], nm[64]; FILE *f; struct buf bin = { 0 };
+    sha256_update(&g->h, name, k + 1);
+    sha256_update(&g->h, p, n + 1);
     g->files++;
-    if (!g->dir) return;
-    char file[512]; FILE *f;
-    snprintf(file, sizeof file, "%s/%s", g->dir, name);
-    if (!(f = fopen(file, "w")) || fwrite(p, 1, b->n, f) != b->n || fclose(f)) {
+    if (g->acs && k > 10 && !strcmp(name + k - 10, ".animation")) {     /* as "<index>.<name>.animation_bin" */
+        int ends;
+        snprintf(nm, sizeof nm, "%.*s", (int)(k - 10), name);
+        if (strchr(nm, '.') || strlen(nm) > 30 || acs_encode(&bin, p, &ends)) {
+            fprintf(stderr, "ring: %s does not fit the binary format\n", nm); g->failed = 1; free(bin.p); return;
+        }
+        if (!strncmp(nm, "hassmic_light_", 14)) ends = 0;       /* a slot: black until drawn into, then held */
+        int idx = g->acs_base + g->acs_n++;
+        bput(&g->acs_list, "%d.%s.animation_bin\n", idx, nm); bput(&g->acs_names, "%s,", nm); bput(&g->acs_auto, "%s %d\n", nm, ends);
+        g->acs_bytes += bin.n; g->acs_frames += be32((unsigned char *)bin.p + 12);
+        snprintf(file, sizeof file, "%s/%d.%s.animation_bin", g->dir ? g->dir : "", idx, nm);
+        p = bin.p; n = bin.n;
+    } else snprintf(file, sizeof file, "%s/%s", g->dir ? g->dir : "", name);
+    if (g->dir && (!(f = fopen(file, "w")) || fwrite(p, 1, n, f) != n || fclose(f))) {
         if (f) fclose(f);
         fprintf(stderr, "ring: cannot write %s: %s\n", file, strerror(errno)); g->failed = 1;
     }
+    free(bin.p);
+}
+
+/* binary animations: stock's index files with ours after them, and the layer config as the SCP reads it */
+static void acs_index(struct gen *g, const struct buf *json)
+{
+    char *t[4]; struct buf o = { 0 };
+    for (int i = 0; i < 4; i++) t[i] = acs_stock(acs_files[i]);
+    if (!t[0] || !t[2] || !t[3]) { fprintf(stderr, "ring: stock's animation index is incomplete\n"); g->failed = 1; goto out; }
+    bput(&o, "%s%s%s", t[0], o.n || !*t[0] || t[0][strlen(t[0]) - 1] == '\n' ? "" : "\n", g->acs_list.p ? g->acs_list.p : "");
+    emit(g, acs_files[0], &o); o.n = 0;
+    bput(&o, "%d", g->acs_base + g->acs_n); emit(g, acs_files[1], &o); o.n = 0;
+    bput(&o, "%s%s", t[2], g->acs_names.p ? g->acs_names.p : ""); emit(g, acs_files[2], &o); o.n = 0;
+    bput(&o, "%s%s%s", t[3], !*t[3] || t[3][strlen(t[3]) - 1] == '\n' ? "" : "\n", g->acs_auto.p ? g->acs_auto.p : "");
+    emit(g, acs_files[3], &o); o.n = 0;
+    if (acs_layers(&o, json->p ? json->p : "")) { fprintf(stderr, "ring: the layer config does not flatten\n"); g->failed = 1; }
+    else emit(g, acs_files[4], &o);
+    if (g->acs_list.bad || g->acs_names.bad || g->acs_auto.bad) g->failed = 1;
+out:
+    for (int i = 0; i < 4; i++) free(t[i]);
+    free(o.p);
 }
 
 static void listnames(struct buf *b, const char *name) { bput(b, "%s\"%s\"", b->n ? ", " : "", name); }
@@ -584,11 +789,11 @@ static void build_designs(struct gen *g, const char *stock, struct buf *names4, 
         }
         else if (sl->kind == RING_VOLUME)
             for (int st = 1; st <= 99; st++) {
-                char quoted[40], file[512], *t;
+                char quoted[40], *t;
                 snprintf(quoted, sizeof quoted, "\"volume_step-%02d\"", st);
                 if (!strstr(stock, quoted)) continue;
-                snprintf(name, sizeof name, "led-resources/volume_step-%02d.animation", st); path(file, sizeof file, name);
-                if (!(t = slurp(file))) continue;
+                snprintf(name, sizeof name, "volume_step-%02d", st);
+                if (!(t = anim_text(name, 1))) continue;
                 b.n = 0; tinted(&b, t, d); free(t);
                 snprintf(name, sizeof name, "hassmic_s_volume_%02d", st);
                 emit_design(g, namesv, name, &b);
@@ -606,14 +811,19 @@ static int build(struct gen *g)
     struct rd_design ds[RING_SLOTS_MAX]; int ids[RING_SLOTS_MAX];
     memset(before, 0, sizeof before); memset(perled, 0, sizeof perled);
     if (board.ring_leds == 1) g->noleds = 1;                /* one LED: its own layer would be the light again */
+    g->acs = acs(); g->acs_n = 0; g->acs_bytes = g->acs_frames = 0;
+    memset(&g->acs_list, 0, sizeof g->acs_list); memset(&g->acs_names, 0, sizeof g->acs_names); memset(&g->acs_auto, 0, sizeof g->acs_auto);
+    if (g->acs) {                           /* the SCP's heap: no LEDs' own layers (ACS above) */
+        char *c = acs_stock(acs_files[1]);
+        g->noleds = 1; g->acs_base = c ? atoi(c) : 0; free(c);
+        if (g->acs_base < 1) { fprintf(stderr, "ring: no count in stock's animation index\n"); return -1; }
+    }
     sha256_init(&g->h);
     sha256_update(&g->h, FORMAT, sizeof FORMAT);
     if (g->noleds) sha256_update(&g->h, "noleds", 7);
+    if (g->acs) sha256_update(&g->h, "acs", 4);
     g->why[0] = 0; g->design_bytes = 0;
-    path(file, sizeof file, "led-resources/active-start.animation");
-    char *start = slurp(file);
-    path(file, sizeof file, "led-resources/active-end.animation");
-    char *end = slurp(file);
+    char *start = anim_text("active-start", 1), *end = anim_text("active-end", 1);
     int n = start ? leds_of(start) : 0;
     if (!n) n = 12;
     g->leds = n;
@@ -632,7 +842,15 @@ static int build(struct gen *g)
         g->turned = ok;
         if (!ok) { fprintf(stderr, "ring: stock's listening ring has a shape we do not know: not turned\n"); names4.n = 0; }
     }
-    for (int e = 0; e < E_COUNT; e++)
+    for (int k = 0; g->acs && k < 2; k++) {     /* binary: the light's two slots instead of the palette (ACS above) */
+        char px[MAX_LEDS][8];
+        for (int i = 0; i < n; i++) strcpy(px[i], "000000");
+        b.n = 0; bput(&b, "loop\n"); frame(&b, 1000, px, n);
+        snprintf(name, sizeof name, "hassmic_light_%c", 'a' + k);
+        listnames(&names0, name);
+        strcat(name, ".animation"); emit(g, name, &b);
+    }
+    for (int e = 0; !g->acs && e < E_COUNT; e++)
         for (int w = 0; w <= (e == E_RAINBOW ? 0 : 1); w++)
             for (int hue = 0; hue < (w || e == E_RAINBOW ? 1 : HUES); hue++)
                 for (int soft = 0; soft <= (w || e == E_RAINBOW ? 0 : 1); soft++)
@@ -675,8 +893,8 @@ static int build(struct gen *g)
         char quoted[40], *t;
         snprintf(quoted, sizeof quoted, "\"volume_step-%02d\"", i);
         if (!strstr(stock, quoted)) continue;
-        snprintf(name, sizeof name, "led-resources/volume_step-%02d.animation", i); path(file, sizeof file, name);
-        if (!(t = slurp(file))) continue;
+        snprintf(name, sizeof name, "volume_step-%02d", i);
+        if (!(t = anim_text(name, 1))) continue;
         b.n = 0;
         if (assist_design) tinted(&b, t, assist_design); else cyan(&b, t);
         free(t);
@@ -698,6 +916,9 @@ static int build(struct gen *g)
     if (!rc && !g->noleds && (relayer(&conf, b.p, n, perled) || conf.bad)) { rc = -1; fprintf(stderr, "ring: stock's layer config has a shape we do not know\n"); }
     else if (rc) fprintf(stderr, "ring: no layer config of stock's to add ours to (%s)\n", file);
     if (!rc) emit(g, "layer_config_common.json", g->noleds ? &b : &conf);
+    if (!rc && g->acs) acs_index(g, g->noleds ? &b : &conf);
+    free(g->acs_list.p); free(g->acs_names.p); free(g->acs_auto.p);
+    memset(&g->acs_list, 0, sizeof g->acs_list); memset(&g->acs_names, 0, sizeof g->acs_names); memset(&g->acs_auto, 0, sizeof g->acs_auto);
     free(conf.p);
     for (int l = 0; l < n; l++) free(perled[l].p);
     for (int i = 0; i < ring_nslots; i++) rd_free(&ds[i]);
@@ -720,6 +941,14 @@ int ring_generate(const char *dir)
     memset(&g, 0, sizeof g); g.dir = strcmp(dir, "-") ? dir : NULL;
     g.noleds = e && !strcmp(e, "0");        /* root's leds(): the partition has no room for the LEDs' own */
     if (build(&g)) return 1;
+    /* a refused init leaves the LED manager dead to stock's set too until a reboot: no set it may refuse.  400 loaded
+     * and 440 did not (with stock's 115); ours' share of the heap: 800 kB less stock's ~380 kB, with room left */
+    size_t scp = g.acs_bytes + 32 * g.acs_frames + 76 * (size_t)g.acs_n;
+    if (g.acs && (g.acs_base + g.acs_n > ACS_MAX || scp > ACS_SCP_MAX)) {
+        fprintf(stderr, "ring: %d binary animations (%d of ours, ~%zu kB on the SCP): more than the LED manager takes "
+                "(%d, %d kB of ours), not installed\n", g.acs_base + g.acs_n, g.acs_n, scp >> 10, ACS_MAX, ACS_SCP_MAX >> 10);
+        return 1;
+    }
     digest_hex(&g, hex);
     if (!g.dir) { printf("%s\n", hex); return 0; }       /* "-": the digest only, for root to compare */
     snprintf(file, sizeof file, "%s/digest", dir);
@@ -727,6 +956,9 @@ int ring_generate(const char *dir)
     int nd = 0; for (int i = 0; i < ring_nslots; i++) nd += g.on[i];
     fprintf(stderr, "ring: %d files, digest %.16s%s, designs in %d place%s\n", g.files, hex, g.turned ? "" : " (listening ring not turned)",
             nd, nd == 1 ? "" : "s");
+    if (g.acs)                              /* the SCP keeps each whole, plus 32 bytes a frame and ~76 an animation */
+        fprintf(stderr, "ring: %d binary animations of ours, %zu kB of files, ~%zu kB on the SCP\n", g.acs_n, g.acs_bytes >> 10,
+                scp >> 10);
     return 0;
 }
 
@@ -736,6 +968,8 @@ static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static void (*run_fn)(const char *op, const char *name);
 static void (*reloaded_fn)(int custom_changed);
 static int custom, have_turned, have_assist, have_leds;
+static int acs_set;                         /* the installed set is binary: the light drawn into its slots (ACS above) */
+static struct buf acs_shown;                /* the light's animation in the slot shown (light_shown), as text */
 static int slot_avail[RING_SLOTS_MAX], slot_on[RING_SLOTS_MAX];         /* of the set installed */
 
 /* The Echo's own patterns that hassmic played and did not stop: how long each shows, from its file */
@@ -764,9 +998,7 @@ static struct { char name[40]; int ms; } cache[48]; static int ncache;      /* e
 static int visible_ms(const char *name)
 {
     for (int i = 0; i < ncache; i++) if (!strcmp(cache[i].name, name)) return cache[i].ms;
-    char file[512]; path(file, sizeof file, "led-resources/");
-    snprintf(file + strlen(file), sizeof file - strlen(file), "%s.animation", name);
-    char *t = slurp(file); int ms = 1000;
+    char *t = anim_text(name, 0); int ms = 1000;
     if (t) {
         int at = 0, lit_end = 0, looping = 0, loop_lit = 0;
         for (const char *l = t; *l; ) {
@@ -851,6 +1083,86 @@ static void quantize(const struct ring_light *l, struct colour *c)
     c->level = v >= 0.75f ? 0 : v >= 0.4f ? 1 : 2;
 }
 
+/* lock held.  Binary sets: an animation into slot SLOT of the LED manager, through libhmled.so in ledcontroller
+ * ("@hassmic-led", HASSMIC_LED_SHIM for tests; ledshim.c says what it takes).  The connection is kept; a broken one is
+ * made again once.  0, or what the LED manager or the shim said (-1 none answered) */
+static int shim_update(const char *slot, const char *text)
+{
+    static int fd = -1;
+    struct buf m = { 0 }; int ends, rc = -1;
+    bcat(&m, slot, strlen(slot) + 1);
+    if (acs_encode(&m, text, &ends)) { free(m.p); return -1003; }
+    for (int attempt = 0; attempt < 2 && rc == -1; attempt++) {
+        if (fd < 0) {
+            const char *e = getenv("HASSMIC_LED_SHIM"), *nm = e ? e : "hassmic-led";
+            struct sockaddr_un u = { .sun_family = AF_UNIX }; struct timeval tv = { 1, 0 };
+            size_t k = strlen(nm) < sizeof u.sun_path - 1 ? strlen(nm) : sizeof u.sun_path - 2;
+            memcpy(u.sun_path + 1, nm, k);
+            fd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+            if (fd >= 0 && connect(fd, (struct sockaddr *)&u, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + k))) { close(fd); fd = -1; }
+            if (fd < 0) break;
+        }
+        char r[16]; ssize_t k;
+        if (send(fd, m.p, m.n, MSG_NOSIGNAL) == (ssize_t)m.n && (k = recv(fd, r, sizeof r - 1, 0)) > 0) { r[k] = 0; rc = atoi(r); if (!rc && r[0] != '0') rc = -1; }
+        else { close(fd); fd = -1; }
+    }
+    free(m.p);
+    return rc;
+}
+
+/* lock held, binary sets: the light as one animation (empty: none), drawn as the palette's patterns would show it */
+static void light_text(struct buf *t, const struct ring_light *l, int flashing, int lit, int start, long long now)
+{
+    char px[MAX_LEDS][8]; struct colour c;
+    t->n = 0;
+    if (!custom || (!l->on && !flashing) || busy(now) || lit <= 0) return;
+    for (int i = 0; i < leds; i++) strcpy(px[i], "000000");
+    if (l->nleds > 0 && !flashing) {                    /* LED by LED */
+        int any = 0;
+        for (int j = 0; j < l->nleds && j < leds; j++) {
+            struct ring_light s = *l; const unsigned char *p = l->led_rgb[j];
+            if (!p[0] && !p[1] && !p[2]) continue;
+            s.r = p[0] / 255.0f; s.g = p[1] / 255.0f; s.b = p[2] / 255.0f;
+            quantize(&s, &c); colour_rgb(&c, 1, px[(start + j) % leds]); any = 1;
+        }
+        if (any) { bput(t, "loop\n"); frame(t, 1000, px, leds); }
+        return;
+    }
+    quantize(l, &c);
+    if (lit >= leds || flashing) { light_anim(t, flashing ? E_BLINK : l->effect, &c, leds); return; }
+    for (int j = 0; j < lit; j++) colour_rgb(&c, 1, px[(start + j) % leds]);     /* a fill: solid, as on the Dots */
+    bput(t, "loop\n"); frame(t, 1000, px, leds);
+}
+
+static void light_apply_acs(long long now, const struct ring_light *l, int flashing, int lit, int start)
+{
+    static struct buf t; static int said;
+    light_text(&t, l, flashing, lit, start, now);
+    if (t.bad) { t.bad = 0; return; }
+    if (t.n == acs_shown.n && (!t.n || !memcmp(t.p, acs_shown.p, t.n))) return;
+    if (!t.n) {
+        fprintf(stderr, "light ring: Home Assistant's light %s\n", !l->on && !flashing ? "off" : busy(now) ? "waits for the Echo's own" : "dark");
+        if (light_shown[0]) run("-u", light_shown);
+        light_shown[0] = 0; acs_shown.n = 0; light_remember();
+        return;
+    }
+    char slot[24];                                      /* the one not shown: drawn into while the other still shows */
+    snprintf(slot, sizeof slot, "hassmic_light_%c", strcmp(light_shown, "hassmic_light_a") ? 'a' : 'b');
+    int rc = shim_update(slot, t.p);
+    if (rc) {
+        if (!said++) fprintf(stderr, "light ring: the LED manager took no animation (%d): ledcontroller without libhmled.so?\n", rc);
+        return;
+    }
+    said = 0;
+    fprintf(stderr, "light ring: Home Assistant's light drawn into %s%s\n", slot, flashing ? " (flash)" : "");
+    run("-s", slot);
+    if (light_shown[0]) run("-u", light_shown);
+    snprintf(light_shown, sizeof light_shown, "%s", slot);
+    acs_shown.n = 0; bcat(&acs_shown, t.p, t.n);
+    light_remember();
+}
+
 /* lock held: the light on the ring as it should be now */
 static void light_apply(long long now)
 {
@@ -863,6 +1175,7 @@ static void light_apply(long long now)
      * steps start (volume_step-01 lights LED 11, -05 LEDs 11 and 0, -10 LEDs 11 to 2) turned by the rotation.  A part
      * of the ring is each LED's own solid pattern, so the effects are the whole ring's only; a flash blinks it whole */
     int lit = (l->fill * leds + 99) / 100, start = (leds - 1 + rotation) % leds;
+    if (acs_set) { light_apply_acs(now, l, flashing, lit, start); return; }
     if (custom && have_leds && l->on && !flashing && !busy(now) && l->nleds > 0) {     /* LED by LED, each in the palette's nearest */
         for (int j = 0; j < l->nleds && j < leds; j++) {
             struct ring_light t = *l; struct colour c; char code[8]; int i = (start + j) % leds;
@@ -926,7 +1239,9 @@ static void take(const struct gen *g, int ours)
     custom = ours > 0;
     have_turned = custom && g->turned;
     have_assist = custom && g->assist;
-    have_leds = custom && !g->noleds;
+    acs_set = custom && g->acs;
+    have_leds = custom && (!g->noleds || acs_set);  /* binary: a fill is drawn, no LEDs' own patterns needed */
+    acs_shown.n = 0;
     leds = g->leds ? g->leds : 12;
     for (int i = 0; i < ring_nslots; i++) { slot_avail[i] = custom && g->avail[i]; slot_on[i] = custom && g->on[i]; }
 }

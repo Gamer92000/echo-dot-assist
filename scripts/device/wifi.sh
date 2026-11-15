@@ -81,19 +81,30 @@ scan() {
 # The address.  dhcpcd runs with -K on these Echos (init's dhcpcd-wlan0: "dhcpcd wlan0 -AdLK": no link events), so it
 # does not notice another network and keeps the old lease.  Dot 2, 2026-10-07: 15 s on no network and back, and the
 # address stayed on wlan0, the old router's ARP entry stayed complete, dhcp.wlan0.result was not written again.  So
-# dhcpcd is told to rebind (dhcpcd -n: it asks for its address again; another network's server refuses that, or it
-# gives up after 5 s, and dhcpcd asks afresh), and a lease counts only once its hook (95-configured) has written
-# dhcp.<if>.result again.  On the same network: RENEW within a second (Dot 2).
-# An Echo that has had no network since boot (new, or after a factory reset: the phone's setup, improv.c) has no dhcpcd
-# running and no properties of it: init's service (dhcpcd-<if>, what wifi-join.sh falls back to) starts it then, and its
-# hook writes the properties from then on.  Not "dhcpcd -n" for that: with no daemon there it starts one outside init.
+# dhcpcd is made to ask afresh, and a lease counts only once its hook (95-configured) has written dhcp.<if>.result
+# again.  By init's service started anew, not "dhcpcd -n" (which the Dot 2 took: RENEW within a second on the same
+# network): a control command's own arguments replace the daemon's, and without init's -K it checks the carrier it
+# read when it started, never updated since (-K).  Cannoli, 2026-11-15, the phone's setup after a reset: dhcpcd
+# started with no network, "dhcpcd -n" -> "waiting for carrier" for good on the new network, no address; with -K
+# added, one DISCOVER and the next 64 s later (its backoff since it started); without -L, IPv4LL.
+# Started anew it reads the carrier, takes init's arguments and backs off from 4 s.  An Echo that has had no network
+# since boot (new, or after a factory reset: improv.c) has no dhcpcd yet, nor init.svc.<if>, which init sets at a
+# service's first start: it is started all the same, and the property tells whether init has such a service at all.
+# init stops a service with SIGKILL (Android 7), so dhcpcd leaves its address on the interface, and the new one, not
+# knowing it, adds its lease beside it: cannoli, 2026-11-15, a stale 10.99.0.5 stayed next to the new lease, first in
+# ifconfig, and online() would never have matched it.  So the addresses go first (ifconfig 0.0.0.0 removes the first
+# of them, the next moves up); on the same network the new dhcpcd has its lease back within milliseconds (REQUEST/ACK).
 lease() {
-    if [ -z "$PROPS" ]; then
-        command -v dhcpcd > /dev/null && [ -n "$(getprop init.svc.dhcpcd-$WLAN)" ] || return 0
-        PROPS=1
+    if [ -z "$PROPS" ]; then command -v dhcpcd > /dev/null || return 0; PROPS=1; fi
+    renewed=1
+    if [ -n "$(getprop init.svc.dhcpcd-$WLAN)" ]; then
+        stop dhcpcd-$WLAN
+        k=0; while [ $k -lt 5 ] && [ "$(getprop init.svc.dhcpcd-$WLAN)" != stopped ]; do sleep $STEP; k=$((k + 1)); done
+        k=0; while [ $k -lt 4 ] && ifconfig $WLAN 2>/dev/null | grep -q 'inet addr:'; do ifconfig $WLAN 0.0.0.0; k=$((k + 1)); done
     fi
-    renewed=1; setprop dhcp.$WLAN.result hassmic
-    if [ "$(getprop init.svc.dhcpcd-$WLAN)" = running ]; then dhcpcd -n $WLAN > /dev/null 2>&1; else start dhcpcd-$WLAN; fi
+    setprop dhcp.$WLAN.result hassmic; start dhcpcd-$WLAN
+    k=0; while [ $k -lt 3 ] && [ -z "$(getprop init.svc.dhcpcd-$WLAN)" ]; do sleep $STEP; k=$((k + 1)); done
+    [ -n "$(getprop init.svc.dhcpcd-$WLAN)" ] || { PROPS= renewed=; setprop dhcp.$WLAN.result ''; }
 }
 # On the network for real: a fresh lease (above) on the interface, and its router answers ARP on this link.  ARP rather
 # than the ping's answer: a router may drop pings, never ARP.  Without dhcpcd's properties: the interface's address.
@@ -102,7 +113,10 @@ online() {
     [ -n "$ip" ] || return 1
     [ -n "$PROPS" ] || return 0
     [ "$(getprop dhcp.$WLAN.result)" = ok ] && [ "$(getprop dhcp.$WLAN.ipaddress)" = "$ip" ] &&
-        case "$(getprop dhcp.$WLAN.reason)" in BOUND|REBOOT|RENEW|REBIND) true;; *) false;; esac || { ip=; return 1; }
+        # Cannoli's DHCPv6 hook can overwrite reason immediately after the
+        # successful IPv4 lease. Still require the fresh result, matching IPv4
+        # address and the gateway's ARP response below.
+        case "$(getprop dhcp.$WLAN.reason)" in BOUND|REBOOT|RENEW|REBIND|INFORM6) true;; *) false;; esac || { ip=; return 1; }
     gw=$(getprop dhcp.$WLAN.gateway)
     [ -n "$gw" ] || return 0
     ping -c 1 -W 1 $gw > /dev/null 2>&1

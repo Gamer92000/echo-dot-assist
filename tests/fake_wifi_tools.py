@@ -219,6 +219,10 @@ def main():
             out = wifictl(w, args)
         elif tool == "ifconfig":                    # the lease's address, whatever network the Echo is on now
             ip = w["lease"]["ip"]
+            if "svc" in w:                          # init's dhcpcd: the interface's own addresses, the first shown
+                addrs = w.setdefault("addrs", [ip] if ip else [])
+                if args[1:2] == ["0.0.0.0"]: addrs[:1] = []
+                ip = addrs[0] if addrs else ""
             if os.environ.get("ANDROID"):
                 n, air = connected(w)               # Android's DHCP: the address comes with its network
                 ip = air["ip"] if n and air and air.get("dhcp", True) and air["ip"] not in ("", "0") else ""
@@ -229,13 +233,26 @@ def main():
             if k.startswith("dhcp.wlan0."):
                 p = k[len("dhcp.wlan0."):]
                 out = w["props"].get(p, "") or {"ipaddress": w["lease"]["ip"], "gateway": w["lease"]["gw"]}.get(p, "")
-            elif k.startswith("init.svc."): out = "stopped"
+            elif k.startswith("init.svc."):          # "svc" in the world: as init, nothing for a service never started
+                out = "stopped" if "svc" not in w else w["svc"].get(k[len("init.svc."):], "")
         elif tool == "setprop":
             if args[0].startswith("dhcp.wlan0."): w["props"][args[0][len("dhcp.wlan0."):]] = args[1]
+        elif tool == "stop" and args[:1] == ["dhcpcd-wlan0"] and "svc" in w:
+            w["svc"]["dhcpcd-wlan0"] = "stopped"
         elif tool == "dhcpcd" or (tool == "start" and args[:1] == ["dhcpcd-wlan0"]):   # -n: ask again, or init's service
             n, air = connected(w)                   # starting: a lease only from a network that has DHCP
-            if n and air.get("dhcp", True):
+            if tool == "start" and "svc" in w:      # init's -K: the carrier is read once, at its start
+                w["svc"]["dhcpcd-wlan0"] = "running"; w["carrier"] = n is not None
+            # "dhcpcd -n" takes its own arguments, link checks on: started off a network, it waits for a carrier for good
+            stale = tool == "dhcpcd" and "svc" in w and not w.get("carrier")
+            if n and air.get("dhcp", True) and not stale:
                 w["props"].update(result="ok", reason="RENEW" if w["lease"]["ip"] == air["ip"] else "BOUND", ipaddress="", gateway="")
+                if air.get("ipv6_inform_after_lease"):
+                    w["props"]["reason"] = "INFORM6"
+                if "svc" in w:                      # a dhcpcd started anew does not know what a killed one left (SIGKILL)
+                    addrs = w.setdefault("addrs", [w["lease"]["ip"]] if w["lease"]["ip"] else [])
+                    if tool == "dhcpcd" and w["lease"]["ip"] in addrs: addrs.remove(w["lease"]["ip"])
+                    if air["ip"] not in addrs: addrs.append(air["ip"])
                 w["lease"] = {"ip": air["ip"], "gw": air["gw"]}
         elif tool == "ping":                        # the ARP cache: entries stay, the one asked for is filled in if there
             n, air = connected(w); rc = 1

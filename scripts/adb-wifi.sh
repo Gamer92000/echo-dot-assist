@@ -9,4 +9,8 @@ HOST=${1:-$(cat secrets/ota.host 2>/dev/null || true)}
 [ -n "$HOST" ] || { echo "usage: scripts/adb-wifi.sh <echo-ip>"; exit 1; }
 [ -f secrets/update.key ] || { echo "secrets/update.key missing: without it only USB or Home Assistant's switch open adb"; exit 1; }
 python3 scripts/otatool.py adb "$HOST" "${OTA_PORT:-28929}" secrets/update.key
-adb connect "$HOST:5555"
+# the Echo answers once root has set the port; adbd's restart comes a moment later (cannoli, 2026-11-15: refused at once)
+i=0; until adb connect "$HOST:5555" | grep -q '^connected\|^already'; do
+    i=$((i + 1)); [ $i -lt 10 ] || { echo "adb did not answer on $HOST:5555"; exit 1; }; sleep 1
+done
+echo "connected to $HOST:5555"

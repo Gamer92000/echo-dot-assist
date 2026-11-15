@@ -131,7 +131,8 @@ static void put_all(int fd, const char *p, size_t n)
 /* Amazon's attestation module runs /system/bin/idme to read the raw identity store first; as the daemon's user that
  * fails with these three lines, four times per signing (davs.c's probe at start, every Amazon login), and it signs from
  * /proc/idme anyway (docs/re-davs-login.md).  Dropped when they come as that group, nowhere else.  The module itself
- * then warns that it cannot drop its groups (it does not run as root) and carries on: that line goes too. */
+ * then warns that it cannot drop its groups (it does not run as root) and carries on: that line goes too.  Cannoli (NAND,
+ * no mmcblk0boot1) prints the last two only. */
 static const char *const idme_noise[3] = { "Could not open /dev/block/mmcblk0boot1!", "Can't read the idme.", "system error occured while processing command" };
 static int dha_noise(const char *l)
 {
@@ -153,6 +154,7 @@ static void forward(int in, int out)
             if (!end && n < sizeof line - 1) continue;
             line[n] = 0;
             if (!strcmp(line + pre, idme_noise[noise])) noise = (noise + 1) % 3;
+            else if (!noise && !strcmp(line + pre, idme_noise[1])) noise = 2;
             else if (dha_noise(line + pre)) noise = 0;
             else { noise = 0; line[n++] = '\n'; put_all(out, line, n); }
             n = 0;

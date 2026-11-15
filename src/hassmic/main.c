@@ -3159,6 +3159,48 @@ static float lux_tcs3400(const char *dir)
     return lux;
 }
 
+/* A TSL2540 under DIR (an i2c device folder; its iio:device* holds the channels), turned into lux as stock's HAL does
+ * (lux.h) with the unit's own calibration from idme (alsparams, alscal: read once, HASSMIC_IDME for tests).  The gain
+ * and integration time are read back each time, as stock does: stock's ledcontroller set them (alsgain 5 -> calibscale
+ * 256, 0.700 s on the first cannoli). */
+static struct tsl2540_cal tsl_cal;
+static void tsl2540_idme(void)                 /* once: core_lux runs on the ESPHome, page and settings threads */
+{
+    char params[128] = "", cal[160] = "", p[160]; const char *idme = getenv("HASSMIC_IDME"); FILE *f;
+    snprintf(p, sizeof p, "%s/alsparams", idme ? idme : "/proc/idme");
+    if ((f = fopen(p, "r"))) { if (!fgets(params, sizeof params, f)) params[0] = 0; fclose(f); }
+    snprintf(p, sizeof p, "%s/alscal", idme ? idme : "/proc/idme");
+    if ((f = fopen(p, "r"))) { if (!fgets(cal, sizeof cal, f)) cal[0] = 0; fclose(f); }
+    tsl2540_parse(&tsl_cal, params, cal);
+    if (!tsl_cal.have) fprintf(stderr, "light sensor: no calibration in idme alscal, no reading\n");
+}
+
+static float lux_tsl2540(const char *dir)
+{
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    const struct tsl2540_cal *k = &tsl_cal;
+    pthread_once(&once, tsl2540_idme);
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    float lux = NAN;
+    while (d && (e = readdir(d))) {
+        if (strncmp(e->d_name, "iio:device", 10)) continue;
+        static const char *const ch[] = { "in_intensity0_raw", "in_intensity1_raw", "in_intensity_calibscale",
+                                          "in_intensity_integration_time" };
+        double v[4]; int ok = 1; char p[320]; FILE *f;
+        for (int i = 0; i < 4 && ok; i++) {
+            snprintf(p, sizeof p, "%s/%s/%s", dir, e->d_name, ch[i]);
+            ok = (f = fopen(p, "r")) && fscanf(f, "%lf", &v[i]) == 1;
+            if (f) fclose(f);
+        }
+        ok = ok && v[2] >= 0 && v[2] <= 65536;          /* calibscale: 128 or 256 seen; a cast of anything else is UB */
+        if (ok && (lux = lux_tsl2540_calc(v[0], v[1], (int)v[2], v[3], k)) < 0) lux = NAN;
+        break;
+    }
+    if (d) closedir(d);
+    return lux;
+}
+
 /* The light sensor as stock's HAL (libacehal_ambientLightSensor.so, its per-model "facade") reads it: a sysfs file the
  * kernel driver fills with calibrated lux, parsed with atof.  0..400 is all stock uses of it. */
 float core_lux(void)
@@ -3168,6 +3210,7 @@ float core_lux(void)
     for (; p && *p; p++) {
         char buf[32]; int fd; ssize_t n;
         if (!strncmp(*p, "tcs3400:", 8)) { float l = lux_tcs3400(*p + 8); if (!isnan(l)) return l; continue; }
+        if (!strncmp(*p, "tsl2540:", 8)) { float l = lux_tsl2540(*p + 8); if (!isnan(l)) return l; continue; }
         fd = open(*p, O_RDONLY);
         if (fd < 0) continue;
         n = read(fd, buf, sizeof buf - 1); close(fd);

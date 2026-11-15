@@ -58,6 +58,10 @@ boot_image() {
     # qrun.sh says there why it did not run qemu (no user namespace: Ubuntu 24.04 and later)
     [ -s $OUT/sepolicy.hassmic ] ||
         die "the policy patch failed (tools/qrun.sh $SEPOLICY_TOOL): $(grep '^qrun.sh' $OUT/qrun.log || tail -n 3 $OUT/qrun.log)"
+    # magiskpolicy exits 0 when a rule names a type the policy does not have and silently skips it; both applies'
+    # output went to qrun.log, so what it did drop is in there
+    ! grep -q 'does not exist' $OUT/qrun.log ||
+        die "magiskpolicy silently dropped a rule that names a type the policy does not have ($OUT/qrun.log)"
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.hassmic --print-rules > $OUT/sepolicy.rules.txt 2>/dev/null || true
     grep -qx 'permissive adbd' $OUT/sepolicy.rules.txt && grep -q '^allow init su process' $OUT/sepolicy.rules.txt &&
         grep -q '^type hassmic ' $OUT/sepolicy.rules.txt && ! grep -q '^allow hassmic [^ ]* property_service' $OUT/sepolicy.rules.txt &&

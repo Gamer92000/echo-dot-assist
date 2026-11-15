@@ -25,7 +25,7 @@ without them only the host targets build. Extraction steps: `devices/donut/READM
 
 ```sh
 make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool;
-                         # libhmui.so where device.mk has SCREEN)
+                         # libhmui.so where device.mk has SCREEN, libhmled.so where it has LEDSHIM)
 make DEVICE=donut STUBS=1  # same, without firmware/: links against stand-ins from devices/<codename>/stubs/*.syms (byte-identical)
 make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake, SIGTTOU a near miss; board.c of DEVICE),
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
@@ -115,6 +115,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_ring_acs.py    # the same on binary animations (the Echo Dot 5): the set with stock's
+                                             # index files, the light drawn into its two slots through a stand-in shim
 .venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
                                              # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -156,6 +158,11 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   `main.sh` (`factory()`, only if that version is installed and its hassmic is what runs) has `sysinstall.sh` write it to
   `/system/hassmic` as the factory copy, bootstrap included (`boot.sh`, `otatool`, `hassmic.rc`, `release.pub`; never
   `update.pub` or `/sepolicy`). Works from older installs: the pushed update brings the code.
+  Where the factory copy is in an overlay on /data (device.conf `ROLLBACK`: cannoli), `sysinstall.sh` keeps the copy it
+  replaces in `ROLLBACK/previous` (only one `main.sh` `reach_check` saw reached from the network: a connection from
+  another address to a port of ours), and the flashed `prepare.sh` steps back after two boots without being reached
+  (`ROLLBACK/boots`; main.sh excuses a boot before set-up or without an address, for a version reached before): the unpromoted update, else the
+  factory copy to `previous`, else to the flashed copy; each version taken out into `ota/refused`, never installed again.
 - The light ring's own animations: `main.sh` installs them itself at satellite start when they are not this build's
   (none where `/system/etc/led-resources` is missing: checkers)
   (`sysinstall.sh leds`, ledcontroller restarted); `install-system.sh --uninstall` puts stock's layer config back.
@@ -500,8 +507,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `/data/local/hassmic/wifi/` (`status`, `scan`, `result`, `lock/`; the id ties answer to request). The password comes
   sealed with K (`web.c` unseal, `crypto.js` seal) and only its PSK (PBKDF2) leaves hassmic. wifi.sh saves nothing
   until the Echo is on the new network with a fresh lease (dhcpcd runs with `-K` and ignores network changes: wifi.sh
-  marks `dhcp.<if>.result`, runs `dhcpcd -n`, waits for the hook to write it) and its router answers ARP; else it
-  removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
+  marks `dhcp.<if>.result`, restarts init's `dhcpcd-<if>` (not `dhcpcd -n`: it waited for a carrier for good), waits
+  for the hook to write it) and its router answers ARP; else it removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
   leaves wifisvc alone while `lock/` exists and runs `wifi.sh status` on every address change; `clean` at the firewall start.
 - **Setup (OOBE) and factory reset** (`improv.c`, `main.c`): not set up = from an install or a reset until Home
   Assistant's voice assistant subscribed (`core_link` ready -> `state/adopted`; an existing `state/api_key` counts);
@@ -533,13 +540,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `toolchain/linux-<KVER>` + `devices/<codename>/kconfig` (biscuit/radar: IKCONFIG of `boot.img`, `KCONFIG`; donut: a
   fragment on arm64 defconfig, `KFRAG`), with AOSP
   `arm-eabi-4.8` / `aarch64-linux-android-4.9`. Without the module donut falls back to `iwpriv wlan0 driver RX_STAT` (last
-  frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.
+  frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.  RCPI1 where RCPI0 is
+  255 (cannoli's second antenna receives).  Modversions kernels (athena, cannoli): `devices/<codename>/Module.symvers`
+  from `tools/kcrc.py` (boot.img's `__kcrctab`, checked against stock modules).  Cannoli (Android's common kernel 5.4):
+  `HM_DRIVER_SYMS` (no `kallsyms_lookup_name` export: the driver's own symtab via `find_module`; the `bl` written
+  through a `vmap` alias), `KMOD_INIT` 0xfc (`tools/kmod-init.py`: its `struct module` has `init` 36 bytes on).
 - **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
   `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6; Dot 3: the TAS2770 amplifier's
   `DAC Playback Volume` = AMP_LEVEL, stock 16 of 0..20 in 0.5 dB steps (`speaker_gain_steps` 2), so +2 dB at most:
   `spkgain_max()`/`settings_max()` give the page the control's top; Show 5: the RT5616's line out `OUT Playback Volume`,
   stock 29 = -3 dB of 0..39 in 1.5 dB steps, `speaker_gain_steps` 2 per `speaker_gain_db` 3, a whole dB takes the
-  nearest step), written by hassmic itself (group audio). The Dot 2's
+  nearest step; Dot 5: the MAX98396's `Speaker Volume A`, stock 10 = +14 dB of +4..+21, offered to 16), written by
+  hassmic itself (group audio). The Dot 2's
   HAL writes stock at every mixer start (and per its XML on a jack change; the Dot 3's never writes it): a thread on the
   card's control events writes ours back when it sees stock, and leaves other values (the jack's 11) alone.
   `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>]]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
@@ -594,7 +606,16 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   turned (band position p = LED p + 5: the talker's pair in the middle): Apply needs no root there
   (`ring_designs_live`), and `ring_stock` gives the page the band's own patterns as files.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
   each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on);
-  sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
+  sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).
+  Binary animations (ACS, the Echo Dot 5; found by stock's `acs_animation_list.txt`): `<index>.<name>.animation_bin`
+  (big-endian "animagic"/"totl"/"loop"/"fram", 12 RGB pixels, donut's text byte for byte), index files rewritten with
+  ours after stock's (`acs_*`, `layer_config_common.txt` = the JSON flattened; stock's kept as `.pre-hassmic`,
+  `sysinstall.sh leds`).  Its LED manager on the SCP holds every animation from ledcontroller's start and refuses an
+  init past ~400 (a failed one leaves it dead until a reboot), so no palette: Home Assistant's light is drawn when it
+  changes into one of two slots (`hassmic_light_a|b`, `light_apply_acs`) through `src/ledshim/ledshim.c`
+  (`libhmled.so`, device.mk `LEDSHIM`), preloaded into ledcontroller (abstract socket `@hassmic-led`,
+  `aceLedMgr_updateAnimationData`; the daemon's uid, `hassmic_` names only).  Root runs that ledcontroller itself
+  (`main.sh` `ledc_start`/`ledc_watch`): a copy without its file capability, else the linker ignores LD_PRELOAD.  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the
@@ -691,7 +712,8 @@ DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there 
 `tools/wakealign/corpus_eval.py` measures the replay's start on it (stock Pryon under qemu, the release's rule, the
 aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
-`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
+`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `kcrc.py` (a modversions
+kernel's CRCs out of its boot image) and `kmod-init.py` (Wi-Fi motion's module),  `vol-curve.py`: an Android Echo's
 volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
 output, a PC microphone beside it, for `board.cold_lead_ms`).
 

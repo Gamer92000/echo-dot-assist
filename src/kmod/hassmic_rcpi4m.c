@@ -3,7 +3,8 @@
  * on the Echos with MediaTek's gen4m driver wlan_mt76x8_sdio.ko (MT7668, a module of its own): the Echo Dot 3 (donut,
  * kernel 4.4.22, arm64), the Echo Show 5 (checkers, kernel 4.9.77, 32-bit ARM) and the Echo Show 8 2nd gen (athena, 4.4.146:
  * a gen2 driver name, but the same RX vector code, nicRxGetRcpiValueFromRxv included; frames at 119-120 for -50 dBm unicast,
- * 129 for broadcasts, 2026-10-16).  hassmic_rcpi.c's counterpart for
+ * 129 for broadcasts, 2026-10-16); the Echo Dot 5 (cannoli, 5.4.86, 32-bit ARM: athena's driver name and RX path,
+ * HM_DRIVER_SYMS below).  hassmic_rcpi.c's counterpart for
  * that driver.  The driver's own RX_STAT answer is the firmware's figure for
  * the last frame from anyone on the channel, every station and neighbouring network included, and one per ioctl; this
  * counts only what reaches the driver's data path, which in station mode is the access point's, frame by frame.
@@ -22,8 +23,10 @@
  * (bit 2: group 3, the RX vector), prRxStatusGroup3 at +64; on 32-bit ARM, with pointers of 4 bytes, at +16 and +32
  * (checkers' driver: the strb of DW0 bits 25-28 and the group pointers stored after it, group 3 the 24-byte one, which
  * its nicRxGetRcpiValueFromRxv reads at +32).  RCPI0 is byte 0 of RX vector word 3, as the driver's own nicRxGetRcpiValueFromRxv
- * reads it (half dB, dBm = RCPI / 2 - 110; one receive chain, RCPI1 is 255).  The same function goes on to copy those
- * words into the access point's STA_RECORD_T for every such frame.
+ * reads it (half dB, dBm = RCPI / 2 - 110; one receive chain, RCPI1 is 255), and RCPI1, byte 1, where RCPI0 is 255, as
+ * that function does too: cannoli (MT7653, two antennas) receives on its second chain, RCPI0 255 in every frame and
+ * RCPI1 101-108 (2026-11-15).  The same function goes on to copy those words into the access point's STA_RECORD_T for
+ * every such frame.
  *
  * How: neither kernel has kprobes.  That one `bl nicRxFillRFB` becomes `bl hm_fill`, which calls nicRxFillRFB itself
  * and then reads the levels; no trampoline, no displaced instruction.  The call is found by its target, not its offset,
@@ -47,6 +50,7 @@
 #include <linux/sizes.h>
 #include <linux/stop_machine.h>
 #include <linux/uaccess.h>
+#include <linux/vmalloc.h>
 #include <asm/cacheflush.h>
 
 static char *hook_sym = "nicRxProcessDataPacket";
@@ -60,7 +64,7 @@ static uint rfb_vld = 16;           /* the same on 32-bit ARM (checkers) */
 static uint rfb_grp3 = 32;
 #endif
 static uint vld_grp3 = 2;           /* ucGroupVLD's bit for group 3 */
-static uint grp3_rcpi = 12;         /* RCPI0 in group 3: RX vector word 3, byte 0 (nicRxGetRcpiValueFromRxv) */
+static uint grp3_rcpi = 12;         /* RCPI0 in group 3: RX vector word 3, byte 0, RCPI1 after it (nicRxGetRcpiValueFromRxv) */
 static uint rate_mask = 0x1f07f;    /* rate, mode, bandwidth in RX vector word 0 */
 module_param(hook_sym, charp, 0444);
 module_param(fill_sym, charp, 0444);
@@ -77,12 +81,13 @@ static u8 (*fill)(void *adapter, void *rfb);    /* BOOLEAN nicRxFillRFB(): the c
 
 static void hm_rx(void *rfb)
 {
-    u8 vld, *grp3, rcpi; u32 rxv0;
+    u8 vld, *grp3, rcpi, r[2]; u32 rxv0;
     if (probe_kernel_read(&vld, (u8 *)rfb + rfb_vld, 1) || !(vld & BIT(vld_grp3))) return;
-    if (probe_kernel_read(&grp3, (u8 *)rfb + rfb_grp3, sizeof grp3) || probe_kernel_read(&rcpi, grp3 + grp3_rcpi, 1)
+    if (probe_kernel_read(&grp3, (u8 *)rfb + rfb_grp3, sizeof grp3) || probe_kernel_read(r, grp3 + grp3_rcpi, 2)
         || probe_kernel_read(&rxv0, grp3, 4)) return;
+    rcpi = r[0] == 255 ? r[1] : r[0];
     if (!rcpi || rcpi == 255) return;
-    atomic_set(&last, rcpi | (rxv0 & rate_mask & 0x7fffff) << 8); ACCESS_ONCE(last_jiffies) = jiffies; atomic_inc(&frames);
+    atomic_set(&last, rcpi | (rxv0 & rate_mask & 0x7fffff) << 8); WRITE_ONCE(last_jiffies, jiffies); atomic_inc(&frames);
 }
 
 static u8 hm_fill(void *adapter, void *rfb)
@@ -96,7 +101,7 @@ static int show(struct seq_file *m, void *v)
 {
     int r = atomic_read(&last);
     if (r < 0) { seq_puts(m, "ERROR = no frame yet\n"); return 0; }
-    seq_printf(m, "RCPI RX0 = %d\nAGE = %u\nFRAMES = %d\nKIND = %x\n", r & 0xff, jiffies_to_msecs(jiffies - ACCESS_ONCE(last_jiffies)),
+    seq_printf(m, "RCPI RX0 = %d\nAGE = %u\nFRAMES = %d\nKIND = %x\n", r & 0xff, jiffies_to_msecs(jiffies - READ_ONCE(last_jiffies)),
                atomic_read(&frames), r >> 8);
     return 0;
 }
@@ -141,6 +146,7 @@ static int make_bl(unsigned long at, unsigned long to, u32 *insn)
     return 0;
 }
 
+#ifndef HM_DRIVER_SYMS
 /* athena's kernel (4.4.146, MT8183) has neither patch_text (no KGDB) nor writable module text (DEBUG_SET_MODULE_RONX):
  * the page goes read-write by set_memory_rw (not exported either), the word is written under stop_machine, and the
  * page stays read-write: the driver's text is ours to patch, and a page flipped back could be one being run */
@@ -162,11 +168,79 @@ static int patch(void *patcher, void *addr, u32 insn)
     return stop_machine(poke, w, NULL);
 }
 #endif
+#endif
 
-static int __init init_fn(void)
+#ifdef HM_DRIVER_SYMS
+#ifdef CONFIG_ARM64
+#error "HM_DRIVER_SYMS is written for 32-bit ARM (cannoli)"
+#endif
+/* cannoli's kernel (5.4.86, Android's common kernel; device.mk KCFLAGS) exports no kallsyms_lookup_name, and nothing
+ * that writes module text: no patch_text (no JUMP_LABEL, KPROBES or KGDB), set_memory_rw not exported, and module text
+ * read-only (STRICT_MODULE_RWX).  So the two functions come from the driver's own symbol table (find_module, its
+ * mod_kallsyms; every read through probe_kernel_read, as struct module is Android's and not ours: its init is 36 bytes
+ * further on, Makefile KMOD_INIT, but from the cacheline-aligned core_layout on, kallsyms included, it is as ours, exit
+ * at 0x208 in both), each taken only if sprint_symbol names it at offset 0; and the word is written
+ * through a second, writable mapping of its page (vmap) under stop_machine, the driver's own mapping left read-only.
+ * The ARMv7 architecture requires data and unified caches to behave as physically indexed and tagged (ARM ARM,
+ * "Cache behaviour"): no aliases, so cleaning by the text's address cleans the line the alias wrote. */
+static char *drv_mod = "wlan_mt76x3_sdio";
+module_param(drv_mod, charp, 0444);
+
+static unsigned long lookup(const char *name)
 {
-    unsigned long caller = kallsyms_lookup_name(hook_sym), target = kallsyms_lookup_name(fill_sym), site = 0;
-    void *patcher = (void *)kallsyms_lookup_name(PATCHER);
+    struct module *mod; struct mod_kallsyms *ks = NULL; Elf_Sym *symtab, s; char *strtab, nm[64], buf[KSYM_SYMBOL_LEN];
+    unsigned long addr = 0; unsigned int i, n = 0; size_t len = strlen(name);
+    if (len + 1 > sizeof nm) return 0;
+    mod = find_module(drv_mod);                     /* module_mutex held by init_fn */
+    if (mod && !probe_kernel_read(&ks, &mod->kallsyms, sizeof ks) && ks && !probe_kernel_read(&symtab, &ks->symtab, sizeof symtab)
+        && !probe_kernel_read(&n, &ks->num_symtab, sizeof n) && !probe_kernel_read(&strtab, &ks->strtab, sizeof strtab))
+        for (i = 0; i < n && i < 1000000; i++) {
+            if (probe_kernel_read(&s, symtab + i, sizeof s)) break;
+            if (ELF_ST_TYPE(s.st_info) != STT_FUNC || probe_kernel_read(nm, strtab + s.st_name, len + 1)) continue;
+            if (!memcmp(nm, name, len + 1)) { addr = s.st_value; break; }
+        }
+    if (!addr) return 0;
+    sprint_symbol(buf, addr);                       /* "nicRxFillRFB+0x0/0x27c [wlan_mt76x3_sdio]" */
+    if (strncmp(buf, name, len) || strncmp(buf + len, "+0x0/", 5)) { pr_err("hassmic_rcpi4m: %s at %#lx is %s\n", name, addr, buf); return 0; }
+    return addr;
+}
+#define lookup_name lookup
+#define HM_PATCHER NULL
+/* the driver stays loaded from its lookup through the write: no rmmod between them (it takes module_mutex) */
+#define HM_LOCK() mutex_lock(&module_mutex)
+#define HM_UNLOCK() mutex_unlock(&module_mutex)
+
+static int poke_alias(void *arg)
+{
+    u32 *w = arg;           /* the alias' word, the instruction, the text's address */
+    *(u32 *)w[0] = w[1];
+    flush_icache_range(w[2], w[2] + 4);
+    return 0;
+}
+
+static int patch(void *unused, void *addr, u32 insn)
+{
+    struct page *pg = vmalloc_to_page(addr);
+    void *map = pg ? vmap(&pg, 1, VM_MAP, PAGE_KERNEL) : NULL;
+    u32 w[3];
+    int r;
+    if (!map) return -ENOMEM;
+    w[0] = (u32)map + offset_in_page(addr); w[1] = insn; w[2] = (u32)addr;
+    r = stop_machine(poke_alias, w, NULL);
+    vunmap(map);
+    return r;
+}
+#else
+#define lookup_name kallsyms_lookup_name
+#define HM_PATCHER ((void *)kallsyms_lookup_name(PATCHER))
+#define HM_LOCK() do { } while (0)
+#define HM_UNLOCK() do { } while (0)
+#endif
+
+static int hook(void)
+{
+    unsigned long caller = lookup_name(hook_sym), target = lookup_name(fill_sym), site = 0;
+    void *patcher = HM_PATCHER;
     u32 insn; uint i, n = 0;
     if (!caller || !target || (!patcher && !IS_ENABLED(CONFIG_ARM))) {
         pr_err("hassmic_rcpi4m: %s, %s or %s not in this kernel (Wi-Fi driver loaded?)\n", hook_sym, fill_sym, PATCHER);
@@ -185,6 +259,13 @@ static int __init init_fn(void)
     }
     pr_info("hassmic_rcpi4m: %s+%#lx (call to %s) hooked, /proc/hassmic_rcpi4m\n", hook_sym, site - caller, fill_sym);
     return 0;
+}
+
+static int __init init_fn(void)
+{
+    int r;
+    HM_LOCK(); r = hook(); HM_UNLOCK();
+    return r;
 }
 
 module_init(init_fn);

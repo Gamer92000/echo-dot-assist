@@ -96,6 +96,55 @@ fwcheck() {
     fi
 }
 
+# Rollback (device.conf ROLLBACK, devices/cannoli/prepare.sh): the boot count goes back to 0 once the Echo is reached
+# from the network, a TCP connection from another address established on a port of ours (ESPHome 26053, Wyoming 16700,
+# Sendspin 28928, push updates 28929, the settings page 28931): what an update must not lose, since without it only a
+# USB cable reaches the Echo.  The version that runs is written down as reached (the last 8), and sysinstall.sh keeps
+# only a reached copy to roll back to.  Looked at every 10 s until the first such connection of the boot.  A boot
+# nobody could have reached the Echo on does not count (the count goes back down by one): one before it is set up
+# (Improv, a reset: no state/adopted), or one without a network address in its first 5 minutes, watched for a minute
+# at least (a satellite restarted later in the boot has not seen its start: the address is read here, not taken from
+# netwatch's last round).  Only for a version reached before (in ROLLBACK/reached): an update that loses the network
+# itself (Wi-Fi, the address) is counted like any other that cuts the Echo off; three excused boots in a row at most
+# (ROLLBACK/excused, back to 0 when reached), so one that was reached once and loses the network later still steps
+# back; and only this script excuses, so a main.sh that is broken never does.
+reached= excused= had_addr= reach_from=
+reach_check() {
+    [ -n "$ROLLBACK" ] && [ -z "$reached" ] && [ -d "$ROLLBACK" ] && [ ! -L "$ROLLBACK" ] || return 0
+    up=$(cut -d. -f1 /proc/uptime); reach_from=${reach_from:-$up}
+    ifconfig ${WLAN:-wlan0} 2>/dev/null | grep -q "inet addr:" && had_addr=1
+    v=$(cat $D/VERSION 2>/dev/null)
+    if [ -z "$excused" ] && [ -n "$v" ] && grep -qxF "$v" $ROLLBACK/reached 2>/dev/null; then
+        why=
+        if [ ! -f /data/local/hassmic/state/adopted ]; then why="not set up yet"
+        elif [ -z "$had_addr" ] && [ "$up" -ge 300 ] && [ $((up - reach_from)) -ge 60 ]; then
+            why="no network address in 5 minutes"
+        fi
+        e=$(cat $ROLLBACK/excused 2>/dev/null); case "$e" in ''|*[!0-9]*) e=0;; esac
+        if [ -n "$why" ] && [ "$e" -ge 3 ]; then
+            excused=1; echo "rollback: this boot counts ($why, but the third excused boot in a row was the last)"
+        elif [ -n "$why" ]; then
+            excused=1
+            echo $((e + 1)) > $ROLLBACK/excused.new && mv -f $ROLLBACK/excused.new $ROLLBACK/excused
+            n=$(cat $ROLLBACK/boots 2>/dev/null); case "$n" in ''|*[!0-9]*) n=1;; esac
+            [ "$n" -le 0 ] || { echo $((n - 1)) > $ROLLBACK/boots.new && mv -f $ROLLBACK/boots.new $ROLLBACK/boots; sync; }
+            echo "rollback: this boot does not count ($why)"
+        fi
+    fi
+    found=
+    while read -r _ l r st _; do
+        case "$st:${l#*:}" in 01:65C5|01:413C|01:7100|01:7101|01:7103) case $r in 0100007F:*) ;; *) found=1; break;; esac;; esac
+    done < /proc/net/tcp
+    [ -n "$found" ] || return 0
+    reached=1
+    echo 0 > $ROLLBACK/boots.new && mv -f $ROLLBACK/boots.new $ROLLBACK/boots
+    rm -f $ROLLBACK/excused
+    [ -z "$v" ] || grep -qxF "$v" $ROLLBACK/reached 2>/dev/null ||
+        { { tail -n 7 $ROLLBACK/reached 2>/dev/null; echo "$v"; } > $ROLLBACK/reached.new && mv -f $ROLLBACK/reached.new $ROLLBACK/reached; }
+    sync
+    echo "rollback: reached from the network, boot count 0 (${v:-factory})"
+}
+
 # Wi-Fi motion (device.conf KMOD): our kernel module hooks the Wi-Fi driver's receive path for the level of every frame
 # from the access point (src/kmod/).  Loaded only once Wi-Fi motion is switched on (wifi_motion=on in hassmic's
 # state/config; field 13 of the state/settings of older versions; hassmic waits for /proc/<module> meanwhile), so while it is off - the default - no kernel code is touched; and
@@ -619,12 +668,39 @@ android_tell() {
     else android_wait=6 android_failed=$ss; fi
 }
 
+# ledcontroller sets ALEXA_PROP once it is up, and init starts Alexa on it.  Where hassmic.rc starts the satellite on
+# that same property (donut), alexa-off.sh comes right after.  Cannoli's starts on the overlay and the mixer instead
+# (its firewall service may clear the property before the satellite sees it), and ledcontroller sets it only after its
+# LED HAL is up, or given up on after 5 s (2026-11-14).  So look again here: at most 10 s of Alexa, cut off by the
+# egress lock meanwhile.
+alexa_back() {
+    [ -n "$ALEXA_PROP" ] && [ "$(getprop $ALEXA_PROP)" = 1 ] || return 0
+    # the same trigger starts cloud daemons too (assetmgrd, ahe): lockdown.sh's list, as at the satellite's start
+    sh $D/lockdown.sh services > /dev/null 2>&1
+    sh $D/alexa-off.sh > /dev/null 2>&1; quiet
+    echo "netwatch: $ALEXA_PROP set again (ledcontroller started), Alexa and the cloud daemons stopped"
+}
+
+# device.conf WIFI_AWAKE: a driver command that keeps the Wi-Fi out of power save (cannoli: MediaTek's
+# ENFORCE_POWER_MODE 0, CAM), sent through wpa_supplicant whenever the driver does not report that mode: once a link is
+# up, and again if a reconnect or a driver restart lost it.  Said once per change, not every 10 s.  The check reads
+# MediaTek gen4m's get_power_mode ("enforce power mode N", N the command's last word): another driver never matches it
+# and would be sent the command every 10 s, so a model whose driver words it otherwise needs its own check here.
+wifi_awake() {
+    [ -n "$WIFI_AWAKE" ] || return 0
+    case "$(iwpriv $WLAN driver get_power_mode 2>/dev/null)" in *"enforce power mode ${WIFI_AWAKE##* }"*) return 0;; esac
+    r=$(wpa driver $WIFI_AWAKE | tail -n 1)
+    [ "$r" = "$awake_said" ] || echo "netwatch: Wi-Fi kept out of power save ($WIFI_AWAKE: ${r:-no answer})"
+    awake_said=$r
+}
+
 # While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
 netwatch() {
     miss=0 addr= down=0
     while :; do
+        reach_check                                     # first: nothing below may keep it from seeing a link
         rotate_log
         clock_set
         tz_set
@@ -637,6 +713,7 @@ netwatch() {
             miss=0
             [ "$a" = "$addr" ] || { addr=$a; [ -f $D/wifi.sh ] && sh $D/wifi.sh status; }
             kmod
+            wifi_awake
             [ -n "$WIFI_SERVICE" ] && [ "$(getprop init.svc.$WIFI_SERVICE)" = running ] && [ ! -d $WIFI/lock ] && { sleep 5; stop $WIFI_SERVICE; echo "netwatch: link up, $WIFI_SERVICE stopped"; }
         elif [ -d $WIFI/lock ]; then
             miss=0 addr=
@@ -649,6 +726,8 @@ netwatch() {
         fi
         psk_only
         android_tell
+        ledc_watch
+        alexa_back
         sleep 10
     done
 }
@@ -793,6 +872,10 @@ ota_watch() {
             rejected "version $ver is built for ${prod:-an unknown model}, this Echo is $(getprop ro.product.device); not installed"
         elif ! { chmod 755 $new && [ -f $new/main.sh ] && $new/runas -Z u:r:hassmic:s0 $DAEMON_USER shell $new/hassmic -T > /dev/null 2>&1; }; then  # the daemon's user can really run it, where it runs
             rejected "version $ver does not run as the daemon's user (self-check failed), not installed"
+        elif [ -s $OTA/refused ] && grep -qxF "$(cat $new/VERSION 2>/dev/null)" $OTA/refused; then
+            # prepare.sh took this version out: two boots in a row nobody on the network reached the Echo with it (the
+            # exact version string: a build of the same commit by another key or channel is another version)
+            rejected "version $ver was rolled back on this Echo (not reached from the network with it); not installed again"
         elif [ -f $new/otatool ] && ! $new/otatool verify $key $INB/bundle $INB/bundle.sig > /dev/null 2>&1; then
             # Once it passes its self test, its otatool becomes the one on the system partition that checks every later
             # update: so it must pass that check itself.
@@ -828,10 +911,60 @@ ota_watch() {
 # (HASSMIC_RING_LEDS=0), which counts as installed from then on; Home Assistant then has the light but no fill.
 # A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
 BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
+# ledcontroller with libhmled.so (the Echo Dot 5, where the build brings it: src/ledshim/ledshim.c says why): root runs
+# ledcontroller itself in place of init's service, with the shim preloaded.  Its binary carries a file capability
+# (CAP_WAKE_ALARM), and exec of such a file marks the process secure: the linker then ignores LD_PRELOAD.  So a copy
+# without it (cp keeps no xattrs), which runs as init's does otherwise (user ledcontroller, groups aipc dbus als; in su,
+# not ledcontroller's domain: the copy is no ledcontroller_exec).  Neither it nor its libraries ask for alarm timers, and
+# without the capability its HAL came up and played as stock's (2026-11-15).  One LED manager session at a time: init's
+# is stopped first.  ledc_watch (netwatch) starts it again when it died or init's came back.
+LEDC=/data/local/hassmic/ledcontroller-hm
+ledc_ours() { [ -f $D/libhmled.so ] && [ -x /system/bin/ledcontroller ]; }
+ledc_start() {
+    stop ledcontroller
+    for p in $(pidof ledcontroller-hm); do kill $p; done
+    cmp -s /system/bin/ledcontroller $LEDC 2>/dev/null ||
+        { cp /system/bin/ledcontroller $LEDC.new && chmod 755 $LEDC.new && mv $LEDC.new $LEDC; } ||
+        { echo "light ring: cannot copy ledcontroller, init's runs (no light from Home Assistant)"; start ledcontroller; return 1; }
+    setsid $D/runas ledcontroller aipc,dbus,als env LD_PRELOAD=$D/libhmled.so HASSMIC_LED_UID=$(id -u $DAEMON_USER) $LEDC \
+        < /dev/null > /dev/null 2>&1 &
+}
+ledc_restart() { if ledc_ours; then ledc_start; else stop ledcontroller; start ledcontroller; fi; }
+# Not while leds() holds its lock (it restarts ledcontroller itself; two LED managers would fight for the session); a
+# lock it left behind (ledlock_live) does not count.  Ours dying 3 times, each within 10 min of its start: init's runs
+# from then on, until the next satellite start (no light from Home Assistant).
+ledc_died=0 ledc_since=0
+ledc_watch() {
+    ledc_ours && [ $ledc_died -lt 3 ] && ! ledlock_live || return 0
+    [ -n "$(pidof ledcontroller-hm)" ] && [ "$(getprop init.svc.ledcontroller)" != running ] && return 0
+    if [ -z "$(pidof ledcontroller-hm)" ]; then
+        now=$(cut -d. -f1 /proc/uptime)
+        [ $((now - ledc_since)) -lt 600 ] || ledc_died=0
+        ledc_since=$now ledc_died=$((ledc_died + 1))
+        [ $ledc_died -lt 3 ] || { echo "light ring: ledcontroller with libhmled.so died 3 times, init's runs"; stop ledcontroller; start ledcontroller; return 0; }
+    fi
+    echo "light ring: $([ -n "$(pidof ledcontroller-hm)" ] && echo "init's ledcontroller ran again" || echo "ledcontroller with libhmled.so was gone"), started ours"
+    ledc_start
+}
+
 LEDNEW=/data/local/hassmic/leds.new
 LEDLOCK=/data/local/hassmic/leds.lock
+# leds()'s lock held by a shell of this boot that still runs (a pid of an earlier boot may be taken again by now)
+ledlock_live() {
+    local p b; [ -d $LEDLOCK ] || return 1
+    read -r p b 2>/dev/null < $LEDLOCK/pid || return 1     # no pid: left by one killed as it took it (a live one writes at once)
+    [ "$b" = "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" ] && kill -0 "$p" 2>/dev/null
+}
 leds() {
     LEDS=failed LEDWHY=
+    # Cannoli's boot swirl is no animation of ledcontroller's but the kernel's LED trigger "boot-anim" on each LP5036
+    # module; stock's LED HAL takes it off once its LED manager on the SCP answers.  Where that never happens (an SCP
+    # that does not run, PLAN.md) the ring would turn for good.  Taking the trigger off turns the LED off (the kernel
+    # does), and is nothing to a ring that is already ledcontroller's.
+    for t in /sys/class/leds/*/trigger; do
+        [ -f "$t" ] && grep -q '\[boot-anim\]' "$t" && echo none > "$t"
+    done
+    [ "${LED_CUSTOM:-1}" != 0 ] || { LEDS=stock; LEDWHY="this model uses compiled stock LED animations"; return 0; }
     [ -d /system/etc/led-resources ] || { LEDWHY="no light ring on this model"; return 0; }    # no ledcontroller (checkers: a screen)
     i=0
     boot=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)
@@ -856,7 +989,7 @@ leds() {
         if ! out=$(HASSMIC_RING_LEDS=$own $BIN -G $LEDNEW 2>&1); then LEDWHY="no animations of ours"; echo "light ring: no animations of ours ($out)"; break; fi
         small=; [ $own = 1 ] || small=", without the LEDs' own"
         echo "light ring: installing ours (${out#ring: })$small"
-        if out=$(sh $D/sysinstall.sh leds $D $LEDNEW 2>&1); then echo "$out"; stop ledcontroller; start ledcontroller; LEDS=ok LEDWHY=; break; fi
+        if out=$(sh $D/sysinstall.sh leds $D $LEDNEW 2>&1); then echo "$out"; ledc_restart; LEDS=ok LEDWHY=; break; fi
         echo "$out"; LEDWHY=$(echo "$out" | head -n 1); LEDWHY=${LEDWHY#sysinstall leds: }
         case "$out" in *"has room for"*) ;; *) break;; esac     # no room: again without the LEDs' own
     done
@@ -907,6 +1040,7 @@ satellite)
         # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
         [ -f $D/artifact-install.sh ] && READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic
         leds                              # before alexa-off.sh: a ledcontroller that started again may want Alexa back
+        ledc_ours && [ -z "$(pidof ledcontroller-hm)" ] && { echo "light ring: ledcontroller with libhmled.so"; ledc_start; }
         sh $D/alexa-off.sh; quiet
         # Android models: with the screen off Android lets the SoC suspend once no wake lock is held (autosleep), and the
         # satellite must keep listening: a kernel wake lock of root's, for as long as the satellite runs

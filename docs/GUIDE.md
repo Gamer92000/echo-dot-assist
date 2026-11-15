@@ -408,6 +408,9 @@ Beyond the README's two figures:
   meanwhile. A colour or an effect for the light makes it one colour again.
 - Fill and LED by LED need each LED's own animations, 10 MB of the Echo's system partition. Where it has no room for
   them, the Echo installs the ring without them: the light works, and Home Assistant has no fill, rotation or action.
+- **Echo Dot 5**: its ring keeps animations in a small co-processor that takes only a few hundred, too few for the set
+  above. There the light is drawn when it changes, into an animation the ring already holds, so it needs no set made
+  beforehand: same colours, effects, fill and LED by LED as on the other Dots.
 
   ```yaml
   - action: esphome.echo_dot_3_5695c4_light_ring_leds
@@ -873,8 +876,8 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 - **Only between the Echo and the router**, also in the next room if the router is there. Elsewhere in the room may
   not show at all.
 - **Expect false alarms** from other Wi-Fi devices, doors, people in the router's room; try the sensitivity before
-  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 and Echo Show 5 allow
-  for that).
+  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3, Echo Dot 5 and Echo Show 5
+  allow for that).
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
   on (within 10 s), then until the Echo restarts.
 - ESPHome only. It does not use the microphones; muting does not stop it.
@@ -953,13 +956,14 @@ not in the settings file, and a factory reset removes it. The name itself is fix
 a list of your other Echos with their notes and addresses. Pick one and its settings page opens on the page you are on
 (Voice here, Voice there). It lists the Echos the Echos page knows; one that does not answer comes last.
 
-**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and both Show 8s): for an Echo that is too
+**Speaker gain** (Sound; Echo Dot 2, Echo 2, Echo Dot 3 and Echo Dot 5, and the Echo Show 5 and both Show 8s): for an Echo that is too
 quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
 Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
 leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step; Echo Show 8 1st gen:
 the same, and down to −6 dB, since it is loud at full volume already; Echo Show 8 2nd gen: the amplifier's digital
 volume, +0 to +9 dB in steps of 0.5 dB, the top kept below where bass distorts; Echo Show 5 2nd gen: it depends on the
-amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's), so everything the
+amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's; Echo Dot 5: its
+Maxim amplifier, +0 to +6 dB), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume
@@ -1074,3 +1078,7 @@ for 30 minutes:
 | Encrypted link | ✅ key set by Home Assistant | ❌ plain TCP |
 | Online updates | ✅ | ❌ pushed from your PC only |
 | Settings page, setup from a phone, factory reset | ✅ | ✅ |
+
+## Echo Dot 5 (Cannoli) development
+
+For Cannoli NS6575/build 8349, follow the [device instructions](../devices/cannoli/README.md). This port requires the separate NAND/UBI installation workflow and isn't part of the upstream guided setup or release matrix yet. The remaining work is tracked in [PLAN.md](../PLAN.md).

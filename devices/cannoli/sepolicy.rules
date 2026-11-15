@@ -1,0 +1,29 @@
+permissive su
+allow su * * *
+allow init su process { transition siginh rlimitinh noatsecure }
+allow su shell_exec file { read getattr map execute entrypoint open }
+allow su system_file file { read getattr map execute entrypoint open }
+# Userdebug adbd switches to su for the USB shell (the stock service already
+# supplies --root_seclabel). TCP stays under upstream's signed debug control.
+allow adbd adbd process setcurrent
+allow adbd su process { transition dyntransition }
+allow su su process setcurrent
+# Kernel 5.4 OverlayFS opens its lower files using the mounting task's creds.
+# The root prepare service mounts /system as su; keep the ordinary file/type
+# checks, but permit stock domains to use those backing-file descriptors.
+allow domain su fd use
+# USB provisioning uses wpa_cli as root; supplicant must be able to reply to
+# its private control socket while the system remains enforcing.
+allow wpa su unix_dgram_socket sendto
+# Cannoli's mixer maps the ashmem ring created by its capture/playback client.
+# Give those objects a dedicated label; generic tmpfs is not readable by mixer.
+# hassmic is declared again by scripts/system/sepolicy-hassmic.rules, which runs after this
+# file (install-system.sh, the firmware bake): without the declaration here magiskpolicy
+# silently skips the transition and the connectto below, exit 0, and nothing checks for them.
+type hassmic domain
+type hassmic_audio_tmpfs file_type
+type_transition hassmic tmpfs file hassmic_audio_tmpfs
+allow { mixer shmd } hassmic_audio_tmpfs file { read write map getattr open ioctl }
+# These are the stock btmanagerd AIPC clients. hassmic now hosts its UUID 0
+# socket; the filesystem socket keeps the stock btmanagerd_aipc_tmpfs label.
+allow { amakit_server ace_powerd trackerd PuffinApp provisionerd ace_cloud_pairing_service indoor_localization_service ace_metricd blemeshmgr smarthomed ace_coex_metric gadgetsd oobed mixer } hassmic unix_stream_socket connectto
