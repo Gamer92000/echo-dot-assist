@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-16 — Echo Show: the screen follows Wi-Fi motion
+
+- **Echo Show: the screen can follow Wi-Fi motion.** Two new switches on the Screen page under **When idle**, shown
+  while Wi-Fi motion is on (Features). **Motion keeps the screen on**: the screen goes dark, or shows the clock, only
+  once nobody has moved for "Screen sleeps after". **Motion wakes the screen**: a dark screen comes on when someone
+  moves, and the clock gives way to the face. Neither in Do not disturb. Both experimental and off by default: Wi-Fi
+  motion also sees people in the next room.
+
 ## 2026-11-15 — Cannoli: Wi-Fi motion
 
 - **Wi-Fi motion (experimental) on the Echo Dot 5**, as on the other Echos: switch it on on the settings page, and
