@@ -16,8 +16,10 @@ ESPHome API:
   - the screen saver: "Screen sleeps after" and "Clock when idle" told as "ck"; with the clock on and the UI's
     "front 1" (its face in front) the screen is held on (the UI shows the clock when the timeout is up), with an app
     in front it sleeps as before, 0 minutes never
+  - Wi-Fi motion for it: "Motion keeps the screen on", "Motion wakes the screen" told as "mo" with the motion; the band
+    wakes a dark screen as motion starts and holds it while it lasts, neither in Do not disturb
 """
-import asyncio, os, re, sys, tempfile
+import asyncio, os, random, re, sys, tempfile
 from aioesphomeapi import VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
 from esphome_common import check, until, sync, home_assistant, run, ROOT
 
@@ -177,6 +179,35 @@ async def main(e):
     check(await until(lambda: last("ck ") == "ck 0 0" and sleeps(e) == NEVER, 5), f"0 min: never: {sleeps(e)} s")
     e.page.set(screen_sleep_minutes=5)
     check(await until(lambda: sleeps(e) == 300, 5), f"5 min again: {sleeps(e)} s")
+
+    # Wi-Fi motion for the idle screen: "Motion keeps the screen on" and "Motion wakes the screen", off by default, told
+    # as "mo" with whether it moves; motion starting wakes a dark screen (the band), while it lasts the screen is held
+    # (userActivity), and its end starts the timeout; neither in Do not disturb
+    check(e.pv("screen_motion_keep") == 0 and e.pv("screen_motion_wake") == 0, "the motion settings: off by default")
+    e.page.set(wifi_motion="on", screen_motion_keep="on", screen_motion_wake="on")
+    check(await until(lambda: last("mo ") == "mo 0 1 1", 5), f"told: {last('mo ')}")
+    async def walk():
+        for _ in range(60):                                       # someone walking through the path: 6 s at most
+            e.rx_stat(random.randint(106, 118)); await asyncio.sleep(0.1)
+            if last("mo ") == "mo 1 1 1": break
+        e.rx_stat(112)
+    e.rx_stat(112); await asyncio.sleep(1)
+    await walk()
+    check(last("mo ") == "mo 1 1 1", f"motion told to the UI: {last('mo ')}")
+    check(await until(lambda: "band: motion wakes the screen" in e.log() and "band: motion keeps the screen on" in e.log(), 3),
+          "the band wakes the screen and holds it while it moves")
+    check(await until(lambda: last("mo ") == "mo 0 1 1" and "band: motion no more: the timeout from now" in e.log(), 10),
+          f"still again (3 s on the PC): told, the timeout from now: {last('mo ')}")
+    n = e.log().count("band: motion wakes the screen")
+    e.page.set(do_not_disturb="on")
+    await walk()
+    check(last("mo ") == "mo 1 1 1", f"in Do not disturb the UI still hears it: {last('mo ')}")
+    await asyncio.sleep(1.5)
+    check(e.log().count("band: motion wakes the screen") == n and e.log().count("band: motion keeps the screen on") == 1,
+          "in Do not disturb: no wake, nothing held")
+    await until(lambda: last("mo ") == "mo 0 1 1", 10)
+    e.page.set(do_not_disturb="off", wifi_motion="off")
+    check(await until(lambda: last("mo ") == "mo 0 1 1", 5), f"Wi-Fi motion off: never moving: {last('mo ')}")
 
     # the date's language: "Language you speak", told as "lg"; Automatic: the zone's, else none ("-": English)
     e.page.set(speech_language="ro")

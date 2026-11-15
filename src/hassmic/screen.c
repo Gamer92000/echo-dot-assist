@@ -44,6 +44,7 @@
 #include "sendspin.h"
 #include "settings.h"
 #include "statefile.h"
+#include "wifimotion.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <errno.h>
@@ -111,6 +112,10 @@ static int words_on, words_hold = 8, timers_show;               /* (lock) */
 /* The idle screen (screen.h): the screen saver and its timeout, told to the UI with the words' settings (ck, at
  * wo_gen); the timeout read by ring_band.c too.  5 min: stock's screen_off_timeout_standard, what the Echo did before */
 static int clock_big, sleep_min = 5;                            /* (lock) */
+/* Wi-Fi motion as the idle screen's (screen.h): the settings, told with ck; moving, told as mo at mo_gen (not with ck: the
+ * UI takes a ck as the settings changing, which ends the clock) */
+static int motion_keep, motion_wake, moving;                    /* (lock) */
+static unsigned mo_gen, mo_sent;
 static atomic_int ui_front;                                     /* the UI's "front": its face in front, the timeout the UI's */
 static char heard[1000], reply[1000]; static int w_idle; static long long w_idle_at;   /* (lock; a line holds 1023) */
 static unsigned words_gen, words_sent, wo_gen, wo_sent;
@@ -296,6 +301,17 @@ int screen_words_hold(int set) { return setting(&words_hold, set, 0, 120); }
 int screen_timers_on(int set) { return setting(&timers_show, set, 0, 1); }
 int screen_clock(int set) { return setting(&clock_big, set, 0, 1); }
 int screen_sleep_min(int set) { return setting(&sleep_min, set, 0, 120); }
+int screen_motion_keep(int set) { return setting(&motion_keep, set, 0, 1); }
+int screen_motion_wake(int set) { return setting(&motion_wake, set, 0, 1); }
+
+int screen_motion(void)
+{
+    int m = wifimotion_enable(-1) && wifimotion_motion() > 0;
+    pthread_mutex_lock(&lock);
+    if (m != moving) { moving = m; mo_gen++; kick(); }
+    pthread_mutex_unlock(&lock);
+    return m;
+}
 
 void screen_timers_changed(void)
 {
@@ -759,7 +775,7 @@ static void *writer(void *arg)
             pthread_mutex_lock(&lock);                          /* all of it again */
             for (int i = 0; i < npats; i++) { pats[i].told = pats[i].came = 0; pats[i].sent = pats[i].on ? pats[i].gen - 1 : pats[i].gen; }
             tz_sent = lang_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0;
-            words_sent = words_gen - 1; wo_sent = wo_gen - 1;
+            words_sent = words_gen - 1; wo_sent = wo_gen - 1; mo_sent = mo_gen - 1;
             atomic_store(&hide_req, 0); nhidden = -1;             /* (a new UI shows them) */
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
             if (!music && !artn) art_sent = art_gen;              /* (a cover before any metadata: told too) */
@@ -813,7 +829,8 @@ static void *writer(void *arg)
             if (artn && (img = malloc(artn))) { memcpy(img, art, artn); imgn = artn; }
             send_img = 1; art_sent = art_gen;
         }
-        if (wo_sent != wo_gen) { put(&o, "wo %d %d %d", words_on, timers_show, words_hold); put(&o, "ck %d %d", clock_big, sleep_min); wo_sent = wo_gen; }
+        if (wo_sent != wo_gen) { put(&o, "wo %d %d %d", words_on, timers_show, words_hold); put(&o, "ck %d %d", clock_big, sleep_min); mo_sent = mo_gen - 1; wo_sent = wo_gen; }
+        if (mo_sent != mo_gen) { put(&o, "mo %d %d %d", moving, motion_keep, motion_wake); mo_sent = mo_gen; }
         if (words_sent != words_gen) {                          /* (in this order: the UI takes ws as the end of a change) */
             put(&o, "wh %s", heard); put(&o, "wr %s", reply); put(&o, "ws %lld", w_idle ? now - w_idle_at : -1LL);
             words_sent = words_gen;
