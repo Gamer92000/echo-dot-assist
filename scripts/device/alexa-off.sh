@@ -83,7 +83,12 @@ fi
 # Setup mode (unregistered device): oobed advertises for the Alexa app and keeps the orange setup animation on the ring.
 for s in $SETUP_SERVICES; do stop $s; done
 # uxeventd starts the orange `setup-mode` spinner; `ledctrl -c` does not clear it and `-g` does not list it. Unset by name.
-command -v ledctrl > /dev/null && { ledctrl -c >/dev/null; ledctrl -u setup-mode >/dev/null; }
+# Bounded like the wpa_cli below: with ledcontroller not up yet (cannoli: the satellite starts before it), ledctrl waits
+# on its socket for good, and with it the satellite's start: hassmic never started.
+command -v ledctrl > /dev/null && { timeout 5 ledctrl -c >/dev/null; timeout 5 ledctrl -u setup-mode >/dev/null; }
+# The boot swirl (anim_start_phase2) ends when Alexa says it has booted: the stock rc unsets it on this property
+# (device.conf BOOT_DONE_PROP: cannoli's).
+[ -n "$BOOT_DONE_PROP" ] && setprop $BOOT_DONE_PROP 1
 # oobed leaves a Wi-Fi Direct group up for the Alexa app (p2p-p2p0-0 + dnsmasq).  wpa_supplicant itself must stay: it also runs wlan0.
 # Bounded: on an Echo Show with no group up, wpa_cli once waited on p2p0's socket for good (2026-10-13), and with it the
 # satellite's start, hassmic never started.  Only when the group is there: without one the call still took 7 s

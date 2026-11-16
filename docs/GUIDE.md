@@ -408,6 +408,9 @@ Beyond the README's two figures:
   meanwhile. A colour or an effect for the light makes it one colour again.
 - Fill and LED by LED need each LED's own animations, 10 MB of the Echo's system partition. Where it has no room for
   them, the Echo installs the ring without them: the light works, and Home Assistant has no fill, rotation or action.
+- **Echo Dot 5**: its ring keeps animations in a small co-processor that takes only a few hundred, too few for the set
+  above. There the light is drawn when it changes, into an animation the ring already holds, so it needs no set made
+  beforehand: same colours, effects, fill and LED by LED as on the other Dots.
 
   ```yaml
   - action: esphome.echo_dot_3_5695c4_light_ring_leds
@@ -439,6 +442,60 @@ Beyond the README's two figures:
   name, author and a line about it. **Use** sets its animations, only those or all of them (the rest back to
   Amazon's), and applies. A pack travels with its designs: as a `.ringpack` file (Export, Import) or with "Copy
   models". Up to 50 packs; their designs count towards the 100.
+- **Light ring live** (Echo Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5; settings page, Lights, "Live from Home Assistant", off by default): the
+  Echo draws its ring itself, from Home Assistant, in any colour on any LED, up to 30 pictures a second, and plays your
+  designs at once, without Apply. In layers, the lowest first:
+  - "Light ring" (the light above) in its exact colour instead of the nearest of the set, fading when it changes
+    (Home Assistant's transition, else a quarter of a second), with more effects: Breathe, Color loop, Comet, Wave,
+    Sparkle and Fire beside Pulse, Spin, Blink and Rainbow, and six that follow the music the Echo plays (Music
+    Assistant, a phone over Bluetooth, Home Assistant's media). The Echo listens to it itself: twelve bands, the kick,
+    snare and hi-hat, the tempo and the beat, left and right, how loud it gets. **Music beat** (the ring blooms on every
+    beat from LED 1 round to the back and settles to a glow, each beat of the bar a shade apart, every fourth whiter),
+    **Music spectrum** (the twelve bands LED by LED, bass at LED 1 round to the highs at LED 12), **Music VU meter**
+    (stereo: the right channel from LED 1 the clock's way, the left the other way, green to red, peaks falling),
+    **Music orbit** (two comets going round once a bar, opposite ways, flaring on the kick), **Music drums** (the kick a
+    wave from LED 1, the snare one from the back, hi-hats sparks) and **Music aurora** (light flowing slowly round,
+    swelling on the beat, turning cooler with brighter sound). They take the light's colour; for white, colours of
+    their own. They follow what comes out of the speaker, not what is still in its buffer, and the music's own
+    loudness, not the volume; with nothing playing they breathe quietly. Fill, rotation and `light_ring_leds` work as before;
+  - twelve lights "Light ring LED 1" to "12" over it (colour and brightness each; LED 1 is where the volume starts,
+    turned by "Light ring rotation"), for scenes and automations; an LED that is off lets "Light ring" through;
+  - an animation over everything: your own frames from `light_ring_animation`, or a design of your library from the
+    select "Light ring design", the action `light_ring_design`, or "Show on the Echo" on the Lights page (beside each
+    design, and in the designer for what you are drawing, saved or not). "None" in the select, or "Stop" on the page,
+    ends it.
+
+  The actions: `light_ring_frame` (12 colours `#rrggbb` from LED 1 on, `""` dark; `brightness` 0 to 255; `timeout`
+  in seconds, 0 for none: sets the twelve lights), `light_ring_animation` (`frames`: one `"<ms>:RRGGBB,RRGGBB,..."` per
+  picture with all 12 LEDs, as a design's lines; `repeat` 0 for until stopped; `brightness`), `light_ring_design`
+  (`name`, `repeat` 0 for as drawn, `brightness`) and `light_ring_stop` (the animation, and the twelve lights off).
+  The Echo plays animations itself: smooth, whatever Home Assistant does meanwhile. About 600 pictures fit in one
+  action; a picture shorter than 33 ms is skipped.
+
+  The Echo's own lights always come first: listening, thinking, replies, timers, volume, Drop In and the red ring of
+  muted microphones show as you set them above, and your lights come back after them. Nothing is brighter than the
+  Echo's own lights: it follows "LED brightness" (auto included) the way Amazon's ring does, and no LED goes above what
+  Amazon's ring itself writes at that level. The current through the LEDs, the mute button's light and the ring at
+  start-up stay Amazon's. Switched off, the ring is Amazon's ring program's again and "Light ring" uses its set.
+
+  ```yaml
+  - action: esphome.echo_dot_3_5695c4_light_ring_animation
+    data:
+      repeat: 3
+      brightness: 255
+      frames:
+        - "150:FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+        - "150:000000,FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+        - "150:000000,000000,FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+  - action: select.select_option
+    target: { entity_id: select.echo_dot_3_5695c4_light_ring_design }
+    data: { option: Sunrise }
+  - action: light.turn_on
+    target: { entity_id: light.echo_dot_3_5695c4_light_ring }
+    data: { effect: Music drums, brightness: 200 }
+  ```
+  An Echo installed before this needs the update once: root then lets hassmic write the ring's LEDs (that one file of
+  the LED driver, given again at each start); until then the setting is not shown.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
 - **Echo Show 5 (both generations) and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
@@ -873,12 +930,12 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 - **Only between the Echo and the router**, also in the next room if the router is there. Elsewhere in the room may
   not show at all.
 - **Expect false alarms** from other Wi-Fi devices, doors, people in the router's room; try the sensitivity before
-  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 and Echo Show 5 allow
-  for that).
+  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3, Echo Dot 5 and Echo Show 5
+  allow for that).
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
-  on (within 10 s), then until the Echo restarts. When Wi-Fi goes off and on (the Echo's Wi-Fi switch, a network
-  change) the driver is reloaded and the module hooks it again by itself; should no frame reach it for a minute, the
-  sensor shows unknown and the log says so.
+  on (within 10 s), then until the Echo restarts. Where Wi-Fi going off and on reloads the driver (seen on the Echo
+  Show 5), the module hooks the new one by itself (from the version of 2026-11-17 on, once the Echo restarted; not yet
+  seen on an Echo); should no frame reach it for a minute, the sensor shows unknown and the log says why.
 - ESPHome only. It does not use the microphones; muting does not stop it.
 
 ## Settings page
@@ -955,13 +1012,14 @@ not in the settings file, and a factory reset removes it. The name itself is fix
 a list of your other Echos with their notes and addresses. Pick one and its settings page opens on the page you are on
 (Voice here, Voice there). It lists the Echos the Echos page knows; one that does not answer comes last.
 
-**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and both Show 8s): for an Echo that is too
+**Speaker gain** (Sound; Echo Dot 2, Echo 2, Echo Dot 3 and Echo Dot 5, and the Echo Show 5 and both Show 8s): for an Echo that is too
 quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
 Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
 leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step; Echo Show 8 1st gen:
 the same, and down to −6 dB, since it is loud at full volume already; Echo Show 8 2nd gen: the amplifier's digital
 volume, +0 to +9 dB in steps of 0.5 dB, the top kept below where bass distorts; Echo Show 5 2nd gen: it depends on the
-amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's), so everything the
+amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's; Echo Dot 5: its
+Maxim amplifier, +0 to +6 dB), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume
@@ -1032,6 +1090,7 @@ ARGS=""                     # extra options, below
 | `-m <pryon.manifest>` | wake word model to start with, until one is picked in Home Assistant |
 | `-w remote` | wake word in Home Assistant; the page then cannot change it |
 | `-E` | no sound on wake |
+| `-D` | the microphone keeps streaming while a reply plays (Wyoming, for a realtime agent such as hermes-talk's Echo surface; the echo canceller keeps the reply out) |
 | `-L` | leave the LED ring alone |
 | `-V` | leave the volume buttons alone |
 | `-z 0` | no Sendspin player |
@@ -1075,3 +1134,7 @@ for 30 minutes:
 | Encrypted link | ✅ key set by Home Assistant | ❌ plain TCP |
 | Online updates | ✅ | ❌ pushed from your PC only |
 | Settings page, setup from a phone, factory reset | ✅ | ✅ |
+
+## Echo Dot 5 (Cannoli) development
+
+For Cannoli NS6575/build 8349, follow the [device instructions](../devices/cannoli/README.md). This port requires the separate NAND/UBI installation workflow and isn't part of the upstream guided setup or release matrix yet. The remaining work is tracked in [PLAN.md](../PLAN.md).

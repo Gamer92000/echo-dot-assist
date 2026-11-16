@@ -291,4 +291,5 @@ async def main():
     print("FAILED" if check.failed else "all good")
     sys.exit(1 if check.failed else 0)
 
-asyncio.run(main())
+if __name__ == "__main__":          # tests/fake_ha_ring_live.py takes stock() from here
+    asyncio.run(main())

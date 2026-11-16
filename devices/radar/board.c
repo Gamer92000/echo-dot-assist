@@ -33,6 +33,10 @@ const struct board board = {
      * bus but has no driver bound here: another hardware revision */
     .light_sensor = { "/sys/bus/i2c/devices/0-0029/iio:device0/calibrated_lux", "/sys/bus/i2c/devices/0-0039/als_calibrated_lux" },
     .volume_steps = 30,                                             /* volume_step-01..30 in led-resources */
+    /* ISSI IS31FL3236 at I2C 0-003f, the Dot 2's: its firmware matches the Dot 2 measured in every part of the ring
+     * (kernel driver, device tree, the HAL's frame and scaling code, libled_controller.so, the table; PLAN.md "Light
+     * ring live", 2026-11-13); not probed on an Echo 2 itself */
+    .ring_frame = "/sys/bus/i2c/devices/0-003f/frame",
     /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
     .volume_curve = board_vol_dot2,
     /* as biscuit's: the firmware's audio_device.xml sets the same control to 6 for the speaker, 11 for the 3.5 mm jack

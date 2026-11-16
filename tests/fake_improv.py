@@ -189,9 +189,9 @@ def main():
         {"hex": H("Only3"), "psk": PSK("whatever!", "Only3"), "flags": "[RSN-SAE-CCMP][ESS]", "bss": [["aa:00:00:00:00:05", 5200, -50]], "ip": "10.9.9.9", "gw": "10.9.9.1"},
         {"hex": "", "psk": None, "flags": "[ESS]", "bss": [["aa:00:00:00:00:06", 2412, -40]], "ip": "10.8.8.8", "gw": "10.8.8.1"},
     ]
-    with open(world, "w") as f:        # a new Echo, or one after a reset: no network saved, on none
+    with open(world, "w") as f:        # a new Echo, or one after a reset: no network saved, on none, no dhcpcd started yet
         json.dump({"networks": [], "next_id": 0, "current": None, "target": None, "air": air, "arp_file": arp, "saved": [],
-                   "lease": {"ip": "", "gw": ""}, "props": {"result": "", "reason": ""}}, f)
+                   "lease": {"ip": "", "gw": ""}, "props": {"result": "", "reason": ""}, "svc": {}}, f)
     open(arp, "w").write("IP address       HW type     Flags       HW address            Mask     Device\n")
     W = lambda: json.load(open(world))
     renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp,
@@ -282,12 +282,17 @@ def main():
 
         # ---- a wrong password, then the right one
         phone.write(hd["rpc"], prot.WiFiSettingsCmd(b"HomeNet", b"wrong password").as_bytes())
-        check(phone.until(hd["state"], bytes([prot.State.PROVISIONING])), "provisioning")
+        check(phone.until(hd["error"], b"\x00") and phone.until(hd["state"], bytes([prot.State.PROVISIONING])),
+              "provisioning, the unknown command's error cleared")
         check(phone.until(hd["error"], bytes([prot.Error.UNABLE_TO_CONNECT]), 30) and phone.until(hd["state"], bytes([prot.State.AUTHORIZED])),
               "wrong password: unable to connect, authorized again")
         check(W()["saved"] == [], "nothing saved")
+        # Home Assistant's app reads the error as it connects: a phone coming back must not see the last one's failure
+        ctl.disconnect(); ctl.connect(); phone = Phone(ctl); phone.discover()
+        for n in cccd: phone.write(cccd[n], b"\x01\x00")
+        check(phone.read(hd["error"]) == b"\x0b\x00" and phone.read(hd["state"]) == b"\x0b\x02", "connected again: no error, authorized")
         phone.write(hd["rpc"], prot.WiFiSettingsCmd(b"HomeNet ", b"right password").as_bytes())   # a phone keyboard's space
-        check(phone.until(hd["error"], b"\x00") and phone.until(hd["state"], bytes([prot.State.PROVISIONING])), "again: provisioning, error cleared")
+        check(phone.until(hd["state"], bytes([prot.State.PROVISIONING])), "again: provisioning")
         check(phone.until(hd["state"], bytes([prot.State.PROVISIONED]), 30), "on the network: provisioned")
         v = phone.note(hd["result"]); res = prot.parse_result(v) if v else None
         check(isinstance(res, prot.WiFiSettingsRes) and res.redirect_url == f"http://192.168.1.20:{WEB}/".encode(), f"the settings page's address back: {res}")
@@ -311,8 +316,10 @@ def main():
         asyncio.run(ha(adopt))
         check(wait(lambda: os.path.exists(os.path.join(state, "adopted")), 3) and "setup done" in logtext(), "voice assistant subscribed: adopted")
 
-        # ---- set up, network gone: advertising wants the button
+        # ---- set up, network gone: advertising wants the button.  Rebooted meanwhile: init's dhcpcd (-K) started with no
+        # carrier, which "dhcpcd -n" would wait for for good (cannoli, 2026-11-15)
         os.unlink(online)
+        w = W(); w["carrier"] = False; json.dump(w, open(world, "w"))
         check(wait(lambda: ctl.adv["on"], 8), "set up, no network for a while: advertising")
         check(prot.ImprovServiceData.from_bytes(ctl.adv_fields()[0x16][2:]).state == prot.State.AUTHORIZATION_REQUIRED, "authorization required")
         ctl.connect(); phone = Phone(ctl); phone.discover()

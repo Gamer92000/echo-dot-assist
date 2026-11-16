@@ -55,6 +55,7 @@
 #include "hash.h"
 #include "mww.h"
 #include "ringdesign.h"
+#include "ringlive.h"
 #include "netio.h"
 #include "settings.h"
 #include "sounds.h"
@@ -416,7 +417,7 @@ static int read_request(int fd, struct req *r)
     /* a piece of an artifact, a microWakeWord model, a light ring design and a sound of one's own are the big bodies:
      * everything else is a few lines */
     long max = !strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384
-             : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX
+             : !strncmp(r->path, "/api/ring/design/", 17) || !strcmp(r->path, "/api/ring/live") ? RD_TEXT_MAX
              : !strcmp(r->path, "/api/timer-sound") || !strncmp(r->path, "/api/sound/", 11) || !strncmp(r->path, "/api/sound-pack/", 16) ? SOUND_CUSTOM_MAX : MAX_BODY;
     if (cl < 0 || (cl > MAX_BODY && (cl > max || !approved_key(r->pub)))) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
@@ -865,6 +866,9 @@ static void mww_api(int fd, struct req *r)
  * /api/ring/pack/<id>    POST  a pack as the Echo keeps it (ringdesign.h, version 2), checked; id 0: a new one -> {"id"}
  * /api/ring/pack-delete/<id> POST
  * /api/ring/apply        POST  the assignments onto the ring: root installs them, the ring goes dark for a second
+ * /api/ring/live         POST  a design's text: the live ring plays it now, as drawn (no Apply, nothing kept); empty:
+ *                              stops what plays.  Only while "Light ring live" is on (ringlive.h).  GET /api/ring says
+ *                              "live": {"on", "playing"}
  * All signed. */
 static void ring_api(int fd, struct req *r)
 {
@@ -874,6 +878,10 @@ static void ring_api(int fd, struct req *r)
         size_t cap = 65536; char *t = malloc(cap);
         size_t n = t ? rd_status_json(t, cap) : 0;
         if (!n) { free(t); respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        if (t[n - 1] == '}' && n + 160 < cap) {                 /* the live ring beside the designs */
+            char nm[RD_NAME], en[2 * RD_NAME + 8]; ringlive_playing(nm, sizeof nm); jesc(en, sizeof en, nm);
+            n += (size_t)snprintf(t + n - 1, cap - n + 1, ",\"live\":{\"on\":%s,\"playing\":\"%s\"}}", ringlive_enabled() ? "true" : "false", en) - 1;
+        }
         respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
     }
     if (!write && (!strcmp(r->path, "/api/ring/designs") || !strcmp(r->path, "/api/ring/packs") || sscanf(r->path, "/api/ring/stock/%31s", slot) == 1)) {
@@ -891,6 +899,12 @@ static void ring_api(int fd, struct req *r)
     else if (write && sscanf(r->path, "/api/ring/delete/%d", &id) == 1) rc = rd_delete(id, err, sizeof err);
     else if (write && !strcmp(r->path, "/api/ring/assign")) rc = rd_assign(r->body, err, sizeof err);
     else if (write && !strcmp(r->path, "/api/ring/apply")) rc = rd_apply(err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/ring/live")) {
+        if (!ringlive_enabled()) snprintf(err, sizeof err, "\"Light ring live\" is off (Features)");
+        else if (!r->blen) { ringlive_stop(); rc = 0; }
+        else rc = ringlive_play_text(r->body, r->blen, err, sizeof err);
+        if (!rc) { pthread_mutex_lock(&core_lock); core_settings_changed(); pthread_mutex_unlock(&core_lock); }   /* the select's state */
+    }
     else snprintf(err, sizeof err, "not found");
     if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
     jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);

@@ -38,6 +38,20 @@ UPDATE_REPO := $(strip $(UPDATE_REPO))
 ifneq ($(words $(UPDATE_REPO))$(findstring ",$(UPDATE_REPO))$(findstring ',$(UPDATE_REPO)),1)
 $(error UPDATE_REPO "$(UPDATE_REPO)": owner/name, no quotes or spaces (keys/release.conf, secrets/fork.conf))
 endif
+ifeq ($(DEVICE),cannoli)
+# BUILD from the sources themselves (version.py), not git describe: two builds of one dirty tree must differ, since
+# factory promotion compares the bundle's VERSION (VERSION+BUILD).  The version and build time stay the commit's, as for
+# every model: update.c reports VERSION to Home Assistant, which compares it with the releases (a fixed one had every
+# release show as an update, installed or not).  Fixed only where git gives none (a source archive).
+BUILD := $(shell python3 devices/cannoli/version.py)
+ifeq ($(strip $(BUILD)),)
+$(error cannot compute Cannoli source identity)
+endif
+ifeq ($(VERSION),0)
+VERSION := 2026.11.13.000000
+BUILD_TIME := Nov 13 2026 00:00:00
+endif
+endif
 DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' $(if $(RELEASE),-DRELEASE)
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
@@ -52,7 +66,7 @@ build/.device: FORCE
 FORCE:
 
 # A model without the Amazon mixer or Pryon has no use for the tools built on them: they drop out with the library.
-BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) \
+BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) $(if $(LEDSHIM),$(OUT)/libhmled.so) \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
        $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
@@ -106,13 +120,16 @@ $(OUT)/ktree/.config: $(KFRAG)
 	$(KMAKE) -C $(KSRC) O=$(CURDIR)/$(OUT)/ktree olddefconfig modules_prepare 2>&1 | grep -v -e 'override: reassigning' -e 'changes choice state' -e '^$$' || true
 endif
 
-# Module.symvers: the kernel's own CRCs where it has CONFIG_MODVERSIONS (athena), for modpost; copied at every build of
-# the module, so a changed list reaches it
-$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config $(wildcard devices/$(DEVICE)/Module.symvers)
+# Module.symvers: the kernel's own CRCs where it has CONFIG_MODVERSIONS (athena, cannoli: tools/kcrc.py), for modpost;
+# copied at every build of the module, so a changed list reaches it.  KMOD_INIT: where a kernel whose struct module is
+# not kernel.org's reads the init pointer (cannoli: Android's common kernel), tools/kmod-init.py
+$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config $(wildcard devices/$(DEVICE)/Module.symvers) \
+                   $(if $(KMOD_INIT),tools/kmod-init.py)
 	@mkdir -p $(OUT)/kmod
 	cp src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/kmod/
 	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
 	$(KMAKE) -C $(OUT)/ktree M=$(CURDIR)/$(OUT)/kmod HM_KMOD=$(KMOD) modules 2>&1 | grep -v -e 'Module.symvers' -e 'no dependencies and modversions' || true
+	$(if $(KMOD_INIT),python3 tools/kmod-init.py $(OUT)/kmod/$(KMOD).ko $(KMOD_INIT))
 	cp $(OUT)/kmod/$(KMOD).ko $@
 
 ifeq ($(STUBS),1)
@@ -158,9 +175,19 @@ $(OUT)/runas: src/tools/runas.c
 # libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
 UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/lang.c src/ui/gfx.c
 UI := src/ui/android.c src/ui/touch.c $(UI_SCENE)
+# the Echo Dot 5's ledcontroller loads it (device.mk LEDSHIM, src/ledshim/ledshim.c says why)
+$(OUT)/libhmled.so: src/ledshim/ledshim.c build/.build-id
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -fPIC -shared $< -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmled.so -llog -ldl
+
 $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -fPIC -shared -Isrc/ui $(UI) -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmui.so -landroid -ljnigraphics -lm
+
+# not part of "all": what the Echo Dot 5's LEDs show, read back through libhmled.so (see the file)
+$(OUT)/ledstate: src/tools/ledstate.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
 
 # not part of "all": raw HCI probe on the Bluetooth controller (stop btmanagerd first, see the file)
 $(OUT)/hciscan: src/tools/hciscan.c
@@ -201,7 +228,7 @@ SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hass
 WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
-HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ledq.c \
+HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ledq.c \
            src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
@@ -240,7 +267,7 @@ host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/ota
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight \
 	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
@@ -355,6 +382,19 @@ unit-afe_parcel:
 unit-lux:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/lux_test.c -lm -o build/lux_test && build/lux_test
+# What the live ring's music effects make of a track, without an Echo (tools/ringviz.py, tools/ringmusic.py)
+build/ringviz: tools/ringviz.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c $(HASSMIC_H)
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tools/ringviz.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c -lm -lpthread -o $@
+unit-ringviz: build/ringviz
+	@mkdir -p build/viz
+	.venv/bin/python tools/ringmusic.py build/viz/track.raw build/viz/truth.json
+	build/ringviz build/viz/track.raw build/viz
+	.venv/bin/python tools/ringviz.py build/viz build/viz/truth.json --check
+unit-ringlive:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ringlive_test.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c -lm -lpthread -o build/ringlive_test && build/ringlive_test
+	python3 tests/unit/ringlive_conf.py
 unit-ring_band:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/afe_parcel.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test

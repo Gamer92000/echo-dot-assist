@@ -48,12 +48,17 @@ struct board {
     const struct board_sound { const char *name, *zip, *entry; } *earcon_zip;
     const char *thermal_type;       /* thermal zone reported as SoC temperature */
     const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none.  "tcs3400:<dir>": raw channels of
-                                       a TCS3400 under <dir>/input*, main.c lux_tcs3400 */
+                                       a TCS3400 under <dir>/input*, main.c lux_tcs3400.  "tsl2540:<i2c dir>": a TSL2540's
+                                       iio:device* there, calibrated from idme, main.c lux_tsl2540 */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
     /* LEDs the light really shows, where that is fewer than stock's animations draw (12): 1 = one RGB LED that shows the
      * first of each frame (the Echo Input's LP5562): nothing turned towards the talker, no LED's own layer (ring.c).
      * 0: a ring of them all */
     int ring_leds;
+    /* The LED driver's frame file, where hassmic may write the ring itself (ringlive.c: the light ring live; root's main.sh
+     * gives the daemon that one file, device.conf LED_FRAME).  Only on models measured (scripts/led-probe.sh): its text
+     * 12 x RRGGBB, ledcontroller writing it only on a change.  NULL: no live ring */
+    const char *ring_frame;
     /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
      * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c: separate volumes turn each kind down
      * by it, even volume steps put the mixer on its points).  Required, never NULL: every model has its own, measured on

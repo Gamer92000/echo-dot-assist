@@ -51,7 +51,8 @@ def main(android=False):
     with open(world, "w") as f:
         json.dump({"networks": nets, "next_id": 3 if android else 3, "current": 0, "target": None, "air": air,
                    "arp_file": arp, "route_file": route, "saved": list(nets) if android else [home, attic, p2p],
-                   "lease": {"ip": "192.168.1.20", "gw": "192.168.1.1"}, "props": {"result": "ok", "reason": "BOUND"}}, f)
+                   "lease": {"ip": "192.168.1.20", "gw": "192.168.1.1"}, "props": {"result": "ok", "reason": "BOUND"},
+                   **({} if android else {"svc": {"dhcpcd-wlan0": "running"}, "carrier": True})}, f)   # init's dhcpcd, on a network
     with open(arp, "w") as f:                      # the router of the network it is on: an entry that stays (Dot 2)
         f.write("IP address       HW type     Flags       HW address            Mask     Device\n"
                 "192.168.1.1      0x1         0x2         aa:bb:cc:00:00:01     *        wlan0\n")
