@@ -9,10 +9,11 @@
  * the last frame from anyone on the channel, every station and neighbouring network included, and one per ioctl; this
  * counts only what reaches the driver's data path, which in station mode is the access point's, frame by frame.
  *
- *   /proc/hassmic_rcpi4m   "RCPI RX0 = 112\nAGE = 37\nFRAMES = 5120\nKIND = 1000b\n" (as hassmic_rcpi.c: RX_STAT's
- *                          words, AGE in ms since that frame, FRAMES since load; KIND: how that frame was sent, RX
- *                          vector word 0 bits 0-6 rate/MCS, 12-14 mode, 15-16 bandwidth).  In RAM: nothing touches the
- *                          flash.
+ *   /proc/hassmic_rcpi4m   "RCPI RX0 = 112\nAGE = 37\nFRAMES = 5120\nKIND = 1000b\nHOOKED = 1\n" (as hassmic_rcpi.c:
+ *                          RX_STAT's words, AGE in ms since that frame, FRAMES since load; KIND: how that frame was
+ *                          sent, RX vector word 0 bits 0-6 rate/MCS, 12-14 mode, 15-16 bandwidth; HOOKED: the driver
+ *                          loaded now carries the hook, 1, or not, 0).  Before the first frame "ERROR = no frame
+ *                          yet\nHOOKED = 0|1\n".  In RAM: nothing touches the flash.
  * KIND because the access point sends each rate at its own power (wifimotion.c: broadcasts at 6 Mbit/s 7-9 dB over its
  * VHT unicast frames, MCS 9 2 dB under MCS 8), so levels compare only within one rate.  Seen on donut (2026-10-01):
  * 0x1000b broadcasts (legacy OFDM, 20 MHz, 6 Mbit/s; WTBL entry 4), 0x14008 / 0x14009 the access point's unicast
@@ -35,7 +36,12 @@
  * fixmap where module text is read-only).  32-bit ARM: patch_text (built for KGDB on checkers, not exported), which
  * writes under stop_machine and flushes the caches; module text is writable there (no DEBUG_SET_MODULE_RONX), and
  * modules sit within a bl's 32 MB of each other.  hm_rx() reads through probe_kernel_read: a field that is not where
- * expected gives no reading, not an oops.  No module_exit, as hassmic_rcpi.c: a thread may sit in hm_fill.  Layout from
+ * expected gives no reading, not an oops.  No module_exit, as hassmic_rcpi.c: a thread may sit in hm_fill.
+ * The driver is a module, and on an Echo Show 5 Android unloaded and loaded it again on Wi-Fi off and on (Amazon's
+ * NetWatchDog did that every few minutes until it was told not to; other models and triggers not checked): the
+ * patched text goes with it and the new copy is unpatched, so the frame counter froze for good (seen 2026-11-13:
+ * AGE 37 h, the driver newer than this module in /proc/modules).  A module notifier hooks the driver again each time
+ * it comes back (MODULE_STATE_LIVE: its init has run, its symbols are listed); GOING logs it and clears HOOKED.  Layout from
  * the driver in each NS65741 image (PLAN.md, docs/re-checkers.md); module parameters for another build (device.conf
  * KMOD_ARGS).  Built against kernel.org's sources of each kernel with its config (donut: devices/donut/kconfig on
  * arm64's defconfig, AOSP's aarch64-linux-android-4.9; checkers: its own IKCONFIG, AOSP's arm-eabi-4.8, as Amazon's
@@ -78,6 +84,8 @@ module_param(rate_mask, uint, 0444);
 static atomic_t last = ATOMIC_INIT(-1), frames = ATOMIC_INIT(0);    /* last: RCPI | kind << 8, one frame's pair */
 static unsigned long last_jiffies;
 static u8 (*fill)(void *adapter, void *rfb);    /* BOOLEAN nicRxFillRFB(): the caller tests w0 & 0xff */
+static char drv_name[MODULE_NAME_LEN];          /* the module hook_sym is in: hooked again when it is loaded again */
+static int hooked;                               /* the driver loaded now carries the hook */
 
 static void hm_rx(void *rfb)
 {
@@ -100,9 +108,9 @@ static u8 hm_fill(void *adapter, void *rfb)
 static int show(struct seq_file *m, void *v)
 {
     int r = atomic_read(&last);
-    if (r < 0) { seq_puts(m, "ERROR = no frame yet\n"); return 0; }
-    seq_printf(m, "RCPI RX0 = %d\nAGE = %u\nFRAMES = %d\nKIND = %x\n", r & 0xff, jiffies_to_msecs(jiffies - READ_ONCE(last_jiffies)),
-               atomic_read(&frames), r >> 8);
+    if (r < 0) { seq_printf(m, "ERROR = no frame yet\nHOOKED = %d\n", READ_ONCE(hooked)); return 0; }
+    seq_printf(m, "RCPI RX0 = %d\nAGE = %u\nFRAMES = %d\nKIND = %x\nHOOKED = %d\n", r & 0xff, jiffies_to_msecs(jiffies - READ_ONCE(last_jiffies)),
+               atomic_read(&frames), r >> 8, READ_ONCE(hooked));
     return 0;
 }
 
@@ -191,7 +199,7 @@ static unsigned long lookup(const char *name)
     struct module *mod; struct mod_kallsyms *ks = NULL; Elf_Sym *symtab, s; char *strtab, nm[64], buf[KSYM_SYMBOL_LEN];
     unsigned long addr = 0; unsigned int i, n = 0; size_t len = strlen(name);
     if (len + 1 > sizeof nm) return 0;
-    mod = find_module(drv_mod);                     /* module_mutex held by init_fn */
+    mod = find_module(drv_mod);                     /* module_mutex held: HM_LOCK (init_fn, on_module) */
     if (mod && !probe_kernel_read(&ks, &mod->kallsyms, sizeof ks) && ks && !probe_kernel_read(&symtab, &ks->symtab, sizeof symtab)
         && !probe_kernel_read(&n, &ks->num_symtab, sizeof n) && !probe_kernel_read(&strtab, &ks->strtab, sizeof strtab))
         for (i = 0; i < n && i < 1000000; i++) {
@@ -206,6 +214,15 @@ static unsigned long lookup(const char *name)
 }
 #define lookup_name lookup
 #define HM_PATCHER NULL
+/* the driver by its parameter's name (lookup() found the symbols in it); -1 while it is going: find_module still finds
+ * it, and its text is freed once its GOING notifier, which waits for hook_lock, is through.  state is struct module's
+ * first field in Android's as in ours */
+static int drv_of(unsigned long caller, char *name)
+{
+    struct module *mod = find_module(drv_mod);   /* module_mutex held: HM_LOCK */
+    strlcpy(name, drv_mod, MODULE_NAME_LEN);
+    return mod && mod->state != MODULE_STATE_GOING ? 0 : -1;
+}
 /* the driver stays loaded from its lookup through the write: no rmmod between them (it takes module_mutex) */
 #define HM_LOCK() mutex_lock(&module_mutex)
 #define HM_UNLOCK() mutex_unlock(&module_mutex)
@@ -233,39 +250,104 @@ static int patch(void *unused, void *addr, u32 insn)
 #else
 #define lookup_name kallsyms_lookup_name
 #define HM_PATCHER ((void *)kallsyms_lookup_name(PATCHER))
+/* the module whose text holds the caller (kallsyms_lookup_name searched them all), by name, as the pointer goes with
+ * the driver ("" for a driver built into the kernel, which never reloads: nothing for the notifier); -1 while it is
+ * going: kallsyms still finds it, and its text is freed once its GOING notifier, which waits for hook_lock, is
+ * through.  Preemption off: __module_text_address walks the module list under RCU-sched */
+static int drv_of(unsigned long caller, char *name)
+{
+    struct module *mod;
+    int going = 0;
+    name[0] = 0;
+    preempt_disable();
+    mod = __module_text_address(caller);
+    if (mod) { strlcpy(name, mod->name, MODULE_NAME_LEN); going = mod->state == MODULE_STATE_GOING; }
+    preempt_enable();
+    return going ? -1 : 0;
+}
 #define HM_LOCK() do { } while (0)
 #define HM_UNLOCK() do { } while (0)
 #endif
 
-static int hook(void)
+/* init_fn and the module notifier both hook, and may at once (a driver loaded while init_fn runs): one at a time */
+static DEFINE_MUTEX(hook_lock);
+
+/* Finds the call in the driver loaded now and patches it; a call already to hm_fill counts as done (init_fn hooks
+ * twice, and a notifier for a driver it already hooked may follow).  Process context, hook_lock and HM_LOCK held:
+ * hook_lock keeps a driver found not going from being freed until the patch is in (its GOING notifier waits for it) */
+static int hook_try(void)
 {
     unsigned long caller = lookup_name(hook_sym), target = lookup_name(fill_sym), site = 0;
     void *patcher = HM_PATCHER;
-    u32 insn; uint i, n = 0;
+    char name[MODULE_NAME_LEN];
+    u32 insn; uint i, n = 0, done = 0;
     if (!caller || !target || (!patcher && !IS_ENABLED(CONFIG_ARM))) {
         pr_err("hassmic_rcpi4m: %s, %s or %s not in this kernel (Wi-Fi driver loaded?)\n", hook_sym, fill_sym, PATCHER);
         return -ENOENT;
     }
+    /* the name even of a driver going: its next LIVE is the one to hook (init_fn's second try) */
+    if (drv_of(caller, name)) { strlcpy(drv_name, name, sizeof drv_name); pr_info("hassmic_rcpi4m: %s is unloading or gone: not hooked\n", name); return -ENOENT; }
+    strlcpy(drv_name, name, sizeof drv_name);
     for (i = 0; i < scan_max; i++) {
         if (probe_kernel_read(&insn, (void *)(caller + 4 * i), 4)) break;
         if (is_bl_to(insn, caller + 4 * i, target)) { site = caller + 4 * i; n++; }
+        if (is_bl_to(insn, caller + 4 * i, (unsigned long)hm_fill)) done++;
     }
+    if (!n && done == 1) return 0;
     if (n != 1) { pr_err("hassmic_rcpi4m: %u calls to %s in %s's first %u instructions, not 1: not patched\n", n, fill_sym, hook_sym, scan_max); return -EINVAL; }
     if (make_bl(site, (unsigned long)hm_fill, &insn)) { pr_err("hassmic_rcpi4m: hook out of branch range\n"); return -ERANGE; }
-    if (!proc_create("hassmic_rcpi4m", 0444, NULL, &fops)) return -ENOMEM;
     fill = (void *)target;
-    if (patch(patcher, (void *)site, insn)) {                   /* bl hm_fill */
-        remove_proc_entry("hassmic_rcpi4m", NULL); pr_err("hassmic_rcpi4m: patching failed\n"); return -EIO;
-    }
-    pr_info("hassmic_rcpi4m: %s+%#lx (call to %s) hooked, /proc/hassmic_rcpi4m\n", hook_sym, site - caller, fill_sym);
+    if (patch(patcher, (void *)site, insn)) { pr_err("hassmic_rcpi4m: patching failed\n"); return -EIO; }     /* bl hm_fill */
+    pr_info("hassmic_rcpi4m: %s+%#lx (call to %s) hooked in %s, /proc/hassmic_rcpi4m\n", hook_sym, site - caller, fill_sym,
+            drv_name[0] ? drv_name : "?");
     return 0;
 }
 
+/* HOOKED follows each try: a driver gone or not patchable is no hook, whatever was hooked before (init_fn's second try
+ * finding no driver: unloaded between its first try and the notifier, whose GOING nobody heard) */
+static int hook(void)
+{
+    int r = hook_try();
+    WRITE_ONCE(hooked, !r);
+    return r;
+}
+
+/* The driver came back: hook its new copy.  Going: the hooked text goes with it (not unpatched: it is freed, and a CPU
+ * may be in it), and until it is back there are no frames; hassmic says so after a minute (wifimotion.c).  Neither
+ * state is called with module_mutex held (do_init_module, delete_module), so HM_LOCK can take it.  mod->name is the
+ * third field of struct module, before anything a config or Android's common kernel moves (cannoli: init, 36 bytes on) */
+static int on_module(struct notifier_block *nb, unsigned long state, void *data)
+{
+    struct module *mod = data;
+    if (state != MODULE_STATE_GOING && state != MODULE_STATE_LIVE) return NOTIFY_OK;
+    mutex_lock(&hook_lock);
+    if (drv_name[0] && !strcmp(mod->name, drv_name)) {
+        if (state == MODULE_STATE_GOING) {
+            WRITE_ONCE(hooked, 0); pr_info("hassmic_rcpi4m: %s unloading, no frames until it is back\n", drv_name);
+        } else {
+            pr_info("hassmic_rcpi4m: %s loaded again, hooking it again\n", drv_name);
+            HM_LOCK(); hook(); HM_UNLOCK();
+        }
+    }
+    mutex_unlock(&hook_lock);
+    return NOTIFY_OK;
+}
+static struct notifier_block module_nb = { .notifier_call = on_module };
+
+/* Hooked, then the notifier, then hooked again: a driver reloaded between the first hook and the registration sent its
+ * LIVE to nobody, and the second hook() takes its new copy (a copy still in its init: its text is in place and its
+ * symbols listed from load_module on, and its LIVE then finds the call done).  The notifier comes only after a hook
+ * that worked: no unregister needed on the way out (a module without module_exit cannot be rmmod'ed, but a failed
+ * init_fn is freed; rmmod -f needs MODULE_FORCE_UNLOAD, off in every model's kernel) */
 static int __init init_fn(void)
 {
     int r;
-    HM_LOCK(); r = hook(); HM_UNLOCK();
-    return r;
+    if (!proc_create("hassmic_rcpi4m", 0444, NULL, &fops)) return -ENOMEM;
+    mutex_lock(&hook_lock); HM_LOCK(); r = hook(); HM_UNLOCK(); mutex_unlock(&hook_lock);
+    if (r) { remove_proc_entry("hassmic_rcpi4m", NULL); return r; }
+    register_module_notifier(&module_nb);         /* 0 in every kernel here: notifier_chain_register cannot fail */
+    mutex_lock(&hook_lock); HM_LOCK(); hook(); HM_UNLOCK(); mutex_unlock(&hook_lock);
+    return 0;
 }
 
 module_init(init_fn);

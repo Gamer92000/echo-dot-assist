@@ -2,6 +2,18 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — Wi-Fi motion after Wi-Fi off and on
+
+- **Wi-Fi motion: the Wi-Fi driver is hooked again after Wi-Fi went off and on.** On the Echo Dot 3, Echo Dot 5, Echo
+  Input, Echo Show 5 (both generations) and Echo Show 8 (both generations) the sensor reads the Wi-Fi driver through a
+  kernel module of ours. On an Echo Show 5, Android was seen reloading that driver when Wi-Fi was switched off and on
+  (Amazon's watchdog did that every few minutes until the change listed under 2026-11-11): the module's hook went with
+  the old driver, no frame was counted any more (37 hours on that Echo), and the sensor never changed again. The module
+  now hooks the driver again each time it comes back, and should no frame reach it for a minute, the sensor shows
+  unknown and the log says why instead of staying silent. Takes effect after a restart of the Echo (the old module
+  cannot be unloaded). Only the log and the sensor's side were tried, on the PC; the module hooking a reloaded driver
+  has not run on an Echo yet. Thanks to borky.
+
 ## 2026-11-16 — The light ring live
 
 - **The light ring live from Home Assistant (Echo Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5).** New setting "Live from Home Assistant" (settings page,
