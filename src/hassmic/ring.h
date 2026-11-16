@@ -73,6 +73,14 @@ int  ring_busy(void);
  * and offers the live ring's effects too.  The light as it should show now, the flash's while one runs (1) */
 void ring_light_live(int on);
 int  ring_light_now(struct ring_light *l);
+/* Binary animations (the Echo Dot 5): the live ring has no frame file there, its frames go through ledcontroller into
+ * a slot of ours (ring.c LIVE_SLOT).  ring_live_acs: the installed set has it.  ring_live_put: a frame of 12 x RRGGBB
+ * into it (a round trip to the LED manager, without ring.c's lock), -1 failed.  ring_live_show: the slot shown (set
+ * once per ledcontroller) or hidden, only queued.  ring_live_on: shown, in the ledcontroller that runs now */
+int  ring_live_acs(void);
+int  ring_live_put(const char *rgb);
+void ring_live_show(int on);
+int  ring_live_on(void);
 void ring_tick(void);                       /* every 200 ms: the beam while listening, the light back after the Echo's */
 void ring_light_get(struct ring_light *l);
 void ring_light_set(const struct ring_light *l, unsigned flash_ms);  /* flash_ms > 0: blinks that long, then as before */

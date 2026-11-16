@@ -77,6 +77,10 @@ not change the policy); until then hassmic's log says "runas: no SELinux domain"
 to set properties. The firewall lets no process on the Echo but root's connect to adb's port, so no process acting
 for hassmic can use an open adb.
 
+On an Echo Dot 5 "Light ring live" needs nothing new from root: its frames go through the same socket into Amazon's
+ring program as Home Assistant's light already does (only animations of hassmic's own, checked there), at the
+brightness Amazon's program sets. Through it hassmic can also read what the LEDs show, nothing more.
+
 On an Echo Dot 3, an Echo Dot 2 and an Echo 2 root also gives hassmic one file of the LED driver at each start, the ring's frame
 (the colours of its 12 LEDs, for "Light ring live"), through a group only hassmic has. Nothing else of the driver: the
 LEDs' current, their calibration, the start-up ring and the Dot 3's mute button light stay Amazon's ring program's

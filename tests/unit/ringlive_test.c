@@ -39,6 +39,10 @@ static struct ring_light light = { .brightness = 1, .color_brightness = 1, .r = 
 static int flashing, light_live;
 int ring_light_now(struct ring_light *l) { *l = light; return flashing; }
 void ring_light_live(int on) { light_live = on; }
+int ring_live_acs(void) { return 0; }                 /* the frame file here; the Echo Dot 5's slot: fake_ha_ring_acs.py */
+int ring_live_put(const char *rgb) { (void)rgb; return -1; }
+void ring_live_show(int on) { (void)on; }
+int ring_live_on(void) { return 0; }
 int ring_custom(void) { return 1; }
 
 static int fails;
@@ -372,7 +376,8 @@ int main(void)
     check(!ringlive_enabled(), "the light not drawn until \"Light ring live\" is on");
     ringlive_enable(1); check(ringlive_enabled() && light_live, "on: ring.c told to leave the light to us");
     light.on = 1; light.r = 0; light.g = 1; light.b = 0; light.fill = 50;
-    msleep(250); get(t, sizeof t);
+    /* waited for, not slept: 250 ms was too short under make -j unit's load */
+    for (int i = 0; i < 100; i++) { msleep(20); get(t, sizeof t); if (!strncmp(t + 66, "00FD00", 6) && !strncmp(t + 24, "00FD00", 6)) break; }
     /* fill 50 %: 6 LEDs from the fill's start (driver's 11, 0, 1 .. 4) green at FD */
     check(!strncmp(t + 66, "00FD00", 6) && !strncmp(t, "00FD00", 6) && !strncmp(t + 24, "00FD00", 6) && !strncmp(t + 30, "000000", 6),
           "the light at 50 %: green on the fill's 6 LEDs, the rest dark");

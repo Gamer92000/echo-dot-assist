@@ -2561,6 +2561,40 @@ Run in this order. Each step says what it proves.
       libled_resources.so byte for byte, the table byte for byte and 0760, init.ledcontroller.rc and the patterns'
       names and LED order the same; ledcontroller itself differs by AIPC service names only.  So radar gets them too,
       matched by firmware, not probed on one.
+      The Echo Dot 5 (cannoli, 2026-11-16, on the PC only, no Dot 5 at hand): no frame file there (the W4970 is the
+      SCP's LED manager's, behind /dev/tinysys_ipc_2), so the frames go the way the light's do: one looped frame a
+      picture into a slot of ours, `hassmic_live`, replaced in place by `aceLedMgr_updateAnimationData` through
+      libhmled.so (one more animation: 184 with stock's, well under the ~400 the LED manager takes), set once and
+      unset for the Echo's own patterns and the mute (the compositor would mix ours into their gaps, as the light's).
+      Full duty: its ledcontroller hands the LED manager the brightness tables (libacehal_led_interface.so
+      `prepare_brightness_tables_for_acs`, `mpcClient_setBrightness`), which scale every animation; the light's slots
+      are written unscaled too.  Through ring.c's connection (the test's stand-in serves one client at a time).  Found on the way: after ledcontroller ended (root's ledc_watch starts it again) the
+      light stayed dark until Home Assistant changed it; the connection's hang-up is now looked for every 200 ms
+      (`shim_check`) and the light and the live frame are drawn into the new one.  tests/fake_ha_ring_live_acs.py.
+      Reviews (2026-11-16): the shim dropped a client idle for 30 s, which read as ledcontroller gone: no idle
+      timeout now (ledshim.c; the new set's digest has root restart ledcontroller with it).  The live frame's round
+      trip goes under a lock of its own (`shim_lock`), not ring.c's nor write_lock, so a pattern of the Echo's own
+      being set (maybe under core_lock) never waits for the LED manager; only -s/-u are queued under them.  A hangup
+      counts as a connection (`shim_conns`), so a frame put into a ledcontroller that went away is put again.  What of
+      ours shows as one frame is set again every 30 s (a set ledq lost); effects are not (a set may restart them).
+      main() waits for ledq at its end, so the live slot's unset runs.
+      On the Dot 5 (cannoli fc66a9, 2026-11-16, ota-push.sh, the ESPHome API from the PC; the LEDs read back through
+      the shim's new "?leds": aceLedMgr_getLedState(led, out) = message 0x13 to the SCP, 5 bytes a LED: on, the
+      ring's brightness, RGB as sent, so full duty is right; src/tools/ledstate.c):
+      - An update stops the animation it replaces: a slot playing red read back dark after its update, green only
+        after ledctrl -s (what PLAN's "became a 24-frame pulse in place" missed: a set followed).  Started again in
+        the shim after each update (its wrappers of ledcontroller's start/stop, the config copied), every frame was
+        dark for the ~30 ms a start takes: Fire blinked badly (seen).  Now `hassmic_live` and `hassmic_live_b` swap:
+        the frame into the one not showing, started, the other stopped (one layer shows its first active one): Fire
+        smooth (seen).  An update 13 ms, a swap ~47 ms: ~20 frames a second; CPU with Fire: ledcontroller +6 % of a
+        core, hassmic +2 %.
+      - Checked by readback: LED 1 on the ring's LED 11, a frame with a timeout dark after it, an animation twice and
+        dark, Identify's rainbow and a volume step over it (gaps dark: the slot hidden first) and the ring back after,
+        soft mute's red ring and back, ledcontroller killed: drawn again unasked 11 s later (now a retry every 2 s
+        there), hassmic killed with an LED on: dark at the next start.  ledctrl -g kept listing patterns long unset.
+      - Not about the Dot 5: Home Assistant's media (play_media) puts the core in SPEAKING, whose stock ring loops,
+        so the live ring waits for the whole song and the music effects never show over HA's media (any model; the
+        PC test's stand-in set has no looping speaking ring).  Sendspin and Bluetooth set no pattern.  Open.
 - [ ] Idea (the user, 2026-11-12): the Echo's own patterns overridden from Home Assistant, e.g. "Thinking" red when
       the speaker is recognised as one person, green as another.  The live ring would draw the slot itself (a design
       of the library, or stock's look in another colour), at once, mid-request.  An action `light_ring_override` (slot,

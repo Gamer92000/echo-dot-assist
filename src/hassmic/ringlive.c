@@ -16,6 +16,11 @@
  * So hassmic writes colours as seen through the same gamma ring.c maps designs with and the same pwm ledcontroller uses:
  * a design played live looks as installed, and nothing is brighter than ledcontroller would make it at that level (at
  * level 100 FD, its own most).  Whatever comes from Home Assistant goes through that, and a pixel never above 255 x pwm.
+ * The Echo Dot 5 (binary animations, ring.h ring_live_acs) has no frame file: its LEDs are the LED manager's on the SCP.
+ * There each frame goes into a slot of ours that ledcontroller replaces in place (ring_live_put, through libhmled.so; ring_live_show sets it),
+ * at full duty: ledcontroller gives the LED manager its brightness tables, which scale every animation, ours too.  The
+ * slot sits in layer 0 under the Echo's own and is hidden while one shows, as the Dots' frame waits; nothing to read
+ * back, and the next start unsets what a run killed outright left (ring.c ring_start), so no marker.
  */
 #include "ringlive.h"
 #include "ring.h"
@@ -48,6 +53,7 @@
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static atomic_int avail;                /* set once by ringlive_start; read from the protocols' threads */
+static int acs;                         /* binary animations (the Echo Dot 5): frames through ring_live_put; set once */
 static int leds = 12, dirty, enabled, quitting;      /* enabled, quitting: under lock */
 static pid_t our_pid;                   /* SIGTERM's handler acts only in hassmic itself, not in a child between fork and
                                          * exec (ledq.c's ledctrl) */
@@ -134,8 +140,9 @@ int ringlive_table(const char *s, size_t n, int capcolor, float out[101])
 
 /* ---------------------------------------------------------------- the frame file */
 
-static int frame_write(const char *t)
+static int frame_write(const char *t, int lit)
 {
+    if (acs) { ring_live_show(lit); return 0; }        /* its frame went in before (frame_write_guarded) */
     int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
     if (fd < 0) return -1;
     size_t n = strlen(t);
@@ -150,17 +157,24 @@ static int frame_write(const char *t)
 
 /* A frame write that never lands after ledcontroller's for a pattern being set (ringlive_yield): read yield_gen,
  * look at hold_fn, then this.  -2: a yield came or the Echo's own shows, nothing written */
-static int frame_write_guarded(const char *t, int gen, int *err)
+static int frame_write_guarded(const char *t, int lit, int gen, int *err)
 {
     int rc = -2;
+    /* acs: the frame into the slot first, outside write_lock: a round trip to the LED manager that ringlive_yield (in
+     * led(), maybe under core_lock) must not wait for.  Into a hidden slot it does no harm; only showing it is guarded */
+    if (acs && lit) {
+        writes++;
+        if (ring_live_put(t)) { *err = EIO; return -1; }
+    }
     pthread_mutex_lock(&write_lock);
-    if (!atomic_load(&yielding) && atomic_load(&yield_gen) == gen) { rc = frame_write(t); *err = errno; }
+    if (!atomic_load(&yielding) && atomic_load(&yield_gen) == gen) { rc = frame_write(t, lit); *err = errno; }
     pthread_mutex_unlock(&write_lock);
     return rc;
 }
 
 static int frame_read(char *out, size_t cap)
 {
+    if (acs) return -1;                                 /* the LED manager's: nothing to read back */
     int fd = open(frame_path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     ssize_t k = read(fd, out, cap - 1);
@@ -188,6 +202,7 @@ static void boot_id(char out[48])
 }
 static void marker_write(void)
 {
+    if (acs) return;
     char t[64], id[48];
     boot_id(id);
     int n = snprintf(t, sizeof t, "%s\n", id);
@@ -508,7 +523,7 @@ static void *writer(void *arg)
         if (atomic_load(&leftover) == 2) {      /* what the last run of this boot left lit (the marker) */
             atomic_store(&leftover, 0);
             int g = atomic_load(&yield_gen), e = 0, rc = -2;
-            if (!owned && !(hold_fn && hold_fn())) rc = frame_write_guarded(dark_text, g, &e);
+            if (!owned && !(hold_fn && hold_fn())) rc = frame_write_guarded(dark_text, 0, g, &e);
             if (owned) {}
             else if (rc == -2) fprintf(stderr, "light ring live: the last run left the ring lit, but the Echo's own shows (or comes) now: left to it\n");
             else if (!rc) fprintf(stderr, "light ring live: what the last run left on the ring is dark again\n");
@@ -552,7 +567,9 @@ static void *writer(void *arg)
                 ringlive_text((const unsigned char (*)[3])px, leds, want);
                 /* !content: nothing of ours left, the ring goes back even if the dark frame is what was written last
                  * (a fade's last frames truncate to 00 while it still counts as ours: it stayed ours, Dot 2 2026-11-13) */
-                int need = strcmp(want, text) || !owned || !content;
+                /* acs: the slot hidden meanwhile (a pattern of the Echo's own came and went before we saw it held) or
+                 * gone with a ledcontroller started again: shown anew */
+                int need = strcmp(want, text) || !owned || !content || (acs && !ring_live_on());
                 if (!need && now - last_check >= CHECK_MS) {        /* ledcontroller wrote over it? */
                     last_check = now;
                     if (!frame_read(now_back, sizeof now_back) && strcmp(now_back, seen_back)) {
@@ -571,16 +588,19 @@ static void *writer(void *arg)
                  * Only the write itself is under the lock (no other lock taken there): yield waits ~15 ms at most */
                 int yg2 = atomic_load(&yield_gen), wrc = 0, werr = 0;
                 if (need && hold_fn && hold_fn()) need = 0;     /* the Echo's own came meanwhile: its frame wins */
-                if (need && (wrc = frame_write_guarded(want, yg2, &werr)) == -2) { need = 0; next = 5; }
+                if (need && (wrc = frame_write_guarded(want, content, yg2, &werr)) == -2) { need = 0; next = 5; }
                 if (need && !wrc) atomic_store(&owned_gen, yg2);
                 if (need) {
                     last_write = last_check = now;
                     if (wrc) {
-                        if (!failed) fprintf(stderr, "light ring live: cannot write %s (%s), tries again in 10 s\n", frame_path, strerror(werr));
-                        failed = 1; backoff_until = now + 10000;
+                        /* acs: a try is a connect to the shim, and root's watcher has ledcontroller back within ~5 s
+                         * (the Dot 5, 2026-11-16: the ring back 11 s after a kill with 10 s here) */
+                        int retry = acs ? 2000 : 10000;
+                        if (!failed) fprintf(stderr, "light ring live: cannot write %s (%s), tries again in %d s\n", acs ? "the LED manager's slot" : frame_path, strerror(werr), retry / 1000);
+                        failed = 1; backoff_until = now + retry;
                     }
                     else {
-                        if (failed) fprintf(stderr, "light ring live: %s written again\n", frame_path);
+                        if (failed) fprintf(stderr, "light ring live: %s written again\n", acs ? "the LED manager's slot" : frame_path);
                         failed = 0;
                         snprintf(text, sizeof text, "%s", want);
                         if (frame_read(seen_back, sizeof seen_back)) seen_back[0] = 0;
@@ -642,7 +662,7 @@ static void on_term(int sig)
 {
     /* Not under write_lock (an async handler may not wait): a writer's write already past its guard can still land
      * after this one, and leave ours lit with the marker gone; one write's window, ~15 ms */
-    if (owned_now && !atomic_load(&yielding) && atomic_load(&yield_gen) == atomic_load(&owned_gen) && getpid() == our_pid) {
+    if (!acs && owned_now && !atomic_load(&yielding) && atomic_load(&yield_gen) == atomic_load(&owned_gen) && getpid() == our_pid) {
         int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
         if (fd >= 0) { if (write(fd, dark_text, strlen(dark_text)) == (ssize_t)strlen(dark_text)) unlink(marker_path); close(fd); }
     }
@@ -670,6 +690,13 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
      * which hassmic may read but not write (2026-11-13) */
     const char *copy = getenv("HASSMIC_LED_TABLE") ? getenv("HASSMIC_LED_TABLE") : "/data/local/hassmic/led-table.json";
     char *js = NULL;
+    if (!fake && ring_live_acs()) {         /* the Echo Dot 5: through ledcontroller, the LED manager's brightness */
+        if (leds < 2 || leds > MAX_LEDS) { fprintf(stderr, "light ring live: not here: not a ring of LEDs\n"); return -1; }
+        acs = 1;
+        for (int i = 0; i <= 100; i++) pwm[i] = 1;
+        fprintf(stderr, "light ring live: frames into the LED manager's slot through ledcontroller, %d LEDs\n", leds);
+        goto run;
+    }
     if (!p || !*p) return -1;                                       /* not on this model (yet): nothing to say */
     snprintf(frame_path, sizeof frame_path, "%s", p);
     if (leds < 2 || leds > MAX_LEDS) why = "not a ring of LEDs";
@@ -693,6 +720,7 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
             else { fprintf(stderr, "light ring live: the last run's picture was of an earlier boot: the ring left as it is\n"); unlink(marker_path); }
         }
     }
+run:
     { unsigned char z[MAX_LEDS][3]; memset(z, 0, sizeof z); ringlive_text((const unsigned char (*)[3])z, leds, dark_text); }
     if (avail) return 0;                    /* once: one writer, whatever calls this again */
     our_pid = getpid();
@@ -718,7 +746,10 @@ void ringlive_yield(void)              /* counted whether or not the ring is liv
     atomic_fetch_add(&yielding, 1);
     atomic_fetch_add(&yield_gen, 1); owned_now = 0;
     if (!avail) return;
-    pthread_mutex_lock(&write_lock); pthread_mutex_unlock(&write_lock);     /* a write in flight is done */
+    pthread_mutex_lock(&write_lock);        /* a write in flight is done */
+    /* acs: the compositor would let ours through the gaps of the Echo's pattern: hidden first (ledq keeps the order) */
+    if (acs) ring_live_show(0);
+    pthread_mutex_unlock(&write_lock);
     pthread_mutex_lock(&lock); poke(); pthread_mutex_unlock(&lock);
 }
 

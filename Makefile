@@ -184,6 +184,11 @@ $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -fPIC -shared -Isrc/ui $(UI) -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmui.so -landroid -ljnigraphics -lm
 
+# not part of "all": what the Echo Dot 5's LEDs show, read back through libhmled.so (see the file)
+$(OUT)/ledstate: src/tools/ledstate.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
+
 # not part of "all": raw HCI probe on the Bluetooth controller (stop btmanagerd first, see the file)
 $(OUT)/hciscan: src/tools/hciscan.c
 	@mkdir -p $(OUT)

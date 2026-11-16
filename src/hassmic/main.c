@@ -3734,5 +3734,6 @@ int main(int argc, char **argv)
     cap_close();
     if (core_local_wake) wake_close(-1);
     ringlive_shutdown();                /* the live ring's frame dark, if it showed */
+    ledq_wait(1000);                    /* the Echo Dot 5: that is an unset in ledq's queue, run before we end */
     return 1;
 }

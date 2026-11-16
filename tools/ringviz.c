@@ -32,6 +32,10 @@ int ring_band_rows(int set) { (void)set; return -1; }
 int ring_custom(void) { return 1; }
 int ring_light_now(struct ring_light *l) { memset(l, 0, sizeof *l); return 0; }
 void ring_light_live(int on) { (void)on; }
+int ring_live_acs(void) { return 0; }
+int ring_live_put(const char *rgb) { (void)rgb; return -1; }
+void ring_live_show(int on) { (void)on; }
+int ring_live_on(void) { return 0; }
 
 static long long sim, t0;
 static FILE *dbg;
