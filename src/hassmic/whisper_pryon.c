@@ -66,9 +66,8 @@ static void on_event(const char *det, const char *utt, const char *type, const c
     (void)det; (void)utt; (void)z0; (void)z1;
     if (type && !strcmp(type, "metadata") && json) frames(json);
     if (!type || strcmp(type, "result") || !json) return;
-    int c = num(json, "confidence"), t = num(json, "threshold");
+    int c = num(json, "confidence");     /* its "threshold" (922) is not used: see the top */
     if (c < 0) { fprintf(stderr, "whisper: no confidence in %s\n", json); return; }
-    (void)t;                            /* the model's 922: see the top */
     callback(c > CUTOFF, c, CUTOFF);
 }
 
