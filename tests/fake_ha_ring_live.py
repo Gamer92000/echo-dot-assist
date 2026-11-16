@@ -9,7 +9,7 @@ Home Assistant's "Light ring" drawn live under the LEDs (its exact colour, the l
 dark frame; the settings page's "Show on the Echo" (POST /api/ring/live); "Light ring live" off with an effect only it
 draws: "Light ring"'s state names one of its list again.  Ends: SIGTERM (the dark frame, not over the Echo's own pattern
 set a moment before), init's kill while an effect moves (the next start makes it dark), muted (left alone)."""
-import asyncio, io, json, math, os, shutil, signal, struct, subprocess, sys, tempfile, threading, wave
+import asyncio, io, json, math, os, shutil, signal, struct, subprocess, sys, tempfile, threading, time, wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from aioesphomeapi import (APIClient, LightInfo, LightState, MediaPlayerInfo, NumberInfo, SelectInfo, SelectState, SwitchInfo,
                            VoiceAssistantEventType as Ev)
@@ -101,11 +101,14 @@ async def main():
         raise RuntimeError("no connection")
 
     def read():
-        """the stand-in frame; a read that met hassmic's write half way (truncated, not yet written) again"""
-        for _ in range(50):
+        """the stand-in frame; a read that met hassmic's write half way (truncated, not yet written) again, for up to
+        0.5 s: 50 reads back to back were over before a writer preempted between its O_TRUNC and its write was back
+        (CI, 2026-11-16: '' in "Music beat"; the driver's sysfs file takes a frame in one write)"""
+        end = time.monotonic() + 0.5
+        while True:
             t = open(frame).read()
-            if len(t) == 73: return t
-        return t
+            if len(t) == 73 or time.monotonic() > end: return t
+            time.sleep(0.001)
 
     # An Echo where hassmic may not write the ring (every other model: no ring_frame; a Dot 3 before root's main.sh
     # gave the file): "Light ring live" set on in its config all the same, and nothing of it anywhere
