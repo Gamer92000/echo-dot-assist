@@ -585,7 +585,8 @@ static void *band_thread(void *arg)
     static struct rgb row[MAX_W], last[MAX_W];
     int fd = -1, w = 0, have_rows = -1, sent = 0, timeout = 0, fails = 0, waited = 0, off_ui = 0;
     float last_k = -1;                              /* the brightness of the frame sent last */
-    long long last_wake = 0, next_check = 0;
+    long long last_wake = 0, next_check = 0, motion_act = 0;
+    int moved = 0, motion_held = 0;                 /* Wi-Fi motion (screen_motion): as last read, holding the screen on */
     for (;;) {
         pthread_mutex_lock(&lock);
         int want = rows, wake = wake_req; wake_req = 0;
@@ -604,6 +605,21 @@ static void *band_thread(void *arg)
                (asked first): a screen put out from the drawer stays out, whatever userActivity does to a dark one */
             if (t != timeout && timeout == NEVER_MS && screen_interactive() == 1) screen_activity();
             if (t != timeout) { timeout = t; screen_timeout(t); }
+            /* Wi-Fi motion (screen.h): a dark screen woken as it starts, and while it lasts activity every 10 s, so the
+               timeout counts from its end (the sensor's own 30 s after the last movement); never in Do not disturb.
+               Not while the timeout is the UI's (the clock: NEVER here), which hears it as "mo" itself */
+            int mv = screen_motion(), dnd = core_dnd(-1) > 0;
+            if (mv && !moved && !dnd && screen_motion_wake(-1) > 0 && screen_interactive() != 1) {
+                fprintf(stderr, "band: motion wakes the screen\n");
+                screen_wake();
+            }
+            int hold = mv && !dnd && screen_motion_keep(-1) > 0 && t != NEVER_MS;
+            if (hold != motion_held) fprintf(stderr, "band: motion %s\n", hold ? "keeps the screen on" : "no more: the timeout from now");
+            if ((hold && now >= motion_act) || (motion_held && !hold)) {
+                screen_activity();                  /* (a dark screen stays asleep under it: checkers, 2026-11-12) */
+                motion_act = now + 10000;
+            }
+            moved = mv; motion_held = hold;
             next_check = now + 1000;
         }
         if (wake && now - last_wake >= WAKE_EVERY) { last_wake = now; screen_wake(); }

@@ -946,6 +946,15 @@ void scene_msg(struct scene *s, const char *line, long long now)
         int on = 0, min = 5; sscanf(a, "%d %d", &on, &min);
         s->clock_big = on == 1; s->saver_min = min < 0 ? 0 : min; scene_active(s, "the settings");
     }
+    else if (eq(cmd, "mo")) {                                   /* Wi-Fi motion: moving, "keeps on", "wakes" (face.c) */
+        int mv = 0, k = 0, w = 0; sscanf(a, "%d %d %d", &mv, &k, &w); mv = mv == 1;
+        int shows = face_saver(s);
+        if (mv && !s->moving) s->mo_skip = shows && !(w == 1 && !s->dnd);    /* under the clock: only "wakes" ends it */
+        if (mv && !s->moving && !s->mo_skip && ((k == 1 && !s->dnd) || shows)) scene_active(s, "motion");
+        else if (!mv && s->moving && !s->mo_skip && k == 1 && !s->dnd) scene_active(s, "motion, until it stopped");   /* the timeout from here */
+        if (!mv) s->mo_skip = 0;
+        s->moving = mv; s->mo_keep = k == 1; s->mo_wake = w == 1;
+    }
     else if (eq(cmd, "name")) snprintf(s->name, sizeof s->name, "%s", a);
     else if (eq(cmd, "act")) snprintf(s->act, sizeof s->act, "%s", a);
     else if (eq(cmd, "web")) snprintf(s->web, sizeof s->web, "%s", a);

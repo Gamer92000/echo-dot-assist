@@ -89,10 +89,15 @@ static long long saver_ms(struct scene *s, int m)
     long long t = s->saver_min * 60000LL;
     return (m == M_MUTE || m == M_DND) && t > 60000 ? 60000 : t;
 }
+static int motion_holds(struct scene *s, int m)    /* Wi-Fi motion counts as activity ("mo"; not in Do not disturb) */
+{
+    return s->moving && s->mo_keep && !s->mo_skip && m != M_DND;
+}
 static int clock_mode(struct scene *s, int m)
 {
-    return s->clock_big && s->saver_min > 0 && waits(m) && s->now - s->active_at >= saver_ms(s, m);
+    return s->clock_big && s->saver_min > 0 && waits(m) && !motion_holds(s, m) && s->now - s->active_at >= saver_ms(s, m);
 }
+int face_saver(struct scene *s) { return s->view == V_FACE && clock_mode(s, face_mode(s)); }
 
 static void soon(long long *due, long long t, long long now) { if (t > now && (!*due || t < *due)) *due = t; }
 
@@ -101,7 +106,7 @@ long long face_due(struct scene *s)
 {
     long long due = 0;
     for (int i = 0; i < P_COUNT; i++) if (s->pat[i].on && pats[i].ms >= 0) soon(&due, s->pat[i].at + pats[i].ms, s->now);
-    if (s->view == V_FACE && s->clock_big && s->saver_min > 0 && waits(face_mode(s)) && !clock_mode(s, face_mode(s)))
+    if (s->view == V_FACE && s->clock_big && s->saver_min > 0 && waits(face_mode(s)) && !motion_holds(s, face_mode(s)) && !clock_mode(s, face_mode(s)))
         soon(&due, s->active_at + saver_ms(s, face_mode(s)), s->now);   /* the screen saver's turn */
     if (s->view == V_FACE && !clock_mode(s, face_mode(s))) {    /* (the clock has no eyes: no frames for blinks) */
         int m = face_mode(s);
