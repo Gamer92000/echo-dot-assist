@@ -47,6 +47,8 @@
 #include "improv.h"
 #include "buttons.h"
 #include "ring.h"
+#include "ringlive.h"
+#include "musiclight.h"
 #include "ringdesign.h"
 #include "ledq.h"
 #include "screen.h"
@@ -224,6 +226,7 @@ static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
 static int dropin_port = 28932;                     /* 0 = no Drop In (needs the arbitration network) */
 int core_web_port = 28931;                           /* 0 = no settings page */
+int core_duplex;
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
 static const struct proto *proto = &proto_esphome;
 
@@ -385,7 +388,7 @@ static void led_run(const char *op, const char *pattern) { ledq_run(op, pattern)
 static void led(const char *op, const char *pattern)
 {
     if (!pattern) return;
-    if (!strcmp(op, "-s")) ring_set(pattern); else ring_unset(pattern);
+    if (!strcmp(op, "-s")) { ringlive_yield(); ring_set(pattern); ringlive_yield_end(); } else ring_unset(pattern);
     screen_led(op, pattern);                        /* the face on a screen says the same (screen.h) */
 }
 
@@ -1295,6 +1298,11 @@ static void trigger(int touch, uint64_t from)
         fprintf(stderr, "stop: came during the round, reply cut\n");
         barge_in = 0;
         atomic_store(&flush_playback, 1);
+    } else if (state == SPEAKING && core_duplex && !touch) {
+        /* the client has the microphone through the reply and cuts it itself: what follows the wake word is speech to it.
+         * Not the button: it cuts the reply as without -D (barge-in below).  After the stop branch: a "stop" in the
+         * round cuts the reply under -D too, as stop_word does */
+        fprintf(stderr, "wake word during the reply: left to the client (-D)\n");
     } else if (state == SPEAKING && !atomic_load(&flush_playback)) {       /* not already being cut.  barge_in alone does not
                                                                              * say that: continue-conversation sets it too */
         fprintf(stderr, "barge-in\n");
@@ -1611,7 +1619,9 @@ static int kiosk_score(uint64_t end, int simulated)
 static void send_out(const int16_t *pcm, size_t n, int sound)
 {
     static int16_t out[1024 + MICDENOISE_FRAME];
-    mic_gain.hold = sound;
+    /* -D: the reply is our own sound too.  The echo canceller leaves a trace of it that the gain would bring up to
+     * speech level (up to +36 dB), and the client would answer it as the talker */
+    mic_gain.hold = sound || (core_duplex && atomic_load(&tts_on));
     micend_run(&mic_end, pcm, n, mic_gain.hold);        /* the level as heard, before the gain; heard_end() acts on it */
     while (n) {
         size_t k = n < 1024 ? n : 1024, m = k;
@@ -2148,7 +2158,9 @@ static void q_push(int kind, int media, unsigned rate, unsigned ch, const void *
 
 static void *playback_thread(void *arg)
 {
-    int open = 0;
+    int open = 0, play_media = 0, play_ch = 1; unsigned play_rate = 0;
+    long long play_t0 = 0, play_frames = 0;     /* the TTS stream's queue as the mixer's music queue is modelled
+                                                 * (audio_mixer.c s_queued_us): written minus what real time played */
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -2167,6 +2179,7 @@ static void *playback_thread(void *arg)
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
             tts_kind(it->media);            /* the TTS stream's volume for what comes now */
+            play_media = it->media; play_rate = it->rate; play_ch = it->ch; play_t0 = 0; play_frames = 0;
             open = play_open(it->rate, it->ch) == 0;
             if (open) { atomic_store(&tts_on, 1); playback_hint(); }
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
@@ -2176,6 +2189,17 @@ static void *playback_thread(void *arg)
                 const int16_t *pcm = (const int16_t *)it->data; size_t ns = it->len / 2; double e = 0;
                 for (size_t i = 0; i < ns; i += 4) e += (double)pcm[i] * pcm[i];
                 screen_level(ns >= 4 && e > 0 ? (int)lround(100 * log10(e / (ns / 4) / (32768.0 * 32768.0))) : -1000);
+            }
+            /* Home Assistant's media (play_media) for the ring's music effects, stamped with what the stream still
+             * holds in front of it (play_write has no queue of its own to ask); not replies or announcements */
+            if (open && play_media && play_rate) {
+                size_t frames = it->len / 2 / (play_ch ? play_ch : 1);
+                long long now = mono_ms(), q;
+                if (!play_t0) play_t0 = now;
+                q = play_frames * 1000 / play_rate - (now - play_t0);
+                if (q < 0) { play_t0 = now; play_frames = 0; q = 0; }      /* it ran dry: the queue starts again */
+                musiclight_feed((const int16_t *)it->data, frames, play_ch, play_rate, q * 1000);
+                play_frames += (long long)frames;
             }
             if (open && play_write(it->data, it->len) < 0) { play_close(0); open = 0; }
             break;
@@ -2197,7 +2221,10 @@ static void *playback_thread(void *arg)
 
 void core_tts_begin(unsigned rate, unsigned channels, int media)
 {
-    if (!wake_wait) { atomic_store(&streaming, 0); mic_stopped(); }     /* wake_wait: a chime and then the message */
+    /* wake_wait: a chime and then the message.  -D: the stream stays open, and with it the front end's listening flag
+     * (listening(1) of pipeline_start): its cancellers do not adapt during the reply.  As measured on radar (PLAN.md);
+     * listening(0) for the reply, as -w remote has it, not tried */
+    if (!wake_wait && !core_duplex) { atomic_store(&streaming, 0); mic_stopped(); }
     if (state != SPEAKING) speak_media = media;
     core_set_state(SPEAKING);
     q_push(Q_START, media, rate, channels, NULL, 0);
@@ -2739,11 +2766,13 @@ static void mute_latch(int muted, int sound)
 {
     static int last = 0;
     fprintf(stderr, "mic mute button: %d\n", muted);
+    ringlive_yield();                   /* ledcontroller's red ring comes: the live ring's SIGTERM leaves it alone */
     pthread_mutex_lock(&core_lock);
     int was = last || soft_mute; last = muted;
     if (!muted && soft_mute) { soft_mute = 0; fprintf(stderr, "soft mute: 0 (released with the button)\n"); }
     mute_update(was, sound);
     pthread_mutex_unlock(&core_lock);
+    ringlive_yield_end();               /* core_muted() holds the writer off now */
 }
 
 static void on_mute(int muted) { mute_latch(muted, 1); }       /* hardware latch changed (button) */
@@ -3100,6 +3129,28 @@ void core_set_eq(int band, int db)
 static atomic_int led_auto = 1, led_level = 80;     /* 80: ledcontroller's first-boot level; read without core_lock
                                                      * (core_led_brightness(-1): the band's thread, the protocols) */
 
+/* The light ring live (ringlive.h).  It steps back while one of the Echo's own patterns shows and while the microphones
+ * are off (the mute's red ring is always the Echo's), at the ring's brightness (auto included); what changes by itself
+ * there (a timeout, an animation's end) goes to Home Assistant */
+static int live_hold(void) { return ring_busy() || core_muted(); }
+static int live_level(void) { return core_led_brightness(-1); }
+static void live_changed(void) { pthread_mutex_lock(&core_lock); core_settings_changed(); pthread_mutex_unlock(&core_lock); }
+
+/* The design select lists the library's names as they were when Home Assistant listed it: a design saved or deleted on
+ * the settings page has it list them again, but only when the names changed (each save would close the links) */
+static void live_names_check(void)
+{
+    static int gen = -1; static unsigned long long had;
+    int g = rd_generation();
+    if (g == gen) return;
+    static char names[RD_MAX][RD_NAME]; int n = rd_names(names, RD_MAX); unsigned long long h = 1469598103934665603ULL;
+    for (int i = 0; i < n; i++) for (const char *c = names[i]; ; c++) { h = (h ^ (unsigned char)*c) * 1099511628211ULL; if (!*c) break; }
+    if (gen >= 0 && h != had && ringlive_available() && settings_on("ring_live")) {
+        pthread_mutex_lock(&core_lock); core_entities_changed(); pthread_mutex_unlock(&core_lock);
+    }
+    gen = g; had = h;
+}
+
 /* Root installed the ring's set again (designs applied on the settings page) and restarted ledcontroller, which starts
  * with auto brightness on: a fixed level once more, and Home Assistant's light listed anew if it came or went */
 static void ring_reloaded(int custom_changed)
@@ -3176,6 +3227,48 @@ static float lux_tcs3400(const char *dir)
     return lux;
 }
 
+/* A TSL2540 under DIR (an i2c device folder; its iio:device* holds the channels), turned into lux as stock's HAL does
+ * (lux.h) with the unit's own calibration from idme (alsparams, alscal: read once, HASSMIC_IDME for tests).  The gain
+ * and integration time are read back each time, as stock does: stock's ledcontroller set them (alsgain 5 -> calibscale
+ * 256, 0.700 s on the first cannoli). */
+static struct tsl2540_cal tsl_cal;
+static void tsl2540_idme(void)                 /* once: core_lux runs on the ESPHome, page and settings threads */
+{
+    char params[128] = "", cal[160] = "", p[160]; const char *idme = getenv("HASSMIC_IDME"); FILE *f;
+    snprintf(p, sizeof p, "%s/alsparams", idme ? idme : "/proc/idme");
+    if ((f = fopen(p, "r"))) { if (!fgets(params, sizeof params, f)) params[0] = 0; fclose(f); }
+    snprintf(p, sizeof p, "%s/alscal", idme ? idme : "/proc/idme");
+    if ((f = fopen(p, "r"))) { if (!fgets(cal, sizeof cal, f)) cal[0] = 0; fclose(f); }
+    tsl2540_parse(&tsl_cal, params, cal);
+    if (!tsl_cal.have) fprintf(stderr, "light sensor: no calibration in idme alscal, no reading\n");
+}
+
+static float lux_tsl2540(const char *dir)
+{
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    const struct tsl2540_cal *k = &tsl_cal;
+    pthread_once(&once, tsl2540_idme);
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    float lux = NAN;
+    while (d && (e = readdir(d))) {
+        if (strncmp(e->d_name, "iio:device", 10)) continue;
+        static const char *const ch[] = { "in_intensity0_raw", "in_intensity1_raw", "in_intensity_calibscale",
+                                          "in_intensity_integration_time" };
+        double v[4]; int ok = 1; char p[320]; FILE *f;
+        for (int i = 0; i < 4 && ok; i++) {
+            snprintf(p, sizeof p, "%s/%s/%s", dir, e->d_name, ch[i]);
+            ok = (f = fopen(p, "r")) && fscanf(f, "%lf", &v[i]) == 1;
+            if (f) fclose(f);
+        }
+        ok = ok && v[2] >= 0 && v[2] <= 65536;          /* calibscale: 128 or 256 seen; a cast of anything else is UB */
+        if (ok && (lux = lux_tsl2540_calc(v[0], v[1], (int)v[2], v[3], k)) < 0) lux = NAN;
+        break;
+    }
+    if (d) closedir(d);
+    return lux;
+}
+
 /* The light sensor as stock's HAL (libacehal_ambientLightSensor.so, its per-model "facade") reads it: a sysfs file the
  * kernel driver fills with calibrated lux, parsed with atof.  0..400 is all stock uses of it. */
 float core_lux(void)
@@ -3185,6 +3278,7 @@ float core_lux(void)
     for (; p && *p; p++) {
         char buf[32]; int fd; ssize_t n;
         if (!strncmp(*p, "tcs3400:", 8)) { float l = lux_tcs3400(*p + 8); if (!isnan(l)) return l; continue; }
+        if (!strncmp(*p, "tsl2540:", 8)) { float l = lux_tsl2540(*p + 8); if (!isnan(l)) return l; continue; }
         fd = open(*p, O_RDONLY);
         if (fd < 0) continue;
         n = read(fd, buf, sizeof buf - 1); close(fd);
@@ -3298,6 +3392,7 @@ static void *volume_led_thread(void *arg)
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         ring_tick();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
+        if (tick % 5 == 2) live_names_check();
         usleep(200000);
     }
     return NULL;
@@ -3558,7 +3653,7 @@ int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:G:LEVSTB")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:G:LEVSTBD")) != -1) switch (o) {
         case 'G': return ring_generate(optarg);     /* root, at the satellite's start (main.sh leds) */
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
@@ -3576,8 +3671,15 @@ int main(int argc, char **argv)
         case 'V': use_volume = 0; break;
         case 'S': print_mdns = 1; break;
         case 'B': use_bt = 0; break;
+        case 'D': core_duplex = 1; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
-        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S]\n"); return 2;
+        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S] [-D]\n"); return 2;
+    }
+    if (core_duplex && proto != &proto_wyoming) {
+        /* ESPHome: Home Assistant's run has finished listening once its reply plays, and the open stream would keep
+         * wake_listen (-w remote) from starting the run that lets the wake word cut the reply */
+        fprintf(stderr, "-D: Wyoming only, ignored\n");
+        core_duplex = 0;
     }
     core_port = port ? port : proto->port;
     if (!core_name) name_make();
@@ -3597,6 +3699,7 @@ int main(int argc, char **argv)
                                                      * laid out twice */
       if (!settings_peek("light_band", rows, sizeof rows)) ring_band_rows(atoi(rows)); }
     ring_start(led_run, ring_reloaded);
+    ringlive_start(live_hold, live_level, live_changed);     /* where root gave hassmic the ring's frame (main.sh) */
     rd_start();                         /* designs asked for before this start: still installing, or back */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
     audio_earcon_started = earcon_started;
@@ -3655,6 +3758,7 @@ int main(int argc, char **argv)
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    ringlive_begin();                   /* the mute and the Echo's own patterns known: what the last run left lit, dark */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }
@@ -3685,5 +3789,7 @@ int main(int argc, char **argv)
     }
     cap_close();
     if (core_local_wake) wake_close(-1);
+    ringlive_shutdown();                /* the live ring's frame dark, if it showed */
+    ledq_wait(1000);                    /* the Echo Dot 5: that is an unset in ledq's queue, run before we end */
     return 1;
 }

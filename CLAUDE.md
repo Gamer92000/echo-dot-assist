@@ -25,7 +25,7 @@ without them only the host targets build. Extraction steps: `devices/donut/READM
 
 ```sh
 make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool;
-                         # libhmui.so where device.mk has SCREEN)
+                         # libhmui.so where device.mk has SCREEN, libhmled.so where it has LEDSHIM)
 make DEVICE=donut STUBS=1  # same, without firmware/: links against stand-ins from devices/<codename>/stubs/*.syms (byte-identical)
 make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake, SIGTTOU a near miss; board.c of DEVICE),
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
@@ -74,6 +74,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
+.venv/bin/python tests/fake_talk_duplex.py    # -D over Wyoming (a realtime client with its own barge-in): the mic through
+                                             # a reply, a wake word then left to the client, the button still cuts it,
+                                             # -D under ESPHome ignored
 .venv/bin/python tests/fake_ma_sendspin.py [--legacy]  # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1, Sendspin 1.0;
                                              # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
                                              # strict: a deviation MA would only log fails; the output's clock
@@ -112,6 +115,13 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_ring_live.py   # the light ring live: LEDs, frames, animations, designs into a stand-in
+                                             # frame file (HASSMIC_FAKE_FRAME), the Echo's own first, "Light ring" vs live
+.venv/bin/python tests/fake_ha_ring_acs.py    # the same on binary animations (the Echo Dot 5): the set with stock's
+                                             # index files, the light drawn into its two slots through a stand-in shim
+                                             # (one client at a time: hassmic keeps one connection), drawn again after ledcontroller
+.venv/bin/python tests/fake_ha_ring_live_acs.py # the light ring live there: frames into hassmic_live through the shim,
+                                             # set once, unset for the Echo's own and mute, set again after ledcontroller
 .venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
                                              # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -153,6 +163,11 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   `main.sh` (`factory()`, only if that version is installed and its hassmic is what runs) has `sysinstall.sh` write it to
   `/system/hassmic` as the factory copy, bootstrap included (`boot.sh`, `otatool`, `hassmic.rc`, `release.pub`; never
   `update.pub` or `/sepolicy`). Works from older installs: the pushed update brings the code.
+  Where the factory copy is in an overlay on /data (device.conf `ROLLBACK`: cannoli), `sysinstall.sh` keeps the copy it
+  replaces in `ROLLBACK/previous` (only one `main.sh` `reach_check` saw reached from the network: a connection from
+  another address to a port of ours), and the flashed `prepare.sh` steps back after two boots without being reached
+  (`ROLLBACK/boots`; main.sh excuses a boot before set-up or without an address, for a version reached before): the unpromoted update, else the
+  factory copy to `previous`, else to the flashed copy; each version taken out into `ota/refused`, never installed again.
 - The light ring's own animations: `main.sh` installs them itself at satellite start when they are not this build's
   (none where `/system/etc/led-resources` is missing: checkers)
   (`sysinstall.sh leds`, ledcontroller restarted); `install-system.sh --uninstall` puts stock's layer config back.
@@ -277,7 +292,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages, API 1.15's device
   capabilities with Sendspin's client id and the pairing token (request and text sensor: keyed link only), so Music
   Assistant pairs through HA; its protobuf in `pb.h`,
-  header-only for `tests/unit/pb_test.c` under UBSan) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
+  header-only for `tests/unit/pb_test.c` under UBSan; a message that did not fit its buffer (`over`, carried out of
+  inner messages by `pb_msg`) is never sent: HA drops the link on a cut one and connects again, over and over) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
   core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
   earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen; cupcake, Echo Input: OpenSL ES over
@@ -498,8 +514,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `/data/local/hassmic/wifi/` (`status`, `scan`, `result`, `lock/`; the id ties answer to request). The password comes
   sealed with K (`web.c` unseal, `crypto.js` seal) and only its PSK (PBKDF2) leaves hassmic. wifi.sh saves nothing
   until the Echo is on the new network with a fresh lease (dhcpcd runs with `-K` and ignores network changes: wifi.sh
-  marks `dhcp.<if>.result`, runs `dhcpcd -n`, waits for the hook to write it) and its router answers ARP; else it
-  removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
+  marks `dhcp.<if>.result`, restarts init's `dhcpcd-<if>` (not `dhcpcd -n`: it waited for a carrier for good), waits
+  for the hook to write it) and its router answers ARP; else it removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
   leaves wifisvc alone while `lock/` exists and runs `wifi.sh status` on every address change; `clean` at the firewall start.
 - **Setup (OOBE) and factory reset** (`improv.c`, `main.c`): not set up = from an install or a reset until Home
   Assistant's voice assistant subscribed (`core_link` ready -> `state/adopted`; an existing `state/api_key` counts);
@@ -531,13 +547,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `toolchain/linux-<KVER>` + `devices/<codename>/kconfig` (biscuit/radar: IKCONFIG of `boot.img`, `KCONFIG`; donut: a
   fragment on arm64 defconfig, `KFRAG`), with AOSP
   `arm-eabi-4.8` / `aarch64-linux-android-4.9`. Without the module donut falls back to `iwpriv wlan0 driver RX_STAT` (last
-  frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.
+  frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.  RCPI1 where RCPI0 is
+  255 (cannoli's second antenna receives).  Modversions kernels (athena, cannoli): `devices/<codename>/Module.symvers`
+  from `tools/kcrc.py` (boot.img's `__kcrctab`, checked against stock modules).  Cannoli (Android's common kernel 5.4):
+  `HM_DRIVER_SYMS` (no `kallsyms_lookup_name` export: the driver's own symtab via `find_module`; the `bl` written
+  through a `vmap` alias), `KMOD_INIT` 0xfc (`tools/kmod-init.py`: its `struct module` has `init` 36 bytes on).
 - **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
   `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6; Dot 3: the TAS2770 amplifier's
   `DAC Playback Volume` = AMP_LEVEL, stock 16 of 0..20 in 0.5 dB steps (`speaker_gain_steps` 2), so +2 dB at most:
   `spkgain_max()`/`settings_max()` give the page the control's top; Show 5: the RT5616's line out `OUT Playback Volume`,
   stock 29 = -3 dB of 0..39 in 1.5 dB steps, `speaker_gain_steps` 2 per `speaker_gain_db` 3, a whole dB takes the
-  nearest step), written by hassmic itself (group audio). The Dot 2's
+  nearest step; Dot 5: the MAX98396's `Speaker Volume A`, stock 10 = +14 dB of +4..+21, offered to 16), written by
+  hassmic itself (group audio). The Dot 2's
   HAL writes stock at every mixer start (and per its XML on a jack change; the Dot 3's never writes it): a thread on the
   card's control events writes ours back when it sees stock, and leaves other values (the jack's 11) alone.
   `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>]]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
@@ -592,9 +613,67 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   turned (band position p = LED p + 5: the talker's pair in the middle): Apply needs no root there
   (`ring_designs_live`), and `ring_stock` gives the page the band's own patterns as files.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
   each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on);
-  sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
+  sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).
+  Binary animations (ACS, the Echo Dot 5; found by stock's `acs_animation_list.txt`): `<index>.<name>.animation_bin`
+  (big-endian "animagic"/"totl"/"loop"/"fram", 12 RGB pixels, donut's text byte for byte), index files rewritten with
+  ours after stock's (`acs_*`, `layer_config_common.txt` = the JSON flattened; stock's kept as `.pre-hassmic`,
+  `sysinstall.sh leds`).  Its LED manager on the SCP holds every animation from ledcontroller's start and refuses an
+  init past ~400 (a failed one leaves it dead until a reboot), so no palette: Home Assistant's light is drawn when it
+  changes into one of two slots (`hassmic_light_a|b`, `light_apply_acs`) through `src/ledshim/ledshim.c`
+  (`libhmled.so`, device.mk `LEDSHIM`), preloaded into ledcontroller (abstract socket `@hassmic-led`,
+  `aceLedMgr_updateAnimationData`; the daemon's uid, `hassmic_` names only).  Root runs that ledcontroller itself
+  (`main.sh` `ledc_start`/`ledc_watch`): a copy without its file capability, else the linker ignores LD_PRELOAD.  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Light ring live** (`ringlive.c`, `ringlive.h`, feature `ring_live`, off): hassmic writes the LED driver's frame (the Dot 5: below)
+  itself (`board.ring_frame`, donut's, biscuit's and radar's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0
+  first, on donut scaled by the unit's calibration in the driver; ledcontroller writes it only when its picture
+  changes; radar matched to biscuit by firmware, not probed; PLAN.md "Light ring live",
+  `scripts/led-probe.sh`).  Root's `main.sh` `led_frame` gives that one file to group `LED_GID` 3991 (device.conf
+  `LED_FRAME`, the same path; `tests/unit/ringlive_conf.py`), which runas adds to hassmic's groups; led_current, the
+  calibration, boot_animation and pwm1 stay ledcontroller's/root's.  Colours as seen -> gamma 2.2 (as ring.c's
+  designs) -> x the brightness table's pwm for the ring's level (`led_mute_ring_config.json` rgbTable by idme
+  `capcolor`, as the HAL's scaleDutyCycle), so never above what ledcontroller writes at that level (FD at 100).  One
+  writer thread, latest wins, `RINGLIVE_FPS` 30; waits while `ring_busy()` (the Echo's own patterns) or muted, back
+  150 ms after; reads back every 200 ms and puts ours back, backs off 5 s if something else keeps writing; nothing
+  left: the dark frame once.  HA (`proto_esphome.c`): lights "Light
+  ring LED 1..12" (from the fill's start + rotation), actions `light_ring_frame|animation|design|stop`, select "Light
+  ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`).  Layers:
+  "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
+  `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`; the six music ones `ringlive_music_effect` from
+  `musiclight.c`: the PCM fed by sendspin.c, a2dp.c and main.c's play_media path with its output's queue (the TTS
+  stream's modelled in `playback_thread`: written minus real time, as `s_queued_us`); 12 biquad
+  bands against running ranges, the level and L/R as punch against 1.5 s, kick/snare/hi-hat from log-amplitude flux
+  with level gates, tempo by autocorrelation, a beat grid locked to the kicks (phase by circular mean, then a PLL), the
+  accent every 4 beats; each reading stamped when heard; only while a music effect shows, `musiclight_want`.  Measured
+  by `make unit-ringviz`: tools/ringmusic.py's track with its drums written down, build/ringviz, tools/ringviz.py
+  (scores, and effects.png to look at)), the LED lights over it, an animation over all; HA's
+  transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
+  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows (main.c `led()` and the mute bracket
+  `ring_set` with `ringlive_yield`/`_yield_end`: no frame of ours starts in between and one in flight is waited for
+  (`write_lock`), so ledcontroller's frame for a static pattern lands after ours; the handler leaves the ring alone
+  until the writer looked; only in hassmic's own pid, not a child forked without exec); init's stop kills outright (a
+  moving effect stays frozen), so `state/ring-live` (the boot id; written once a run when ours first shows, never per
+  frame: /data is flash; deleted at a clean end) has the next start in the same boot make the ring dark at
+  `ringlive_begin` (main.c after settings_load: the mute and the Echo's own known), unless `live_hold` then.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
+  GET /api/ring, ring.js `liveShow`.  PC: `HASSMIC_FAKE_FRAME`, `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`,
+  `tests/fake_ha_ring_live.py`.
+  The Echo Dot 5 (binary animations, `ring_live_acs`; picked before `board.ring_frame`, not with `HASSMIC_FAKE_FRAME`):
+  no frame file, the LEDs are the SCP's LED manager's.  Each frame goes as one looped frame into ring.c's slot
+  `hassmic_live` (layer 0 with the light's slots, auto-stop 0): `ring_live_put` (the frame, `shim_update` on the light's
+  connection under `shim_lock`), `ring_live_show` (-s/-u queued; set once per
+  ledcontroller: `live_on`, `live_put_conn`, `shim_conns` counts connections made and lost), unset when
+  nothing of ours is left and by `ringlive_yield` before the Echo's own pattern (the compositor would mix ours into its
+  gaps).  Full duty: ledcontroller gives the LED manager its brightness tables (`prepare_brightness_tables_for_acs`).
+  No read back, marker or SIGTERM frame: `ring_start` unsets the slot.  `shim_check` (ring_tick, `ring_live_on`): the
+  connection hung up = ledcontroller ended, the light and the live frame drawn again into the next one.
+  An update stops the animation it replaces (measured), so libhmled.so wraps ledcontroller's
+  `aceLedMgr_startAnimationWithConfig`/`stopAnimation`/`stopAllAnimations` (preloaded: its HAL's PLT calls land there)
+  and keeps `hassmic_live` as a pair with `hassmic_live_b`: a frame into the one not showing, started with
+  ledcontroller's config, the other stopped; ledcontroller only knows `hassmic_live`.  ~47 ms a swap: ~20 frames a
+  second.  The shim takes 4 clients, `?leds` reads what each LED shows (`aceLedMgr_getLedState`: on, brightness,
+  RGB); `src/tools/ledstate.c` (not in `all`; `runas puffin aipc ledstate [-n N -i MS] [-p RRGGBBx12]`).  ledctrl -g
+  is stale on the Dot 5: trust `?leds`.  `tests/fake_ha_ring_live_acs.py`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the
   Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
   `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache
@@ -689,7 +768,8 @@ DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there 
 `tools/wakealign/corpus_eval.py` measures the replay's start on it (stock Pryon under qemu, the release's rule, the
 aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
-`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
+`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `kcrc.py` (a modversions
+kernel's CRCs out of its boot image) and `kmod-init.py` (Wi-Fi motion's module),  `vol-curve.py`: an Android Echo's
 volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
 output, a PC microphone beside it, for `board.cold_lead_ms`).
 

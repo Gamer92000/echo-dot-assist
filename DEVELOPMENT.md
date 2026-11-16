@@ -31,7 +31,7 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | `devices/` | one directory per Echo model (`donut`, `biscuit`, `radar`): `device.mk`, `board.c`, `device.conf`, `hassmic.rc`, `sepolicy.rules`, `setup.sh`, install instructions |
 | `src/hassmic/` | the daemon: core (capture, wake word, playback, LEDs, buttons), `sound_pryon.c` (optional sound detection, `docs/re-aed.md`), `whisper_pryon.c` (whisper detection with Amazon's model, `docs/re-whisper.md`), `proto_esphome.c`, `proto_wyoming.c`, `arb.c` (wake word arbitration between Echos), `dropin.c` (Drop In: calls between Echos of the arbitration network), `duck.c` (music ducked on the other Echos that heard the wake word), `settings.c` (settings by name, `state/config`), `web.c` (the settings page; its files in `web/`), `artifacts.c` (models copied between Echos by the page), `davs.c` (models downloaded from Amazon by the page, with `dha.c` for the device attestation its login needs, `docs/re-davs-login.md`), `earsup.c` (experimental: our own wake sound taken back out of the mic audio sent to the pipeline), `micdenoise.c` (RNNoise on the mic audio sent to the pipeline), `micgain.c` (gain of the mic audio sent to the pipeline), `wakealign.c` (where the wake word ends: its phones aligned with a cut-down Montreal Forced Aligner model, `tools/wakealign/`), `wordtail.c` (the same by the level, without a model), `micend.c` (experimental: the end of a request heard on the Echo, by the talker's level and Amazon's VAD), `afemeta.c` (the front end's record in the micAsr samples' lowest bits, `docs/re-vad.md`), `sendspin.c` (kept in sync by a rate of its own: `resample.c`), `mass.c` (Music Assistant's own API for the screen's music pages, `json.c` reads it), `a2dp.c` (Bluetooth speaker both ways), `btout.c` (playing on a Bluetooth speaker: the mixer's A2DP route, `docs/re-a2dp-source.md`), `ble.c`, push updates (`ota.c`), online updates (`update.c`), `adbwifi.c` (the debug access switch), `improv.c` (setup from a phone: Improv Wi-Fi over `ble.c`'s peripheral role), `netaddr.c` (a new IP address: links over the old one closed, mDNS announced again until Home Assistant is back), `wifimotion.c` (experimental motion sensor from the Wi-Fi driver's receive level), `wake.c` (picks the wake word engine by the model: `wake_pryon.c`, or `wake_mww.c` = microWakeWord with `mww_features.c` (its audio front end), `mww_model.c` (its int8 .tflite models) and `mww_store.c` (its models in `state/mww`, managed by the page)) |
 | `src/ui/` | the Echo Show's screen UI, a process of its own (hassmic's `screen.c` starts it; `ui.h` lists the parts): `scene.c` (display list diffed per frame into one dirty rectangle, caches, touches, scrolling), `widgets.c` (icons, buttons, sliders, keyboard), `face.c`, `drawer.c` (pulled from the top edge: home, music, DND, apps), `music.c` (Music Assistant: playing, queue, library, search, speakers), `words.c` (what was said, the reply and the timers on a see-through layer of their own), `gfx.c` (anti-aliased drawing into the gralloc buffer), `android.c` (libhmui.so: JNI for the layers, text, images, apps, the screenshot; loaded by `scripts/device/screen.dex`, `tools/mkscreen.py`), `touch.c` (the touchscreen's evdev node, protocol B; `tests/unit/touch_test.c`); `tools/uishot.c` draws every view on the PC |
-| `src/kmod/` | kernel modules for Wi-Fi motion, hooking the Wi-Fi driver's receive path: `hassmic_rcpi.c` (biscuit, radar), `hassmic_rcpi4m.c` (donut, and checkers as 32-bit ARM); built by `make` when the model's kernel sources and compiler are in `toolchain/`, see below |
+| `src/kmod/` | kernel modules for Wi-Fi motion, hooking the Wi-Fi driver's receive path: `hassmic_rcpi.c` (biscuit, radar), `hassmic_rcpi4m.c` (donut; checkers, crown, cronos, athena, cannoli as 32-bit ARM; cupcake); built by `make` when the model's kernel sources and compiler are in `toolchain/`, see below |
 | `src/tools/` | `mixcap`, `mixplay`, `pryon_test`, `aed_test` (stock sound detector, `docs/re-aed.md`), `whisper_test` (whisper detector, `docs/re-whisper.md`), `latency`, `otatool`, `runas` (AIPC refuses uid 0, the image has no `su`), `curlspy`, `hciscan` (raw HCI on `/dev/stpbt`), `a2dpprobe` (stands in for the Bluetooth stack on the mixer's A2DP output) |
 | `src/include/` | C headers for the reversed `libmixerAPI.so` and `libpryon.so` |
 | `wakealign/` | the wake word aligners (`src/hassmic/wakealign.c`), cut out of the Montreal Forced Aligner's models: CC BY 4.0, credited in its README |
@@ -113,6 +113,10 @@ tests/otatool_test.sh                             # the PC's otatool (Python) ag
                                                  # a restart (the page's loudness check: tests/unit/web_loudness_test.py)
 .venv/bin/python tests/fake_ha_ring.py            # the light ring: the animation set hassmic -G makes, Home Assistant's light,
                                                  # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_ring_acs.py        # the same on the Echo Dot 5's binary animations: the set, its index files,
+                                                 # the light drawn into its slots through a stand-in for libhmled.so
+.venv/bin/python tests/fake_ha_ring_live_acs.py   # "Light ring live" on the Echo Dot 5: frames into its slot through that
+                                                 # stand-in, the Echo's own first, ledcontroller started again
 .venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,
                                                  # Wi-Fi through root's wifi.sh, adoption, factory reset
 .venv/bin/python tests/fake_ha_bt_proxy.py        # the Bluetooth proxy switched off and on (issue #152) on that controller
@@ -131,6 +135,7 @@ build:
 ```sh
 make kernel-tools DEVICE=donut      # kernel 4.4.22 (arm64), aarch64-linux-android-4.9
 make kernel-tools DEVICE=radar      # biscuit, radar: kernel 3.18.19 (ARM), arm-eabi-4.8
+make kernel-tools DEVICE=cannoli    # kernel 5.4.86 (ARM), arm-eabi-4.8
 ```
 
 The pins are in `device.mk` (`KSRC_URL`, `KSRC_SHA256`, `KCC_URL`, `KCC_DIGEST`), or the Makefile's defaults for the
@@ -141,7 +146,12 @@ The compilers are the ones Amazon built those kernels with (their version string
 the repository: biscuit's and radar's `devices/<codename>/kconfig` is their kernel's own (IKCONFIG, read out of the
 firmware's `boot.img` with `scripts/extract-ikconfig`; device.mk `KCONFIG`); donut's kernel carries none, so its
 `devices/donut/kconfig` is a fragment on top of the arm64 defconfig (`KFRAG`), with what donut's own modules show
-(vermagic, no modversions, no signature).
+(vermagic, no modversions, no signature).  Where the kernel has `CONFIG_MODVERSIONS` (athena, cannoli),
+`devices/<codename>/Module.symvers` has its CRCs of what the module imports: `tools/kcrc.py --check <stock .ko>...
+boot.img <symbol>...` reads them out of the boot image, checked against the CRCs the stock modules carry.  Cannoli's
+kernel is Android's common kernel: its `struct module` has `init` 36 bytes further on than kernel.org's, which
+`tools/kmod-init.py` puts right after the build (device.mk `KMOD_INIT`), and it exports no `kallsyms_lookup_name`
+(`HM_DRIVER_SYMS` in `hassmic_rcpi4m.c`).
 
 Trial runs on the device: `scripts/deploy.sh`, then `adb shell sh /data/local/hassmic/run.sh`.
 
