@@ -1802,6 +1802,16 @@ Run in this order. Each step says what it proves.
       model in `/data/local/hassmic/whisper` (`scripts/artifacts.sh`). `fake_ha_esphome.py`: unknown until a request,
       on at its VAD end. Live with HA (Echo Dot 2): fed from the start of streaming, the normally spoken wake word's
       tail took whispered requests to 641-979; with the first 0.5 s not fed, whispered 999/984, normal 1/0.
+      Broken by the replay from the ring (2026-10-12: the stream waits for the arbitration round and the word's tail):
+      the live audio at the start of streaming lay 0.8-1.7 s past the word's end, the 0.5 s skip on top. Echo Dot 3
+      among five Echos (2026-11-13, "Alexa" whispered too, German, capture dump replayed with `whisper_test` on the
+      Echo): 7 whispered requests 763/186/57/203/68/997/40 as fed (live: 764/192/57/215/68/997, the replay matches),
+      890/989/943/993/992/975/978 from Pryon's word end, 962-998 from its begin; 8 normal ones 0-225 as fed, 0-1 from
+      either. Now fed from the ring at the request's start (`whisper_from`: the tail's end, as sent to HA; the first
+      block without a wake word; live with `-w remote`, no ring), no skip, cut-off 500 (AHE's) instead of the result's
+      922. The detector is finished in a thread right after its end of utterance (backlogWait, session end, delete):
+      its result came now and then only when the next request retired it. The sensor goes unknown at each run start;
+      a request not scored logs why. Open: the live numbers with this build.
       Open: that the agent's template sees the new state in time (not checked with an LLM yet), other speakers.
       Background: stock has it on the device: `libpryon.so`
       exports `WhisperApi_*` (a detector of its own: audio in, end of utterance in, one `confidence` out, whispered

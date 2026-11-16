@@ -103,6 +103,13 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-11-13
 
+- **Whisper detection works again with several Echos.** Since the Echo waits for the other Echos before it answers a
+  wake word (October), the whisper detector began listening up to 1.7 seconds after the wake word and missed most of
+  the request: on an Echo Dot 3 among five Echos, one whispered request in seven was taken for whispered. It now hears
+  what Home Assistant hears, from the wake word's end on, and counts above 500 of 1000 as whispered (Amazon's own
+  cut-off; the model names 922): the same seven recordings all came out whispered, eight spoken ones not. "Last
+  request whispered" also goes unknown when a request starts, so a request that is not scored (the wake word alone)
+  no longer shows the one before's answer, and the answer no longer comes late, after the reply, now and then.
 - **Duplex for a realtime agent (`-D`, Wyoming).** With `-D` in `ARGS` the microphone keeps streaming while a reply
   plays, and a wake word during the reply is left to the client: for a client that cuts replies itself, such as
   hermes-talk's Echo surface (`hermes talk echo`), which talks with a realtime voice model straight from the Echo.

@@ -757,6 +757,7 @@ static int wake_wait;                               /* lock held: the run now op
 static int wake_cut;
 static int wake_fails;                              /* lock held: wake word runs Home Assistant failed during this reply */
 static int follow_up;                               /* lock held: the pipeline now starting is a follow-up to a question */
+static void whisper_run(void);
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
     run_over = 0; wake_wait = 0;
@@ -769,6 +770,7 @@ static void pipeline_start(uint64_t from)    /* from: where the wake word that s
      * end ended this one before any audio went out (heard_end in the capture thread) */
     micend_start(&mic_end, MICEND_OFF, 0, 0, NULL);
     run_wake = from != 0;
+    whisper_run();
     proto->start();
     atomic_store(&streaming, 1);
     int listen_now = core_local_wake || follow_up;      /* remote wake: a follow-up has no wake word to wait for */
@@ -1046,12 +1048,21 @@ static void on_sound(const char *const *types, int n)    /* detector thread */
     pthread_mutex_unlock(&core_lock);
 }
 
-/* Whisper detection (whisper.h, docs/re-whisper.md): each request's mic audio, from the start of streaming to Home
- * Assistant's VAD end, is scored once; the binary sensor says whether the last one was whispered, for the conversation
- * agent's prompt template.  The result comes within milliseconds of the end of speech, while speech to text still
- * runs, so it is in Home Assistant before the agent's prompt is rendered.  Without the DAVS model there is no sensor. */
+/* Whisper detection (whisper.h, docs/re-whisper.md): each request's mic audio, as Home Assistant gets it from where it
+ * starts (after a wake word: the word's end, its tail left out; whisper_from) to Home Assistant's VAD end, is scored
+ * once; the binary sensor says whether this request was whispered, for the conversation agent's prompt template.  The
+ * result comes within milliseconds of the end of speech, while speech to text still runs, so it is in Home Assistant
+ * before the agent's prompt is rendered.  Without the DAVS model there is no sensor.
+ * Fed from the ring, not the live blocks: since the stream waits for the arbitration round and the word's tail and
+ * then replays the ring (2026-10-12), the live audio at the start of streaming was 0.8-1.7 s past the word's end on
+ * an Echo Dot 3 with four other Echos, and the 0.5 s whisper_pryon.c skipped on top of it (the word's tail, when
+ * the live audio began at the word's end) left the detector the last second, mostly the silence before the VAD end:
+ * whispered requests scored 40-763 (one 997), fed from the word's end 890-993 (2026-11-13, replayed from the dump) */
 static atomic_int whisper_eou;              /* core_mic_off: the end of speech came (not a cancel or timeout) */
 static atomic_int whisper_last = -2;        /* core_whispered */
+static uint64_t whisper_from;               /* lock held: the ring sample the request starts at, 0: not known yet */
+static atomic_uint whisper_gen;             /* whisper_run: runs started (written under lock) */
+static atomic_uint whisper_req;             /* capture thread: whisper_gen when the detector now scoring began */
 
 int core_whispered(void) { return atomic_load(&whisper_last); }
 static int whisper_model;
@@ -1059,12 +1070,29 @@ static atomic_int whisper_enabled = 1;               /* the settings page's "Whi
 int  core_whisper_model(void) { return whisper_model; }
 void core_whisper_enable(int on) { atomic_store(&whisper_enabled, on != 0); }
 
-static void on_whisper(int whispered, int confidence, int threshold)    /* detector thread */
+/* lock held: a run starts.  The sensor goes unknown until this request is scored: kept, the last request's answer
+ * stood for one that is never scored (the wake word alone, a cancel) or whose result came late */
+static void whisper_run(void)
 {
-    fprintf(stderr, "whisper: %s (confidence %d, threshold %d)\n", whispered ? "whispered" : "not whispered", confidence, threshold);
-    atomic_store(&whisper_last, whispered);
+    whisper_from = 0;
+    atomic_fetch_add(&whisper_gen, 1);
+    if (atomic_load(&whisper_last) < 0) return;            /* no model, or unknown already */
+    atomic_store(&whisper_last, -1);
+    if (connected && proto->whispered) proto->whispered(-1);
+}
+
+/* detector thread.  A result that comes after the next run started is that run's no more: dropped, the sensor stays
+ * unknown.  Under the lock with whisper_run, so a run starting meanwhile is either seen here or clears it after */
+static void on_whisper(int whispered, int confidence, int threshold)
+{
     pthread_mutex_lock(&core_lock);
-    if (connected && proto->whispered) proto->whispered(whispered);
+    int stale = atomic_load(&whisper_req) != atomic_load(&whisper_gen);
+    fprintf(stderr, "whisper: %s (confidence %d, threshold %d)%s\n", whispered ? "whispered" : "not whispered", confidence, threshold,
+            stale ? ", too late: the next run started, dropped" : "");
+    if (!stale) {
+        atomic_store(&whisper_last, whispered);
+        if (connected && proto->whispered) proto->whispered(whispered);
+    }
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -3453,6 +3481,9 @@ static void *capture_thread(void *arg)
     FILE *dump = NULL;
     int sound_running = 0;                  /* the decoder is open: only this thread opens, feeds and closes it */
     int whisper_on = 0;                     /* a whisper detector takes this request's audio */
+    uint64_t whisper_pos = 0;               /* the next ring sample it gets, 0: the request's start not known yet */
+    uint64_t whisper_at = 0, whisper_kw = 0;    /* whisper_from and the wake word's end, read with the lock below */
+    unsigned whisper_at_gen = 0;                /* the run they belong to (whisper_gen then) */
     (void)arg;
     while (!atomic_load(&quit)) {
         const void *pcm; int n = cap_read(&pcm);
@@ -3507,15 +3538,6 @@ static void *capture_thread(void *arg)
             } else { sound_close(); sound_running = 0; }
         }
         if (sound_running) sound_feed(pcm, n / 2);
-        if (atomic_load(&whisper_last) != -2) {     /* a model: what streams to the pipeline is one request */
-            int s = atomic_load(&streaming);
-            if (s && !whisper_on && atomic_load(&whisper_enabled)) {             /* the position lines it up with the capture dump's */
-                atomic_store(&whisper_eou, 0); whisper_begin(); whisper_on = 1;
-                fprintf(stderr, "whisper: request from capture sample %lld\n", atomic_load(&cap_bytes) / 2 - n / 2);
-            }
-            if (whisper_on && s) whisper_feed(pcm, n / 2);
-            if (whisper_on && !s) { whisper_end(atomic_exchange(&whisper_eou, 0)); whisper_on = 0; }
-        }
         if (atomic_load(&dropin_live)) {               /* a Drop In: the call gets the mic as the pipeline does; muted, silence */
             static int16_t zeros[1024];
             int own = atomic_load(&earcon_sounding) || atomic_load(&sounds_pending) || mono_ms() < atomic_load(&earcon_heard_until)
@@ -3523,6 +3545,7 @@ static void *capture_thread(void *arg)
             if (!core_muted()) dropin_mic(pcm, n / 2, own);
             else for (size_t k = n / 2; k; ) { size_t m = k < 1024 ? k : 1024; dropin_mic(zeros, m, 0); k -= m; }
         }
+        whisper_at = 0;
         if (atomic_load(&streaming)) {
             align_ahead();                              /* outside the lock: it takes up to ~0.1 s on an Echo */
             pthread_mutex_lock(&core_lock);
@@ -3545,9 +3568,42 @@ static void *capture_thread(void *arg)
                         stream_ring((uint64_t)from, at + n / 2); replay_from = 0;
                     }
                 }
+                if (!replay_from && !whisper_from) whisper_from = talker_from ? talker_from : at;   /* the word's end, or the first block */
+                whisper_at = whisper_from; whisper_kw = run_wake ? kw_end : 0; whisper_at_gen = atomic_load(&whisper_gen);
                 if (mic_end.ended && atomic_load(&streaming)) heard_end();
             } else replay_from = 0;
             pthread_mutex_unlock(&core_lock);
+        }
+        if (atomic_load(&whisper_last) != -2) {     /* a model: what streams to the pipeline is one request */
+            int s = atomic_load(&streaming);
+            /* a run over: its detector ends.  Also when the next run already started: core_pipeline_finish restarts one
+             * (-w remote, a barge-in) in the same lock hold that ends it, so streaming is never 0 here between them */
+            if (whisper_on && (!s || atomic_load(&whisper_gen) != atomic_load(&whisper_req))) {
+                whisper_end(atomic_exchange(&whisper_eou, 0)); whisper_on = 0;
+            }
+            if (s && !whisper_on && atomic_load(&whisper_enabled)) {
+                atomic_store(&whisper_eou, 0); whisper_begin(); whisper_on = 1; whisper_pos = 0;
+                atomic_store(&whisper_req, atomic_load(&whisper_gen));     /* after begin: the last detector's results are in */
+                /* where the capture is now (tests time the PC's wake word by it), lined up with the capture dump's */
+                fprintf(stderr, "whisper: request from capture sample %lld\n", atomic_load(&cap_bytes) / 2 - n / 2);
+            }
+            if (whisper_on && s && !core_local_wake) whisper_feed(pcm, n / 2);   /* no ring (-w remote): live, as sent */
+            else if (whisper_on && s) {                 /* the ring from where the request starts, outside the lock */
+                /* only this run's start: a run that began after the lock above was let go has none yet */
+                if (whisper_at && whisper_at_gen == atomic_load(&whisper_req) && !whisper_pos) {
+                    uint64_t from = whisper_at;
+                    whisper_pos = ring_n > RING_SAMPLES && from < ring_n - RING_SAMPLES ? ring_n - RING_SAMPLES : from;
+                    if (whisper_kw) fprintf(stderr, "whisper: scored from capture sample %llu (%lld ms after the wake word's end)\n",
+                                            (unsigned long long)whisper_pos, ((long long)whisper_pos - (long long)whisper_kw) * 1000 / CAP_RATE);
+                    else fprintf(stderr, "whisper: scored from capture sample %llu (no wake word)\n", (unsigned long long)whisper_pos);
+                }
+                for (; whisper_pos && whisper_pos < ring_n; ) {
+                    uint64_t o = whisper_pos % RING_SAMPLES, k = ring_n - whisper_pos;
+                    if (k > RING_SAMPLES - o) k = RING_SAMPLES - o;
+                    whisper_feed(ring + o, (size_t)k);
+                    whisper_pos += k;
+                }
+            }
         }
         if (atomic_exchange(&det_pending, 0)) {
             pthread_mutex_lock(&core_lock); uint64_t b = det_begin, e = det_end; pthread_mutex_unlock(&core_lock);
