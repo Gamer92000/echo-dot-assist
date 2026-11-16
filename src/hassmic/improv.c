@@ -164,7 +164,12 @@ static void on_write(int c, const uint8_t *d, size_t n)
 static void on_connection(int up)
 {
     pthread_mutex_lock(&mu);
+    /* A phone that connects starts with no error: Home Assistant's app reads it as it connects, and a failed switch
+     * left there (unable to connect) made it give up before sending anything (cannoli, 2026-11-15).  Not while a
+     * switch runs: a phone that dropped during it and comes back is to hear how it ends.  Left as it is when a phone
+     * leaves. */
     connected = up; rxn = 0;
+    if (up && !join_id) err = E_NONE;
     if (up) fprintf(stderr, "improv: a phone connected\n");
     else fprintf(stderr, "improv: the phone left\n");
     if (H && H->attention) H->attention(up && st == ST_AUTH_REQUIRED);

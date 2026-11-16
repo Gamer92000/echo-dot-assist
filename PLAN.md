@@ -1394,7 +1394,7 @@ Run in this order. Each step says what it proves.
       both times. Found there: back() let its own reconnect overwrite why (reported noassoc); fixed, fake now settles
       through ASSOCIATING. dhcpcd: init's `dhcpcd wlan0 -AdLK` (6.8.2), `-K` = no link events: 15 s on a missing network
       and back left address, router ARP entry (0x2) and `dhcp.wlan0.*` untouched, so the address-only check would have
-      passed on another network with the old lease. Now `setprop dhcp.wlan0.result hassmic` + `dhcpcd -n wlan0` and only
+      passed on another network with the old lease. Then `setprop dhcp.wlan0.result hassmic` + `dhcpcd -n wlan0` (a restart since 2026-11-15) and only
       a lease its hook (`95-configured`) writes counts; same network: RENEW in 1 s, switch in 5 s. Other subnet
       (192.168.100.0/22 -> DasImhof'scheTortenstueck 192.168.0.0/23): 17.8 s; there dhcpcd did see the drop (EXPIRE,
       CARRIER, a moment of IPv4LL) and REBIND gave 192.168.1.242, router 192.168.0.1; lockdown re-applied with the new
@@ -2143,8 +2143,7 @@ Run in this order. Each step says what it proves.
       LE Connection Complete as peripheral, ACL with credits), a phone's GATT client, py-improv-ble-client's packets,
       real wifi.sh on the fake tools, aioesphomeapi for adoption and the reset button, the keypad as a FIFO for the
       holds.  Open (device): the MT7668 advertising beside scanning/A2DP; a real phone (HA app on Android and iOS);
-      whether wifisvc or Amazon's own Wi-Fi store brings forgotten networks back after a reset; init's
-      `dhcpcd-wlan0` on a fresh Echo; acebuttond's 5 s hold (Amazon's setup mode; its services are stopped) doing
+      whether wifisvc or Amazon's own Wi-Fi store brings forgotten networks back after a reset; acebuttond's 5 s hold (Amazon's setup mode; its services are stopped) doing
       nothing visible; a Wi-Fi password with non-ASCII characters (refused, as on the page).
 - [x] One name (2026-10-07, asked after the first reset on the Dot 2 kept "Echo Dot 2" from hassmic.conf: no name in
       several places, a reset resets, the name comes from Home Assistant's adoption; default by model). HA's API has no
@@ -3931,3 +3930,253 @@ Run in this order. Each step says what it proves.
       (`music_show`) is never left by itself.  `ui_test.c`: every one of these, the app as home in both modes.
       Open: on a real Show (cronos 192.168.4.246): whether Sendspin's state 0 between tracks is shorter than 5 s there, the
       page after a wake word on a long track, the screen waking for the first track, Kiosk Satellite given back.
+- [x] Duplex over Wyoming for a realtime client (`-D`, 2026-11-12): hermes-talk's Echo surface (`hermes talk echo`) talks
+      to a realtime voice model and cuts replies itself on barge-in, so it needs the microphone through a reply. Without
+      `-D` `core_tts_begin` stops the stream (unchanged); with it the stream stays open, a wake word during SPEAKING is
+      left to the client (no second run), and `mic_gain.hold` also holds while `tts_on`. Why the hold: on radar the
+      first live run looped, the model answering its own reply ("I'll stay quiet" three times in a row, no one
+      speaking): the gain control raised the echo canceller's leftover between words until it read as speech. With the
+      hold and the client's own gate (it zeroes chunks under 0.02 RMS while the Echo plays), radar
+      2026.11.12.014742+8dd9dfe over three sessions: microphone RMS while the Echo spoke median 0.004-0.005, p95
+      0.011-0.032, peaks 0.07-0.33 (barge-in), 94-99 % of chunks gated; no loop since, and barge-in by voice still cuts
+      the reply.  Tests: `tests/fake_talk_duplex.py` (host build, both modes: the stream during a reply, the mid-reply
+      wake word, the run ending at audio-stop; the action button still cuts the reply and a new run begins; `-D` under
+      ESPHome is ignored with a log line).  The front end's listening flag stays set through the reply (the stream
+      never stopped), so its cancellers do not adapt while it plays: what the radar figures above were taken with;
+      `listening(0)` for the reply, as `-w remote` has it, not tried.  Open: ESPHome (`-D` is Wyoming only).
+
+## Cannoli local port — 2026-11-13
+
+See `devices/cannoli/README.md`.
+Cross-build, stock Pryon emulation, ARM Wyoming and host ESPHome tests pass.
+Rooted stock A now boots with headless TWRP B retained. Host-backed UBI writes,
+overlay startup, root USB ADB, Wi-Fi, encrypted Home Assistant adoption, Music
+Assistant pairing and microphone capture under enforcing SELinux are verified.
+Since then (entries below): the light ring, the light sensor, the buttons, the wake
+word and echo cancellation in a room, all checked on our unit (2026-11-15).
+
+- [ ] **Stock LED animations (ledcontroller) on our unit, 2026-11-14.**  ledcontroller now runs (it was stopped at
+      post-fs-data), but its LED HAL never comes up: `aceLedMgr_init: mpcClient_init failed: -2` after 5 s, `openHal
+      ... result is -10006`.  The ring's animations are played by the LED manager in the SCP firmware (`scp_a`, loaded
+      by BL2 = `brhgptlk`, not by the kernel: remoteproc's own `scp.img` request fails on stock too), reached through
+      `/dev/tinysys_ipc_2`.  The SCP does not run here: no `SCP is ready`, every SCP mailbox interrupt at 0 in
+      `/proc/interrupts`, and the IPI ledcontroller sends is never acked (`tinysys_ipc_tx_timeout_timer_callback ...
+      Aborting Head=0 from 5016 msecs ago`).  `scp_a`/`scp_b` are 8349's byte for byte; BL2 is not: this unit keeps
+      its launch BL2 (README "Arrival day" 1a), and 8349's BL2 has more around it (`enable all memory size emimpu`,
+      `amzn_cpld_reset_reg_i2c`, FIT range and integrity checks).  The 8349 SCP is an SRAM part (0x280000) plus a DRAM
+      part (0x48000000, `tinysys_mem_region`); likely the launch BL2's EMI MPU leaves the SCP out of that DRAM and it
+      faults before its ready message.  Not proven (no `/dev/mem`).  The fix would be 8349's `brhgptlk`, which needs
+      the shadowed U-Boot to pass that BL2's added FIT checks (the first unit came on 8349 and boots).
+      Meanwhile: the boot swirl is the kernel's LED trigger `boot-anim` on each LP5036 module, which the HAL would
+      take off; main.sh `leds()` takes it off at the satellite's start.  ledcontroller sets `PUFFIN_START` after its
+      HAL gives up, after the satellite started: netwatch's `alexa_back` stops Alexa and the cloud daemons again.
+
+- [x] **8349's BL2 flashed, the SCP runs, 2026-11-15.**  The fix the entry above points at, applied and verified.
+      `brhgptlk_0..3` are raw MTD partitions (mtd0/2/4/6, 0x40000 each, interleaved with `reserve_0..2`; everything
+      else is the one big `ubi0` MTD) — not UBI volumes, and invisible from the running OS (`/proc/mtd` empty there):
+      TWRP is the only write path.  From TWRP: `dump_image brhgptlk_N` (the four launch copies byte-identical,
+      38ffa88a…, kept at `firmware/cannoli/lk-launch-backup/` for rollback), then `flash_image brhgptlk_N` with the
+      8349 image (86e7da89…), readback-verified per copy before the next.  First boot after: the shadowed U-Boot
+      passes 8349 BL2's FIT checks as on the first unit, and `dmesg` has `mtk-scp 280000.scp:
+      [scp_A_ready_ipi_handler] SCP id: 0` — the first `SCP is ready` on this unit — with tinysys-ipc probed and
+      buffers registered.  `ledctrl -s setup-mode` is accepted with the HAL answering.  Custom LED designs stay
+      unported (the ACS `.animation_bin` format); stock animations are ledcontroller's again.
+
+- [x] **Setup from a phone (Improv) on cannoli, 2026-11-15, after a reset, the HA app on Android.**  Three faults, the
+      BLE side fine throughout (phone connected, credentials taken, the trailing space a phone keyboard adds dropped).
+      1. `wifi.sh lease()` went by `init.svc.dhcpcd-wlan0`, which init sets only at a service's first start: none on
+      an Echo with no network since boot (wifisvc starts dhcpcd once it has one, wifi.sh stops wifisvc), so the switch
+      took it for a model without dhcpcd, never asked for a lease and gave up after 30 s (`noaddress`).  Now started,
+      and the property only tells whether init has the service.  2. `dhcpcd -n wlan0` to a running dhcpcd (init's
+      `-AdLK`) answered `wlan0: waiting for carrier` for good: a control command's arguments replace the daemon's, so
+      link checks were on, against the carrier read at its start (no network) and never again (`-K`).  `dhcpcd -n -K`
+      sent one DISCOVER, the next 64 s later (backoff since its start) and without `-L` took an IPv4LL address.  Now
+      `stop`/`start dhcpcd-wlan0` for every lease: init's arguments, the carrier read anew, backoff from 4 s (and the
+      addresses dropped between: init stops with SIGKILL, the old address stayed beside the new lease, a stale
+      10.99.0.5 first in ifconfig in a test on the Echo, so a switch between networks would never have matched); the join
+      took 9 s (DISCOVER to ACK from 192.168.100.1).  Every model's switch goes this way now; the Dot 2's RENEW in 1 s
+      by `-n` is not measured again with the restart.  3. After a failed switch the error characteristic kept
+      UNABLE_TO_CONNECT until the next command; the HA app said "unable to connect" at once, with no command reaching
+      the Echo, then once more on a switch the Echo finished (provisioned, result sent).  improv.c clears the error on
+      each connection.  That the app reads the error as it connects is inferred from those two, not from its code.
+      Tests: fake_wifi_tools.py has init's service states (`svc`: none until started) and the stale carrier (`-n` from
+      a dhcpcd started off a network gets no lease); fake_improv.py starts with no dhcpcd, reboots while the network
+      is away, and reconnects after the wrong password (error 0, authorized).
+
+- [x] **PowerDaemon crashed every 25 s on cannoli, 2026-11-15.**  SIGSEGV, fault addr 0x30, in its night mode
+      (`libPowerZTSPowerSavingService.so`, ZTSPwrSavingSubservice::work): `TimeServiceClient::create` connects by AIPC
+      to `com.amazon.puffin` (PuffinApp, stopped by the satellite), logs "Failed to connect to uuid com.amazon.puffin",
+      and work() goes on with the null client.  Each life: ~4 s waiting for `lab126.service.shm`, Arcus remote config
+      and Minerva metrics set up, crash ~20 s in.  sntpd running does not help (it was tried).  Only cannoli has
+      PowerDaemon.  Now in cannoli's `CLOUD_SERVICES` (stopped by lockdown.sh); pwrsvcd stays.  Checked with it
+      stopped: hassmic restarted, mic audio and the self test 1.5 s after its start, HA linked again (nothing waits on
+      it, unlike perfmonitord for the mixer).  Lost: Amazon's night mode power saving.
+
+- [ ] **Cannoli port review on the device, 2026-11-15** (the log, logcat, sysfs; nothing needing hands on the Echo).
+      Fixed: the mute latch's input is `gpio-privacy-state` (SW_MUTE_DEVICE, event1; the button `gpio-privacy-button`,
+      KEY_MUTE, event2), not `gpio-privacy`, so only the state file's once-a-second look saw the button;
+      `enable-gpio-toggle-duration` is 0x32 = 50 ms in the device tree (athena's 1000), no `privacy_button` needed.
+      The thermal zone is `soc_max` (no `mtktscpu` on 5.4; zones soc_max, cpu_little0, cpu_virtual, wifi_temp,
+      amp_temp, ap_ntc0..4; display_virtual and cpufilter_virtual unreadable).  The attestation module's idme noise
+      comes without its eMMC line here (NAND), two lines, which the log filter now drops too.  Benign: `micAsr rate=-1`
+      (as on donut), mesh_btal/halo_regiond/ace_net_mgr/MinervaShim errors (the cloud daemons stopped), the thermal
+      HAL failing on the two virtual zones.
+      Done since (2026-11-15, same day):
+      - light sensor: the ams TSL2540 (`iio:device0` of i2c 4-0039, `in_intensity0_raw` visible, `in_intensity1_raw`
+        IR) as stock's `libacehal_ambientLightSensor.so` makes lux (calc 0x4318, getLux 0x4430): a row of 8
+        coefficients picked by idme alsparams' `capcolor` (4 here), two linear forms of the channels blended by
+        smootherstep on IR/visible, over real gain (calibscale 256 -> 128) x integration time in ms; then a line through
+        the unit's factory points in idme `alscal` (counts at 20 and 400 lx, hex, at alsparams' gain and time).  No
+        alscal: stock answers 0 for good, here no reading.  Stock's `alsctrl` reads idme only with -P/-C; without them
+        it takes row 0 and no calibration (its 278 for a room where the HAL says 53).  Checked on the Echo, as puffin:
+        2462/331 -> 66.2 lx, alsctrl with idme's data 66; lux.h, `tsl2540:` in `board.light_sensor`, lux_test.c.
+      - speaker gain: `Speaker Volume A` of the MAX98396 (i2c 3-0038), the kernel's TLV read on the Echo: DB_RANGE
+        0..17, DB_SCALE 400/100 = +4..+21 dB, 1 dB a step; vendor mixer_paths.xml sets 10 (+14 dB); `Digital Volume
+        A` 126 = 0 dB.  No stock library names the control (libasp and libaudioCtrl only print a volume): nothing moves
+        it with the volume.  Offered up to 16 (+6 dB), cronos' rule, until someone has listened at full volume.
+      - Wi-Fi power save: the driver's default is power save (`iwpriv wlan0 driver get_power_mode`: enforce 3 = none
+        enforced, system mode 2); stock's wifisvc sends `DRIVER ENFORCE_POWER_MODE 0` (CAM) while pwrsvcd holds a
+        perflock and 3 after (libacehal_network_all.so applyPowerSaveMode), and with wifisvc stopped every request
+        failed (-8).  100 UDP round trips from the LAN (a datagram echo on the Echo): power save median 4 ms, p90 26,
+        p99 115; CAM 3, 6, 14; pings 1.1 s apart max 23.6 / 5.6 ms.  Broadcasts were not measurable from the PC (another
+        subnet); in power save they wait for the DTIM beacon.  device.conf `WIFI_AWAKE`, sent by netwatch whenever the
+        driver does not report it; it held over a reassociation.  Other models' drivers not looked at (biscuit: CAM
+        from boot, 2026-10).
+      Checked by hand on the Echo (2026-11-15): the buttons (action, volume up/down: KEY_HELP/VOLUMEUP/VOLUMEDOWN on
+      `gpio-keys`; mute), the wake word and echo cancellation in a room, the light ring (HA's light and effects, the
+      turned listening ring, designs from the settings page).
+      Open:
+      - the volume curve (the Dot 2's stands in): needs a measurement with a microphone beside it; ADC TLV320ADC5140
+        (4-004c).
+      - Bluetooth audio both ways.
+      - Wi-Fi motion: done (entry below), a walk past it and a night still to watch.
+
+- [x] **Cannoli's light ring: our animations and Home Assistant's light, 2026-11-15.**  The format (a background
+      agent from libace_ledmgr.so, libacehal_led_interface.so, ledcontroller and the SCP image; every stock file
+      round-tripped): `<i>.<name>.animation_bin`, big-endian "animagic" "totl" <frames>, per frame an optional "loop"
+      and "fram" <ms> + 12 x RGB, donut's text byte for byte (25 of stock's identical to donut's); index files
+      acs_animation_list/count/name_list (the SCP's slot i = line i; names = what is playable), acs_auto_stop_conf (1
+      exactly for stock's whose loop is black, all 115) and layer_config_common.txt (the JSON flattened, byte for
+      byte); all sent once at ledcontroller's start (HAL `led_initAnimation`, AMF over /dev/tinysys_ipc_2).
+      Limits, on the Echo (a test set swapped in, ledcontroller restarted, "openHal ... result is 0" or -10006):
+      hassmic's donut-like set (772 animations, ~530 kB on the SCP) refused; 400 tiny ones loaded, 440 not, so a
+      count limit near 400 (the 800 kB heap aside); a refused init leaves the LED manager refusing stock's set too until
+      a reboot.  Way round: `aceLedMgr_updateAnimationData(name, data)` replaces a loaded animation's frames, any length,
+      while it plays (seen: a 1-frame animation became a 24-frame green pulse in place), but only from the process
+      holding the session: ledcontroller.  So `libhmled.so` (src/ledshim/) preloaded into it, serving
+      "@hassmic-led" ("<name>\0<data>", the daemon's uid, hassmic_ names, frames checked).  LD_PRELOAD was ignored
+      for init's ledcontroller: its file capability (CAP_WAKE_ALARM, CapEff 0x800000000) makes the exec secure; root
+      runs a copy without it (main.sh ledc_start, its libraries ask for no alarm timers, the HAL came up and played as
+      stock's).  Our set: the listening ring turned 12 ways, the Assistant's volume steps, designs, and two light slots
+      (hassmic_light_a/b, auto-stop 0), 183 animations with stock's, ~43 kB; the light drawn as one animation (effect,
+      fill, LED by LED) into the slot not shown, then shown, the old one unset.  On the Echo: shim guards (root: no
+      answer; a stock name: -1001; ours: 0), and Home Assistant's light, effects, fill and the wake word's hand-off
+      checked by eye.  tests/fake_ha_ring_acs.py.  Designs from the settings page checked on the Echo too
+      (2026-11-15).
+
+- [x] **Wi-Fi motion on cannoli, 2026-11-15.**  The driver, `wlan_mt76x3_sdio.ko` (MT7653; MediaTek's gen4m code with
+      a mac80211 side for eero's mesh), has athena's RX path byte for byte where it counts: `nicRxProcessDataPacket` calls
+      `nicRxFillRFB` once (+0xa0), the RFB's group-valid byte at +16 and group 3 at +32, `nicRxGetRcpiValueFromRxv` reads
+      RX vector word 3.  So `hassmic_rcpi4m.c` with its 32-bit defaults; four things in the way, each found on the Echo:
+      1. The kernel (5.4.86, 32-bit ARM, Linaro GCC 4.9; Android's common kernel) exports no `kallsyms_lookup_name`, has
+      no `patch_text` (no JUMP_LABEL, KPROBES, KGDB) and read-only module text (STRICT_MODULE_RWX), `set_memory_rw` not
+      exported.  `HM_DRIVER_SYMS` (device.mk `KCFLAGS`): the two functions from the driver's own symbol table
+      (`find_module`, its `mod_kallsyms`, all read through `probe_kernel_read`), each taken only if `sprint_symbol` names
+      it at +0; the `bl` written through a `vmap`'d alias of its page under `stop_machine`, the driver's text left
+      read-only.  2. Its `struct module` is Android's: `init` at 0xfc in every stock module (14 of them), kernel.org's
+      with the same config at 0xd8; name (12), exit (0x208) and size (0x240) agree, the 36 bytes come before `init`
+      where ours has padding before the cacheline-aligned `core_layout`.  `tools/kmod-init.py` moves the one relocation
+      after the build (device.mk `KMOD_INIT`).  The other structs the module hands the kernel compare equal with stock
+      modules' (`file_operations`' fields, `kernel_param`'s 20 bytes).  3. CONFIG_MODVERSIONS: `tools/kcrc.py` reads
+      the CRCs out of boot.img (`__ksymtab`/`_gpl` found by their shape, 12-byte entries with 5.4's namespace, each run's
+      `__kcrctab` where the 745 CRCs the stock modules carry all sit at their index; 4740 + 4984 exports) into
+      `devices/cannoli/Module.symvers`; on athena's boot image it gives that hand-made file's CRCs exactly.
+      4. RCPI0 is 255 in every frame: of the two antennas the second one receives (a probe on `nicRxProcessRXV`: word 3
+      `0xffff66ff`, RCPI1 101-108 over 20 frames).  The driver itself takes RCPI1 then (word 0 bits 22-23 = 0), and so
+      does the module now; the other models' RCPI1 is 255, nothing changes for them.
+      Config: boot.img's IKCONFIG, stack protector off (arm-eabi-4.8), the system keyring off (`extract-cert` does not
+      link against an OpenSSL without ENGINE; nothing of it reaches a module), LOCALVERSION `-ab0013323246848`: the
+      vermagic is stock's.  On the Echo: loaded by hand, then by a push update with `wifi_motion=on`: unicast frames
+      RCPI 68-72 (`KIND` 0x14003-0x14006), broadcasts 72 (0x100b); hassmic said
+      "available (through the kernel module)", then "still", then "moving".  Not yet: a walk past it on purpose, a night.
+
+- [x] **Cannoli's prepare.sh comes with updates, 2026-11-15.**  init runs `/system/hassmic/prepare.sh` at
+      post-fs-data, before it mounts the overlay, so it is the SquashFS copy, and updates put theirs into the overlay's
+      upper folder, where init never runs it.  Our unit had the first one flashed (md5 2de1e837..., `set -e`, read
+      through a bind mount of `/`) and was reflashed with this one the same day.  Writing
+      the SquashFS from the running OS (`system_a` = `/dev/ubi0_9`, the mounted root; no dm-verity) was not tried: a
+      failed write leaves slot A unbootable, and the image needs the offline builder.  Made for the Echos flashed from
+      now on (ours is the only one and gets reflashed): the flashed copy is a starter.  It runs the update's copy
+      straight from `/data/hassmic-system/upper/hassmic/prepare.sh` (written by sysinstall.sh from a verified bundle at
+      promotion) with `steps`, before the overlay is up, under `timeout -k 5 90` (init waits for it), so every step is
+      updatable, the mount too (made anew each boot by the update's copy).  Taken only when it can be trusted:
+      `/data/hassmic-system` a real folder, root's, 0700 (`ls -ldn`; /data is system's 0771, so a system process could
+      have put another there), no link on the way, the file root's and writable by root only, the line
+      `# hassmic-prepare-api 1`, `sh -n` clean, and toybox's timeout there (else nothing would bound it).  Its own steps
+      are the fallback: no update's copy, no `hassmic.conf` (opted out: the update's copy is not run, the overlay still
+      mounted as always), not trusted, exit status not 0 (`try` counts every failed step), or no overlay on `/system`
+      after it.  `hassmic.storage.ready` is set whatever happened (the first copy, under `set -e`, left it unset on any
+      failure: no firewall service, no satellite, USB adb only).  lockdown.sh runs under `timeout -k 5 60` in the steps.
+      The interface every later version keeps: the api line, `steps` doing the steps only (definitions only above the
+      dispatch), exit 0 only when all did their job, the overlay mounted; steps that can run twice (the fallback runs
+      after a copy that failed half way).  Limits: the fallback's lockdown.sh is the update's (the SquashFS copy lies
+      under the overlay once it is mounted; as the firewall service's); a time limit kills only the shell it started
+      (measured: a background child of it lived on), so a leftover lockdown may run beside the fallback's until the
+      firewall service loads the chain anew; an update's steps first run at the boot after its promotion (the self
+      test is hassmic's).  On the Echo with stand-ins (paths, lockdown.sh, setprop and
+      the mount through a file replaced): no update's copy, a good one (its steps alone), one that does not mount, one
+      with a failing step (logged with its real status), a syntax error, a hang ignoring TERM (killed by -k), no api
+      line, a link, the folder 0755, the file group-writable, no timeout, no `hassmic.conf` (the update's ignored, no
+      lockdown), a first boot (`hassmic.conf` and the mark made): each reached the property, the fallback where it
+      should.  The real file run by hand on the Echo as the starter: the upper
+      folder's copy ran, lockdown applied, no fallback.  Reflashed (the SquashFS's prepare.sh and /init.hassmic.rc
+      byte for byte HEAD's, read through a bind mount), three real boots: the update's copy with a line of its own
+      added (the line at boot+18.3: init's run took it, timeout found on init's PATH); one whose mount is gone (its
+      line, then "left /system without the overlay", the flashed steps mounted it, storage ready, the firewall
+      service and hassmic running); the real copy back (clean).  A first attempt
+      for the unit as it is (lockdown.sh, which the flashed copy calls after the mount, running the overlay's
+      prepare.sh) was dropped for this.  `/init.hassmic.rc` stays as flashed: Android 7.1.2's init (SDK 25) reads
+      every rc once from the SquashFS before `/data` is mounted and has nothing to load one later (no
+      `perform_apex_config`, `ctl.apex_load`).  It only runs prepare.sh and starts `boot.sh firewall` / `boot.sh
+      satellite` as root in su, all updatable: another user or domain is `runas`, another trigger a script waiting on
+      the property, its `on boot` adb properties can be set again later.  A reflash only when those entry points
+      change.
+
+- [x] **Cannoli's rollback after a bad promotion, 2026-11-15.**  Every promotion (`sysinstall.sh factory`) overwrites
+      the factory copy in the overlay, and boot.sh's fall back (`ota/tries`) only covers an update that never ran a
+      minute (main.sh puts tries to 0 once hassmic ran 60 s, healthy or not): one that runs and still cuts the Echo off
+      (lockdown.sh, boot.sh or main.sh closing the network) left only the USB cable, i.e. opening the Echo.  Now:
+      device.conf `ROLLBACK=/data/hassmic-system`; main.sh `reach_check` (netwatch, every 10 s until it sees one): an
+      ESTABLISHED connection in /proc/net/tcp on 26053, 16700, 28928, 28929 or 28931 (listeners are IPv4 only) from an
+      address other than 127.0.0.1 puts `boots` to 0 and the running version into `reached` (last 8); first in
+      netwatch's round.  A boot before set-up (no state/adopted) or without an address in its first 5 minutes
+      (watched a minute at least: a satellite restarted late in a boot excused it at once, seen on the Echo) is excused
+      (`boots` one down), only for a version in `reached` (an update that loses Wi-Fi or the address itself counts),
+      three in a row at most (`excused`, cleared when reached: one reached once that loses the network later steps
+      back after them), and only by a working main.sh.  `sysinstall.sh factory` keeps the copy it replaces as `previous` (cp -a of
+      /system/hassmic without the staged .new files; previous.new synced, the old to previous.old, the new into place,
+      a cut between the renames finished by the starter) only when its version is in `reached`.  The
+      flashed prepare.sh counts boots (init's run only: no overlay yet, /system is the SquashFS) and with `boots` >= 2
+      takes one step: (1) `ota/current` not the factory copy's version: dropped; (2) `previous` there: the factory
+      copy to `rolled-back`, previous (relabelled system_file first) in its place; (3) else the factory copy aside, the
+      SquashFS's shows through; each version taken out into `ota/refused` (main.sh rejects it as a bundle), the refusal
+      and `ota/current` before the moves, a swap a power cut left half done finished at the next start, `boots` last.
+      Costs: everyone away from the Echo for two counted boots steps back too and refuses a good version (e.g. a
+      fresh update, not reached yet, and two power cuts in a row with a router slower than 5 minutes; a newer one
+      installs; refused is by the exact version string); `reached` is one connection in a boot, not proof for the next;
+      step 3's SquashFS copy runs on the state/ and LED files newer versions left (checked only with a same-day
+      flash); the moves and syncs of a step run outside the time limits (local renames, a 5 MB relabel).  On the Echo, stand-ins (paths, the
+      SquashFS copy and the mount through files): a walk down over nine boots (unpromoted v3 dropped, v2 to v1, v1 to
+      the flashed copy, then "nothing left"), a swap cut short finished, a promoted copy with no previous to the flashed
+      one, the overlay mounted already (nothing), a garbage count, opted out; reach_check's excuses and connections
+      (not set up, no address at 100 s and 400 s, nobody, HA connected, loopback, listening only, an outgoing one).  The
+      real main.sh/sysinstall.sh by pushes: "reached from the network, boot count 0" within seconds of each restart, the
+      first promotion keeping nothing (the copy it replaced was never reached), the second keeping the first (4.8 MB).
+      Reflashed with 0d8c74a (prepare.sh and /init.hassmic.rc byte for byte), USB cable off, and on real boots over
+      Wi-Fi: `boots` set to 2, reboot: "rolled back from 145547 to 145133" (the restored copy from /system/hassmic,
+      labelled system_file, ota/current gone, 145547 refused, the firewall check clean, reached at boot+63); again with
+      no previous: "145133 moved aside, the flashed copy runs" ("factory from /system/hassmic", Home Assistant at
+      boot+63, reached, firewall clean); a push of a newer build brought the newest back.  The SquashFS copy the
+      builder made then had no VERSION, libhmled.so, hassmic_rcpi4m.ko or latency (an update's files): on it the light
+      ring has no Home Assistant light, no Wi-Fi motion, and the logs say "factory".  The builder's `--port` takes a
+      bundle's files whole now, VERSION and update.pub included; this unit keeps the old copy until a reflash.

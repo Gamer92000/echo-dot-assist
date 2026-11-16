@@ -30,7 +30,9 @@ typedef void *MixerHandle;
 #define MIXER_PLAY_ALARM   "Alarm"
 #define MIXER_PLAY_VOIP    "Voip"
 
-/* MixerOpenRec(type) == MixerOpenRecCh(type, 1).  Block size is 1600 bytes per channel. */
+/* MixerOpenRec(type) == MixerOpenRecCh(type, 1). Ring geometry depends on the
+ * firmware/stream: Cannoli 8349 micAsr requests 125 blocks of 1024 bytes.
+ * Query MixerGetBufSize rather than assuming a fixed capture block size. */
 MixerHandle MixerOpenRec(const char *type);
 MixerHandle MixerOpenRecCh(const char *type, unsigned numCh);
 

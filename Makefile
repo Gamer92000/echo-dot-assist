@@ -38,6 +38,20 @@ UPDATE_REPO := $(strip $(UPDATE_REPO))
 ifneq ($(words $(UPDATE_REPO))$(findstring ",$(UPDATE_REPO))$(findstring ',$(UPDATE_REPO)),1)
 $(error UPDATE_REPO "$(UPDATE_REPO)": owner/name, no quotes or spaces (keys/release.conf, secrets/fork.conf))
 endif
+ifeq ($(DEVICE),cannoli)
+# BUILD from the sources themselves (version.py), not git describe: two builds of one dirty tree must differ, since
+# factory promotion compares the bundle's VERSION (VERSION+BUILD).  The version and build time stay the commit's, as for
+# every model: update.c reports VERSION to Home Assistant, which compares it with the releases (a fixed one had every
+# release show as an update, installed or not).  Fixed only where git gives none (a source archive).
+BUILD := $(shell python3 devices/cannoli/version.py)
+ifeq ($(strip $(BUILD)),)
+$(error cannot compute Cannoli source identity)
+endif
+ifeq ($(VERSION),0)
+VERSION := 2026.11.13.000000
+BUILD_TIME := Nov 13 2026 00:00:00
+endif
+endif
 DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' $(if $(RELEASE),-DRELEASE)
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
@@ -52,7 +66,7 @@ build/.device: FORCE
 FORCE:
 
 # A model without the Amazon mixer or Pryon has no use for the tools built on them: they drop out with the library.
-BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) \
+BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) $(if $(LEDSHIM),$(OUT)/libhmled.so) \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
        $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
@@ -106,13 +120,16 @@ $(OUT)/ktree/.config: $(KFRAG)
 	$(KMAKE) -C $(KSRC) O=$(CURDIR)/$(OUT)/ktree olddefconfig modules_prepare 2>&1 | grep -v -e 'override: reassigning' -e 'changes choice state' -e '^$$' || true
 endif
 
-# Module.symvers: the kernel's own CRCs where it has CONFIG_MODVERSIONS (athena), for modpost; copied at every build of
-# the module, so a changed list reaches it
-$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config $(wildcard devices/$(DEVICE)/Module.symvers)
+# Module.symvers: the kernel's own CRCs where it has CONFIG_MODVERSIONS (athena, cannoli: tools/kcrc.py), for modpost;
+# copied at every build of the module, so a changed list reaches it.  KMOD_INIT: where a kernel whose struct module is
+# not kernel.org's reads the init pointer (cannoli: Android's common kernel), tools/kmod-init.py
+$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config $(wildcard devices/$(DEVICE)/Module.symvers) \
+                   $(if $(KMOD_INIT),tools/kmod-init.py)
 	@mkdir -p $(OUT)/kmod
 	cp src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/kmod/
 	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
 	$(KMAKE) -C $(OUT)/ktree M=$(CURDIR)/$(OUT)/kmod HM_KMOD=$(KMOD) modules 2>&1 | grep -v -e 'Module.symvers' -e 'no dependencies and modversions' || true
+	$(if $(KMOD_INIT),python3 tools/kmod-init.py $(OUT)/kmod/$(KMOD).ko $(KMOD_INIT))
 	cp $(OUT)/kmod/$(KMOD).ko $@
 
 ifeq ($(STUBS),1)
@@ -158,6 +175,11 @@ $(OUT)/runas: src/tools/runas.c
 # libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
 UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/lang.c src/ui/gfx.c
 UI := src/ui/android.c src/ui/touch.c $(UI_SCENE)
+# the Echo Dot 5's ledcontroller loads it (device.mk LEDSHIM, src/ledshim/ledshim.c says why)
+$(OUT)/libhmled.so: src/ledshim/ledshim.c build/.build-id
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -fPIC -shared $< -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmled.so -llog -ldl
+
 $(OUT)/libhmui.so: $(UI) src/ui/scene.h src/ui/ui.h src/ui/gfx.h build/.build-id
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -fPIC -shared -Isrc/ui $(UI) -o $@ -fuse-ld=lld -Wl,--no-undefined -Wl,-soname,libhmui.so -landroid -ljnigraphics -lm

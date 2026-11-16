@@ -2,7 +2,84 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-15 — Cannoli: Wi-Fi motion
+
+- **Wi-Fi motion (experimental) on the Echo Dot 5**, as on the other Echos: switch it on on the settings page, and
+  Home Assistant gets a motion sensor from how strongly the Echo hears your router.
+- **The Echo Dot 5's first boot step comes with updates**, not only with a reflashed firmware (and its USB cable),
+  once the Echo has firmware built from this version.  If the updated step fails, hangs or does not set up the system
+  folder, the Echo does the one it was flashed with as well and starts as usual.
+- **An Echo Dot 5 that an update cut off from the network steps back to an earlier version**: when nobody on the
+  network (Home Assistant, the settings page, Music Assistant) reaches it on two boots in a row, the next start runs
+  an earlier version that worked (in the end the one it was flashed with), and the version taken out is not
+  installed again.  Pull the plug a few times instead of opening the Echo.  Boots without a network or before set-up
+  do not count once a version has been reached (three in a row at most); Home Assistant down for two restarts in a
+  row does, and so do two power cuts in a row before a new version was ever reached.
+
+## 2026-11-15 — Cannoli: the light ring in Home Assistant
+
+- **Echo Dot 5: "Light ring" in Home Assistant**, with its effects, the fill and LED by LED, and the listening ring
+  turned towards whoever speaks, as on the other Dots. Its ring holds only a few hundred animations, so the light's
+  colours are not made beforehand: the Echo draws each one when it changes into an animation the ring already has.
+
+## 2026-11-15 — Cannoli: light sensor, speaker gain, the mute button at once
+
+- **Amazon's PowerDaemon is stopped with the other cloud daemons on Cannoli.** Its night mode needs the Alexa client,
+  which the satellite replaces; without it the daemon crashed and was restarted every 25 seconds, for good.
+- **The microphone button reaches Home Assistant at once on Cannoli**, not up to a second later: the satellite looked
+  for the button's input device under a name it does not have.
+- **The settings page's diagnostics show Cannoli's chip temperature**: they looked for a sensor this model does not
+  have.
+- **Cannoli's light sensor works**: Illuminance in Home Assistant (with the Light sensor feature on), in lux as
+  Amazon's own software computes it, with each unit's factory calibration.
+- **Speaker gain on Cannoli**: up to +6 dB over stock on the settings page, for an Echo Dot 5 too quiet at full volume.
+- **Cannoli keeps its Wi-Fi awake** instead of in power save: answers on the network came up to 115 ms late in power
+  save, 14 ms at most awake, and messages to every Echo at once (wake word arbitration) wait longest of all.
+
+## 2026-11-15 — Setup from a phone gets an address
+
+- **Wi-Fi from the phone's setup (Improv) works on an Echo that has had no network since it booted.** The Echo
+  joined the network but never got an address, and the setup failed after 30 s with "no address". Its DHCP client
+  either had never been started (the switch took that for a model without one) or had started with no network and,
+  asked to try again, kept waiting for a link it never looked at again. It is now restarted for every switch, as at
+  boot. Seen on Cannoli after a reset; the settings page's network switch had the same weakness.
+- **After a failed try, the phone's next one starts clean.** The Echo kept the failure on show for the next
+  connection, and Home Assistant's app, which can read it as it connects, said "unable to connect" before
+  sending anything.
+
+## 2026-11-15 — Cannoli's light ring
+
+- **The stock ring animations are back on Cannoli, and the boot swirl ends.** The swirl is the kernel's `boot-anim`
+  LED trigger, which stock's LED HAL takes off — the HAL answers only when the SCP co-processor runs, and the
+  2022 launch BL2 of a factory-fresh unit never brings the 8349 SCP up. Flashing 8349's `brhgptlk` (raw MTD,
+  from TWRP, all four copies readback-verified) starts the SCP and the HAL with it; the launch BL2 is kept for
+  rollback. Until then, and on units that keep the launch BL2, the satellite's start takes the trigger off and
+  the ring stays dark instead of lying about booting. `ledctrl` calls in `alexa-off.sh` are bounded now: with
+  ledcontroller not up they waited on its socket for good, and with them the satellite's start — hassmic never
+  came up on a boot where ledcontroller had failed.
+
+## 2026-11-13 — local Cannoli port
+
+- Add an experimental Echo Dot 5 target for NS6575/8349, using its mixer and Pryon.
+  Rooted stock A boots with TWRP B retained; Wi-Fi, encrypted Home Assistant
+  adoption, Music Assistant pairing and enforcing microphone capture are verified.
+  The matching UBI firmware builder lives in a repository of its own,
+  cannoli-os-builder (devices/cannoli/README.md).
+- Reject the ext4 system installer for Cannoli and retain its compiled stock LED
+  animations while the ACS custom-animation format is being investigated.
+- Keep Cannoli's immutable init configuration during signed-update promotion;
+  refuse incompatible boot changes and include its overlay preparation script.
+- Start Cannoli from storage/mixer readiness instead of the Alexa flag that
+  lockdown clears. Honor stock-online mode during early boot and preserve DHCP.
+
 ## 2026-11-13
+
+- **Duplex for a realtime agent (`-D`, Wyoming).** With `-D` in `ARGS` the microphone keeps streaming while a reply
+  plays, and a wake word during the reply is left to the client: for a client that cuts replies itself, such as
+  hermes-talk's Echo surface (`hermes talk echo`), which talks with a realtime voice model straight from the Echo.
+  Amazon's echo canceller keeps the reply out of the microphone, and the microphone gain holds while the reply plays
+  so it does not turn the canceller's leftover up into something the client hears as speech. The action button still
+  cuts a reply. `-D` is ignored with the ESPHome connection. Without `-D` nothing changes. Thanks to patrickhaahr.
 
 - **Bluetooth proxy: each request to a connected device took about 25 ms instead of 100 in a test on an Echo Dot 2
   (issue #167).** Devices that Home Assistant drives through the Echo, such as IKEA's Idasen desk, ask for something

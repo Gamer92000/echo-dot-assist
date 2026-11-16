@@ -17,6 +17,7 @@
 set -e
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load adb
+[ "$INSTALL" != cannoli-ubi ] || die "Cannoli uses a UBI/SquashFS firmware ZIP: see devices/cannoli/README.md. This ext4 installer cannot install or uninstall it."
 . scripts/lib/build.sh
 [ "$INSTALL" = boot ] && exec sh scripts/install-boot.sh "$@"         # checkers: no A/B, the policy in boot.img
 case "$INSTALL" in twrp-ab|running) ;; *) die "$DEVICE installs with INSTALL=$INSTALL, which this script does not do ($DDIR/README.md)";; esac
@@ -47,18 +48,21 @@ if [ "$1" != --uninstall ]; then
         t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.
         # The model's rules, then hassmic's own domain (scripts/system/sepolicy-hassmic.rules) with what other domains
-        # may do to su copied over to it, from the policy as it is by then (sepolicy-mirror.sh)
+        # may do to su copied over to it, from the policy as it is by then (sepolicy-mirror.sh).  magiskpolicy exits 0
+        # when a rule names a type the policy does not have and silently skips it, so both applies keep their output
+        # (mp.err) and any "does not exist" in it fails the patch.
         adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null && adb push $DDIR/sepolicy.rules scripts/system/sepolicy-hassmic.rules \
             scripts/system/sepolicy-mirror.sh /data/local/tmp/ >/dev/null ||
             die "could not copy $SEPOLICY_TOOL and the policy rules to the Echo, nothing changed"
-        t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.mid sepolicy.new
-           ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.mid >/dev/null 2>&1 &&
+        t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.mid sepolicy.new mp.err
+           ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.mid >>mp.err 2>&1 &&
            ./mp --load sepolicy.mid --print-rules > sepolicy.mid.txt 2>/dev/null && sh sepolicy-mirror.sh sepolicy.mid.txt > sepolicy-mirror.rules &&
-           ./mp --load sepolicy.mid --apply sepolicy-hassmic.rules --apply sepolicy-mirror.rules --save sepolicy.new >/dev/null 2>&1
-           [ -s sepolicy.new ] && ./mp --load sepolicy.new --print-rules > sepolicy.new.txt 2>/dev/null &&
+           ./mp --load sepolicy.mid --apply sepolicy-hassmic.rules --apply sepolicy-mirror.rules --save sepolicy.new >>mp.err 2>&1 &&
+           [ -s sepolicy.new ] && ! grep -q 'does not exist' mp.err &&
+           ./mp --load sepolicy.new --print-rules > sepolicy.new.txt 2>/dev/null &&
            grep -q '^allow init su process' sepolicy.new.txt && grep -q '^type hassmic ' sepolicy.new.txt &&
            ! grep -q '^allow hassmic [^ ]* property_service' sepolicy.new.txt && ! grep -qx 'permissive hassmic' sepolicy.new.txt" ||
-            { echo "sepolicy patch failed, nothing changed"; exit 1; }
+            { echo "sepolicy patch failed, nothing changed"; t "cat mp.err 2>/dev/null"; exit 1; }
         adb pull /data/local/tmp/sepolicy.new $OUT/sepolicy.hassmic >/dev/null
         md5sum device-logs/backup/sepolicy.boot-root > $OUT/sepolicy.hassmic.base
     fi

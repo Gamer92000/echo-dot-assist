@@ -70,6 +70,9 @@ void core_reset(const char *why);
 /* Restart the whole Echo, as a power cycle does: root reboots on state/reboot (main.sh).  why: for the log.  Any thread */
 void core_reboot(const char *why);
 extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
+/* -D: the microphone keeps streaming while a reply plays, for a client with its own barge-in (a realtime agent);
+ * the echo canceller keeps the reply out of it */
+extern int core_duplex;
 
 /* lock held */
 enum state core_state(void);

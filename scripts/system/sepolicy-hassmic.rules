@@ -5,6 +5,8 @@
 # (Android 7 and later), and the property socket is 0666: hassmic, as puffin, set service.adb.tcp.port on a Dot 2
 # (2026-11-12, init: "avc: denied { set } ... uid=5100 ... permissive=1"), so it could have opened adb, started or
 # stopped any service of init's (ctl.*) and set what root's scripts read (hassmic.adb.until) (issue #130).
+# The only declaration on every model but cannoli, whose sepolicy.rules runs first and
+# declares it for rules of its own; the repeat there only logs "Type hassmic already exists".
 # This domain is enforcing and may do everything su may, except:
 type hassmic domain
 allow hassmic * * *
