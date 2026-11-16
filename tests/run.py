@@ -62,6 +62,8 @@ TESTS = [
     ("ring", [PY, "tests/fake_ha_ring.py"]),
     ("ring-acs", [PY, "tests/fake_ha_ring_acs.py"]),
     ("ring-designs", [PY, "tests/fake_web_ring.py"]),
+    ("ring-live", [PY, "tests/fake_ha_ring_live.py"]),
+    ("ring-live-acs", [PY, "tests/fake_ha_ring_live_acs.py"]),
     ("artifacts", [PY, "tests/fake_web_artifacts.py"]),
     ("wyoming", [PY, "tests/fake_ha.py"]),
     ("talk-duplex", [PY, "tests/fake_talk_duplex.py"]),

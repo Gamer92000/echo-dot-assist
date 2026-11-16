@@ -49,7 +49,8 @@ day 1b), setup from a phone (Improv), push updates and adb over Wi-Fi from a col
 sensor against stock's own lux, speaker gain's control (+4..+21 dB, stock +14), the Wi-Fi kept out of power save,
 the action and volume buttons, the wake word and echo cancellation in a room, Wi-Fi motion (its kernel module).
 The ring's own animations (Home Assistant's light, the turned listening ring, designs from the settings page) in its
-binary format, the light drawn through `libhmled.so` in ledcontroller (PLAN.md).  Still open (PLAN.md): Bluetooth
+binary format, the light drawn through `libhmled.so` in ledcontroller, and "Light ring live" frame by frame through
+the same (PLAN.md).  Still open (PLAN.md): Bluetooth
 audio, the volume curve (the Dot 2's stands in), and guided
 setup (`scripts/setup.sh` support: no `devices/cannoli/setup.sh` yet — the from-stock guide below is the manual
 flow).  Rooted stock boots keep upstream automatic updates disabled (the

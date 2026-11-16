@@ -34,7 +34,9 @@ def tones(x):
 async def run(removal, noise, **extra):
     state = tempfile.mkdtemp()
     with open(os.path.join(state, "config"), "w") as f: f.write(f"wake_sound_removal={'on' if removal else 'off'}\n")
-    log = open(os.path.join(state, "log"), "w+")
+    # the log appending (O_APPEND), read through another open file: with one for both, the seek(0) below moved the
+    # next line of hassmic's log reader (a process of its own, still writing as hassmic ends) over the file's start
+    logpath = os.path.join(state, "log"); open(logpath, "w").close(); log = open(logpath, "a")
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=noise, HASSMIC_FAKE_ECHO="90:-20",
                HASSMIC_PLAY=os.path.join(state, "play.raw"), HASSMIC_ARB_ADDR="127.255.255.255",
                HASSMIC_MODELS=os.path.join(state, "models"), HASSMIC_MDNS_FILE=os.path.join(state, "mdns"))
@@ -62,9 +64,9 @@ async def run(removal, noise, **extra):
         await cli.disconnect()
     finally:
         proc.terminate(); proc.wait(5)
-    log.seek(0)
+    log.close()
     lead = bytes(mic[:LEAD_IN]); check(len(lead) == LEAD_IN and not any(lead), "the request opens with 800 ms of silence")
-    return np.frombuffer(bytes(mic[LEAD_IN:got * 2]), "<i2").astype(float), live, log.read()
+    return np.frombuffer(bytes(mic[LEAD_IN:got * 2]), "<i2").astype(float), live, open(logpath).read()
 
 
 async def main():

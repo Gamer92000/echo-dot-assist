@@ -21,5 +21,5 @@
 int  ledq_start(const char *ledctrl, const char *fake, void (*child)(void), int timeout_ms);
 void ledq_run(const char *op, const char *pattern);         /* ledctrl <op> <pattern> */
 void ledq_args(int n, const char *const args[]);            /* ledctrl <args...>, n <= LEDQ_ARGS */
-int  ledq_wait(int ms);                 /* the tests: 0 once all queued calls ran, -1 after ms */
+int  ledq_wait(int ms);                 /* 0 once all queued calls ran, -1 after ms (tests; the end of main()) */
 #endif

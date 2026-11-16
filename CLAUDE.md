@@ -115,8 +115,13 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_ring_live.py   # the light ring live: LEDs, frames, animations, designs into a stand-in
+                                             # frame file (HASSMIC_FAKE_FRAME), the Echo's own first, "Light ring" vs live
 .venv/bin/python tests/fake_ha_ring_acs.py    # the same on binary animations (the Echo Dot 5): the set with stock's
                                              # index files, the light drawn into its two slots through a stand-in shim
+                                             # (one client at a time: hassmic keeps one connection), drawn again after ledcontroller
+.venv/bin/python tests/fake_ha_ring_live_acs.py # the light ring live there: frames into hassmic_live through the shim,
+                                             # set once, unset for the Echo's own and mute, set again after ledcontroller
 .venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
                                              # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -287,7 +292,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages, API 1.15's device
   capabilities with Sendspin's client id and the pairing token (request and text sensor: keyed link only), so Music
   Assistant pairs through HA; its protobuf in `pb.h`,
-  header-only for `tests/unit/pb_test.c` under UBSan) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
+  header-only for `tests/unit/pb_test.c` under UBSan; a message that did not fit its buffer (`over`, carried out of
+  inner messages by `pb_msg`) is never sent: HA drops the link on a cut one and connects again, over and over) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
   core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
   earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen; cupcake, Echo Input: OpenSL ES over
@@ -618,6 +624,55 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`main.sh` `ledc_start`/`ledc_watch`): a copy without its file capability, else the linker ignores LD_PRELOAD.  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Light ring live** (`ringlive.c`, `ringlive.h`, feature `ring_live`, off): hassmic writes the LED driver's frame (the Dot 5: below)
+  itself (`board.ring_frame`, donut's, biscuit's and radar's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0
+  first, on donut scaled by the unit's calibration in the driver; ledcontroller writes it only when its picture
+  changes; radar matched to biscuit by firmware, not probed; PLAN.md "Light ring live",
+  `scripts/led-probe.sh`).  Root's `main.sh` `led_frame` gives that one file to group `LED_GID` 3991 (device.conf
+  `LED_FRAME`, the same path; `tests/unit/ringlive_conf.py`), which runas adds to hassmic's groups; led_current, the
+  calibration, boot_animation and pwm1 stay ledcontroller's/root's.  Colours as seen -> gamma 2.2 (as ring.c's
+  designs) -> x the brightness table's pwm for the ring's level (`led_mute_ring_config.json` rgbTable by idme
+  `capcolor`, as the HAL's scaleDutyCycle), so never above what ledcontroller writes at that level (FD at 100).  One
+  writer thread, latest wins, `RINGLIVE_FPS` 30; waits while `ring_busy()` (the Echo's own patterns) or muted, back
+  150 ms after; reads back every 200 ms and puts ours back, backs off 5 s if something else keeps writing; nothing
+  left: the dark frame once.  HA (`proto_esphome.c`): lights "Light
+  ring LED 1..12" (from the fill's start + rotation), actions `light_ring_frame|animation|design|stop`, select "Light
+  ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`).  Layers:
+  "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
+  `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`; the six music ones `ringlive_music_effect` from
+  `musiclight.c`: the PCM fed by sendspin.c, a2dp.c and main.c's play_media path with its output's queue (the TTS
+  stream's modelled in `playback_thread`: written minus real time, as `s_queued_us`); 12 biquad
+  bands against running ranges, the level and L/R as punch against 1.5 s, kick/snare/hi-hat from log-amplitude flux
+  with level gates, tempo by autocorrelation, a beat grid locked to the kicks (phase by circular mean, then a PLL), the
+  accent every 4 beats; each reading stamped when heard; only while a music effect shows, `musiclight_want`.  Measured
+  by `make unit-ringviz`: tools/ringmusic.py's track with its drums written down, build/ringviz, tools/ringviz.py
+  (scores, and effects.png to look at)), the LED lights over it, an animation over all; HA's
+  transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
+  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows (main.c `led()` and the mute bracket
+  `ring_set` with `ringlive_yield`/`_yield_end`: no frame of ours starts in between and one in flight is waited for
+  (`write_lock`), so ledcontroller's frame for a static pattern lands after ours; the handler leaves the ring alone
+  until the writer looked; only in hassmic's own pid, not a child forked without exec); init's stop kills outright (a
+  moving effect stays frozen), so `state/ring-live` (the boot id; written once a run when ours first shows, never per
+  frame: /data is flash; deleted at a clean end) has the next start in the same boot make the ring dark at
+  `ringlive_begin` (main.c after settings_load: the mute and the Echo's own known), unless `live_hold` then.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
+  GET /api/ring, ring.js `liveShow`.  PC: `HASSMIC_FAKE_FRAME`, `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`,
+  `tests/fake_ha_ring_live.py`.
+  The Echo Dot 5 (binary animations, `ring_live_acs`; picked before `board.ring_frame`, not with `HASSMIC_FAKE_FRAME`):
+  no frame file, the LEDs are the SCP's LED manager's.  Each frame goes as one looped frame into ring.c's slot
+  `hassmic_live` (layer 0 with the light's slots, auto-stop 0): `ring_live_put` (the frame, `shim_update` on the light's
+  connection under `shim_lock`), `ring_live_show` (-s/-u queued; set once per
+  ledcontroller: `live_on`, `live_put_conn`, `shim_conns` counts connections made and lost), unset when
+  nothing of ours is left and by `ringlive_yield` before the Echo's own pattern (the compositor would mix ours into its
+  gaps).  Full duty: ledcontroller gives the LED manager its brightness tables (`prepare_brightness_tables_for_acs`).
+  No read back, marker or SIGTERM frame: `ring_start` unsets the slot.  `shim_check` (ring_tick, `ring_live_on`): the
+  connection hung up = ledcontroller ended, the light and the live frame drawn again into the next one.
+  An update stops the animation it replaces (measured), so libhmled.so wraps ledcontroller's
+  `aceLedMgr_startAnimationWithConfig`/`stopAnimation`/`stopAllAnimations` (preloaded: its HAL's PLT calls land there)
+  and keeps `hassmic_live` as a pair with `hassmic_live_b`: a frame into the one not showing, started with
+  ledcontroller's config, the other stopped; ledcontroller only knows `hassmic_live`.  ~47 ms a swap: ~20 frames a
+  second.  The shim takes 4 clients, `?leds` reads what each LED shows (`aceLedMgr_getLedState`: on, brightness,
+  RGB); `src/tools/ledstate.c` (not in `all`; `runas puffin aipc ledstate [-n N -i MS] [-p RRGGBBx12]`).  ledctrl -g
+  is stale on the Dot 5: trust `?leds`.  `tests/fake_ha_ring_live_acs.py`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the
   Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
   `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache

@@ -115,6 +115,8 @@ tests/otatool_test.sh                             # the PC's otatool (Python) ag
                                                  # the Echo's own patterns first, the listening ring turned by the beam
 .venv/bin/python tests/fake_ha_ring_acs.py        # the same on the Echo Dot 5's binary animations: the set, its index files,
                                                  # the light drawn into its slots through a stand-in for libhmled.so
+.venv/bin/python tests/fake_ha_ring_live_acs.py   # "Light ring live" on the Echo Dot 5: frames into its slot through that
+                                                 # stand-in, the Echo's own first, ledcontroller started again
 .venv/bin/python tests/fake_improv.py             # setup from a phone (Improv over BLE) on a fake Bluetooth controller,
                                                  # Wi-Fi through root's wifi.sh, adoption, factory reset
 .venv/bin/python tests/fake_ha_bt_proxy.py        # the Bluetooth proxy switched off and on (issue #152) on that controller

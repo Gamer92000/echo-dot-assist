@@ -53,8 +53,10 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <math.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,9 +77,11 @@
  * itself runs at a tenth */
 static const float level_gain[LEVELS] = { 1.0f, 0.66f, 0.382f };
 #define GAMMA 2.2f
+#define LIVE_SLOT "hassmic_live"            /* binary sets: the live ring's frames, replaced in place (ring_live_put) */
 enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW, E_COUNT };
-const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow" };
-const int ring_neffects = E_COUNT;
+/* The palette's five, then those only the live ring draws (ringlive.c), offered while it draws the light */
+const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow", RING_LIVE_EFFECTS };
+const int ring_neffects = E_COUNT + RING_LIVE_NEFFECTS;
 static const char *const effect_ids[] = { "solid", "pulse", "spin", "blink", "rainbow" };
 
 /* Every pattern main.c plays (led()), by what it shows.  The ids are the settings page's and state/ring-applied's: keep
@@ -698,7 +702,7 @@ static void emit(struct gen *g, const char *name, const struct buf *b)
         if (strchr(nm, '.') || strlen(nm) > 30 || acs_encode(&bin, p, &ends)) {
             fprintf(stderr, "ring: %s does not fit the binary format\n", nm); g->failed = 1; free(bin.p); return;
         }
-        if (!strncmp(nm, "hassmic_light_", 14)) ends = 0;       /* a slot: black until drawn into, then held */
+        if (!strncmp(nm, "hassmic_light_", 14) || !strncmp(nm, LIVE_SLOT, strlen(LIVE_SLOT))) ends = 0;     /* a slot: black until drawn into, then held */
         int idx = g->acs_base + g->acs_n++;
         bput(&g->acs_list, "%d.%s.animation_bin\n", idx, nm); bput(&g->acs_names, "%s,", nm); bput(&g->acs_auto, "%s %d\n", nm, ends);
         g->acs_bytes += bin.n; g->acs_frames += be32((unsigned char *)bin.p + 12);
@@ -842,11 +846,12 @@ static int build(struct gen *g)
         g->turned = ok;
         if (!ok) { fprintf(stderr, "ring: stock's listening ring has a shape we do not know: not turned\n"); names4.n = 0; }
     }
-    for (int k = 0; g->acs && k < 2; k++) {     /* binary: the light's two slots instead of the palette (ACS above) */
+    for (int k = 0; g->acs && k < 4; k++) {     /* binary: the light's two slots instead of the palette, the live ring's two (ACS above) */
         char px[MAX_LEDS][8];
         for (int i = 0; i < n; i++) strcpy(px[i], "000000");
         b.n = 0; bput(&b, "loop\n"); frame(&b, 1000, px, n);
-        snprintf(name, sizeof name, "hassmic_light_%c", 'a' + k);
+        /* LIVE_SLOT's second, which only libhmled.so plays: an update stops what plays, so it swaps them (ledshim.c) */
+        if (k < 2) snprintf(name, sizeof name, "hassmic_light_%c", 'a' + k); else snprintf(name, sizeof name, "%s%s", LIVE_SLOT, k == 3 ? "_b" : "");
         listnames(&names0, name);
         strcat(name, ".animation"); emit(g, name, &b);
     }
@@ -970,6 +975,7 @@ static void (*reloaded_fn)(int custom_changed);
 static int custom, have_turned, have_assist, have_leds;
 static int acs_set;                         /* the installed set is binary: the light drawn into its slots (ACS above) */
 static struct buf acs_shown;                /* the light's animation in the slot shown (light_shown), as text */
+static int acs_conn;                        /* the shim connection it was drawn on (shim_conns) */
 static int slot_avail[RING_SLOTS_MAX], slot_on[RING_SLOTS_MAX];         /* of the set installed */
 
 /* The Echo's own patterns that hassmic played and did not stop: how long each shows, from its file */
@@ -981,6 +987,13 @@ static struct ring_light flash; static long long flash_until;
 static char light_shown[48];                /* what of ours is on the ring for the light, "" none */
 static char led_shown[MAX_LEDS][32];        /* and on each LED's own layer (a fill), "" none */
 static int rotation;                        /* the fill's start, in LEDs from stock's */
+static atomic_int live_light;               /* the live ring draws the light (ringlive.h): no palette pattern for it;
+                                             * written under lock, read without it by ring_effect_listed (protocols) */
+static int live_on, live_conn;              /* binary sets: LIVE_SLOT shown in the ledcontroller of connection live_conn */
+static int live_set;                        /* a -s of LIVE_SLOT not undone by a -u: hiding unsets on this, not on live_on
+                                             * (a restart misread, a set lost: an -u too many does no harm) */
+static atomic_int live_put_conn;            /* the connection the live ring's last frame went on (ring_live_put) */
+static long long assert_at;                 /* ring_tick: what of ours shows, set again now and then */
 
 static long long now_ms(void)
 {
@@ -1083,15 +1096,20 @@ static void quantize(const struct ring_light *l, struct colour *c)
     c->level = v >= 0.75f ? 0 : v >= 0.4f ? 1 : 2;
 }
 
-/* lock held.  Binary sets: an animation into slot SLOT of the LED manager, through libhmled.so in ledcontroller
- * ("@hassmic-led", HASSMIC_LED_SHIM for tests; ledshim.c says what it takes).  The connection is kept; a broken one is
- * made again once.  0, or what the LED manager or the shim said (-1 none answered) */
-static int shim_update(const char *slot, const char *text)
+/* Binary sets: an animation into slot SLOT of the LED manager, through libhmled.so in ledcontroller ("@hassmic-led",
+ * HASSMIC_LED_SHIM for tests; ledshim.c says what it takes).  The connection is kept; a broken one is made again once.
+ * 0, or what the LED manager or the shim said (-1 none answered).  Under shim_lock, taken after ring.c's own when both
+ * are: the live ring's frames go without ring.c's lock (ring_live_put), so a pattern of the Echo's own being set waits
+ * for no round trip of theirs */
+static pthread_mutex_t shim_lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int shim_conns;               /* connections made and lost: a new one is a new ledcontroller, nothing of ours set */
+static int fd = -1;                         /* to the shim, kept; under shim_lock */
+static int shim_update(const char *slot, const char *text, int *conn)   /* *conn: the connection it went on */
 {
-    static int fd = -1;
     struct buf m = { 0 }; int ends, rc = -1;
     bcat(&m, slot, strlen(slot) + 1);
     if (acs_encode(&m, text, &ends)) { free(m.p); return -1003; }
+    pthread_mutex_lock(&shim_lock);
     for (int attempt = 0; attempt < 2 && rc == -1; attempt++) {
         if (fd < 0) {
             const char *e = getenv("HASSMIC_LED_SHIM"), *nm = e ? e : "hassmic-led";
@@ -1102,13 +1120,33 @@ static int shim_update(const char *slot, const char *text)
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv); setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
             if (fd >= 0 && connect(fd, (struct sockaddr *)&u, (socklen_t)(offsetof(struct sockaddr_un, sun_path) + 1 + k))) { close(fd); fd = -1; }
             if (fd < 0) break;
+            shim_conns++;
         }
         char r[16]; ssize_t k;
         if (send(fd, m.p, m.n, MSG_NOSIGNAL) == (ssize_t)m.n && (k = recv(fd, r, sizeof r - 1, 0)) > 0) { r[k] = 0; rc = atoi(r); if (!rc && r[0] != '0') rc = -1; }
         else { close(fd); fd = -1; }
     }
+    *conn = shim_conns;                     /* read here: another thread's reconnect after the unlock is not this one */
+    pthread_mutex_unlock(&shim_lock);
     free(m.p);
     return rc;
+}
+
+/* lock held: ledcontroller ended (root's watcher starts it again): its end of the connection hung up (the shim keeps a
+ * connection for good: ledshim.c).  What was drawn went with it, and nothing of ours is set in the next one, so the
+ * light and the live ring's frame are drawn again, a picture that stands still too (nothing else would send it) */
+static void shim_check(void)
+{
+    /* busy: a round trip in flight (up to seconds with a hung ledcontroller) finds the hangup itself, and the live
+     * slot and the light know their connection (shim_conns): never wait for it here, under ring.c's lock */
+    if (pthread_mutex_trylock(&shim_lock)) return;
+    struct pollfd p = { .fd = fd, .events = POLLIN };     /* the shim never speaks unasked: anything is its end */
+    int gone = fd >= 0 && poll(&p, 1, 0) > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR));
+    if (gone) { close(fd); fd = -1; shim_conns++; }      /* a generation: a frame put on the dead one matches nothing */
+    pthread_mutex_unlock(&shim_lock);
+    if (!gone) return;
+    acs_shown.n = 0; live_on = 0;
+    fprintf(stderr, "light ring: ledcontroller went away, what was drawn is drawn again\n");
 }
 
 /* lock held, binary sets: the light as one animation (empty: none), drawn as the palette's patterns would show it */
@@ -1130,7 +1168,7 @@ static void light_text(struct buf *t, const struct ring_light *l, int flashing, 
         return;
     }
     quantize(l, &c);
-    if (lit >= leds || flashing) { light_anim(t, flashing ? E_BLINK : l->effect, &c, leds); return; }
+    if (lit >= leds || flashing) { light_anim(t, flashing ? E_BLINK : l->effect < E_COUNT ? l->effect : E_NONE, &c, leds); return; }
     for (int j = 0; j < lit; j++) colour_rgb(&c, 1, px[(start + j) % leds]);     /* a fill: solid, as on the Dots */
     bput(t, "loop\n"); frame(t, 1000, px, leds);
 }
@@ -1149,7 +1187,7 @@ static void light_apply_acs(long long now, const struct ring_light *l, int flash
     }
     char slot[24];                                      /* the one not shown: drawn into while the other still shows */
     snprintf(slot, sizeof slot, "hassmic_light_%c", strcmp(light_shown, "hassmic_light_a") ? 'a' : 'b');
-    int rc = shim_update(slot, t.p);
+    int conn, rc = shim_update(slot, t.p, &conn);
     if (rc) {
         if (!said++) fprintf(stderr, "light ring: the LED manager took no animation (%d): ledcontroller without libhmled.so?\n", rc);
         return;
@@ -1159,7 +1197,7 @@ static void light_apply_acs(long long now, const struct ring_light *l, int flash
     run("-s", slot);
     if (light_shown[0]) run("-u", light_shown);
     snprintf(light_shown, sizeof light_shown, "%s", slot);
-    acs_shown.n = 0; bcat(&acs_shown, t.p, t.n);
+    acs_shown.n = 0; bcat(&acs_shown, t.p, t.n); acs_conn = conn;
     light_remember();
 }
 
@@ -1171,6 +1209,8 @@ static void light_apply(long long now)
     if (!flashing) flash_until = 0;
     const struct ring_light *l = flashing ? &flash : &light;
     memset(wled, 0, sizeof wled);
+    static const struct ring_light none;
+    if (live_light) { l = &none; flashing = 0; }        /* the live ring draws it: ours all off */
     /* The fill: that share of the LEDs, rounded up (1 % one LED, all of them only at 100 %), from where stock's volume
      * steps start (volume_step-01 lights LED 11, -05 LEDs 11 and 0, -10 LEDs 11 to 2) turned by the rotation.  A part
      * of the ring is each LED's own solid pattern, so the effects are the whole ring's only; a flash blinks it whole */
@@ -1188,7 +1228,8 @@ static void light_apply(long long now)
     }
     else if (custom && (l->on || flashing) && !busy(now) && lit > 0) {
         struct colour c; quantize(l, &c);
-        if (lit >= leds || flashing || !have_leds) light_pattern(flashing ? E_BLINK : l->effect, &c, want, sizeof want);
+        /* an effect only the live ring draws, left over from it: the colour still */
+        if (lit >= leds || flashing || !have_leds) light_pattern(flashing ? E_BLINK : l->effect < E_COUNT ? l->effect : E_NONE, &c, want, sizeof want);
         else {
             char code[8]; colour_code(&c, code, sizeof code);
             for (int j = 0; j < lit; j++) { int i = (start + j) % leds; snprintf(wled[i], sizeof wled[i], "hassmic_led_%d_%s", i, code); }
@@ -1242,6 +1283,7 @@ static void take(const struct gen *g, int ours)
     acs_set = custom && g->acs;
     have_leds = custom && (!g->noleds || acs_set);  /* binary: a fill is drawn, no LEDs' own patterns needed */
     acs_shown.n = 0;
+    live_on = 0;                                    /* ledcontroller started again: the live ring's slot is black, unset */
     leds = g->leds ? g->leds : 12;
     for (int i = 0; i < ring_nslots; i++) { slot_avail[i] = custom && g->avail[i]; slot_on[i] = custom && g->on[i]; }
 }
@@ -1267,6 +1309,9 @@ void ring_start(void (*fn)(const char *op, const char *name), void (*reloaded)(i
         for (int i = 0; i <= MAX_LEDS && fscanf(f, "%47s", left) == 1; i++) if (!strncmp(left, "hassmic_", 8)) run("-u", left);
         fclose(f); unlink(file);
     }
+    /* The live ring's slot as the last run left it (killed outright: ledcontroller holds its last frame).  Not kept in
+     * ring-light: it shows and hides with every pattern of the Echo's own, and /data is flash */
+    if (acs_set) run("-u", LIVE_SLOT);
 }
 
 int ring_check(const char *applied, size_t n, char *err, size_t cap)
@@ -1291,7 +1336,11 @@ int ring_custom(void) { return custom; }
 int ring_assistant_steps(void) { return have_assist; }
 int ring_per_led(void) { return have_leds; }
 /* one LED shows a spin as a pulse of its own, twice a second: Pulse is the one meant */
-int ring_effect_listed(int i) { return i >= 0 && i < E_COUNT && !(i == E_SPIN && board.ring_leds == 1); }
+int ring_effect_listed(int i)
+{
+    if (i >= E_COUNT) return i < ring_neffects && live_light;
+    return i >= 0 && !(i == E_SPIN && board.ring_leds == 1);
+}
 
 /* lock held: the slot that shows PATTERN (stock's name; a volume step: its number in *step), -1 none */
 static int slot_of(const char *pattern, int *step)
@@ -1374,7 +1423,21 @@ void ring_tick(void)
             run("-s", s->actual); run("-u", was);
         }
     }
+    if (acs_set) {
+        shim_check();
+        if (acs_shown.n && acs_conn != shim_conns) acs_shown.n = 0;    /* a put reconnected first: drawn again too */
+    }
     light_apply(now);
+    /* A set can be lost (ledq kills a ledctrl that hangs, and one sent while a ledcontroller started again was not yet
+     * taking them): what of ours shows, set again every 30 s.  Only a picture of one frame looped, where that changes
+     * nothing seen: whether a set restarts an effect playing is not known */
+    if (acs_set && now - assert_at >= 30000) {
+        assert_at = now;
+        int frames = 0;
+        for (size_t i = 0; i < acs_shown.n; i++) frames += acs_shown.p[i] == ':';
+        if (light_shown[0] && frames == 1) run("-s", light_shown);
+        if (live_on) run("-s", LIVE_SLOT);
+    }
     pthread_mutex_unlock(&lock);
 }
 
@@ -1410,6 +1473,68 @@ void ring_reload(void)
     if (reloaded_fn) reloaded_fn(custom != was || have_leds != was_leds);      /* the fill's entities come and go with them */
 }
 
+void ring_light_live(int on)
+{
+    pthread_mutex_lock(&lock);
+    if (live_light != !!on) fprintf(stderr, "light ring: Home Assistant's light %s\n", on ? "drawn by the live ring, in its own colours" : "from the palette again");
+    live_light = !!on;
+    /* an effect only the live ring draws is gone with it: Home Assistant's state must name one of the list it gets */
+    if (!live_light && (light.effect < 0 || light.effect >= E_COUNT)) light.effect = E_NONE;
+    light_apply(now_ms());
+    pthread_mutex_unlock(&lock);
+}
+
+int ring_light_now(struct ring_light *l)
+{
+    pthread_mutex_lock(&lock);
+    int fl = flash_until && now_ms() < flash_until;
+    *l = fl ? flash : light;
+    pthread_mutex_unlock(&lock);
+    return fl;
+}
+
+int ring_busy(void) { pthread_mutex_lock(&lock); int b = busy(now_ms()); pthread_mutex_unlock(&lock); return b; }
+
+int ring_live_acs(void) { pthread_mutex_lock(&lock); int a = acs_set; pthread_mutex_unlock(&lock); return a; }
+int ring_live_on(void)
+{
+    pthread_mutex_lock(&lock);
+    shim_check();
+    int o = live_on && live_conn == shim_conns;
+    pthread_mutex_unlock(&lock);
+    return o;
+}
+
+/* Binary sets: the live ring's frame (12 x RRGGBB, as written to the Dots' driver) into LIVE_SLOT in place, whether it
+ * shows or not.  One frame, looped: the LED manager holds it until the next.  The brightness is the LED manager's own
+ * (ledcontroller hands it its tables, prepare_brightness_tables_for_acs), as for the light's slots.  Without ring.c's
+ * lock: only the connection's (shim_lock), which the light's shares (one connection of hassmic's to the shim).  An update
+ * stops what it replaces: libhmled.so swaps LIVE_SLOT with its second for us (ledshim.c) */
+int ring_live_put(const char *rgb)
+{
+    char px[MAX_LEDS][8]; struct buf t = { 0 };
+    int n = ring_leds();
+    if (!ring_live_acs()) return -1;
+    for (int i = 0; i < n; i++) { memcpy(px[i], rgb + 6 * i, 6); px[i][6] = 0; }
+    bput(&t, "loop\n"); frame(&t, 1000, px, n);
+    int conn = 0, rc = t.bad ? -1 : shim_update(LIVE_SLOT, t.p, &conn);
+    if (!rc) live_put_conn = conn;
+    free(t.p);
+    return rc ? -1 : 0;
+}
+
+/* LIVE_SLOT shown (set once per ledcontroller) or hidden; no round trip, only ledq's queue */
+void ring_live_show(int on)
+{
+    pthread_mutex_lock(&lock);
+    if (!acs_set) {}
+    else if (!on) { if (live_set) run("-u", LIVE_SLOT); live_set = live_on = 0; }
+    /* the connection its frame went on: a reconnect since has ring_live_on say no, and the frame goes in again */
+    else if (live_put_conn != shim_conns) live_on = 0;     /* its frame went to a ledcontroller gone: put again first */
+    else if (!live_on || live_conn != live_put_conn) { run("-s", LIVE_SLOT); live_set = live_on = 1; live_conn = live_put_conn; }
+    pthread_mutex_unlock(&lock);
+}
+
 void ring_light_get(struct ring_light *l) { pthread_mutex_lock(&lock); *l = light; pthread_mutex_unlock(&lock); }
 
 void ring_level(int dbfs10) { (void)dbfs10; }       /* the LEDs' listening ring does not follow the voice */
@@ -1420,7 +1545,7 @@ void ring_light_set(const struct ring_light *l, unsigned flash_ms)
     pthread_mutex_lock(&lock);
     if (flash_ms) { flash = *l; flash.on = 1; flash_until = now_ms() + flash_ms; }
     else { light = *l; flash_until = 0; }
-    if (light.effect < 0 || light.effect >= E_COUNT) light.effect = E_NONE;
+    if (light.effect < 0 || light.effect >= ring_neffects) light.effect = E_NONE;
     light.fill = light.fill < 0 ? 0 : light.fill > 100 ? 100 : light.fill;
     if (light.nleds < 0 || light.nleds > MAX_LEDS) light.nleds = 0;
     flash.fill = flash.fill < 0 ? 0 : flash.fill > 100 ? 100 : flash.fill;

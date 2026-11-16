@@ -80,24 +80,32 @@ def flat(layers, n):
 
 
 class Shim:
-    """libhmled.so's side: "<name>\\0<animation_bin>" in, the result as text out; every update kept as text"""
+    """libhmled.so's side: "<name>\\0<animation_bin>" in, the result as text out; every update kept as text.  One client
+    at a time (the real one takes 4): a second connection of hassmic's would wait here until the first is closed.  drop(): ledcontroller started
+    again (the connection gone, nothing of ours set in it)"""
     def __init__(self, name):
-        self.updates, self.answer = [], "0"
+        self.updates, self.answer, self.conns, self.c = [], "0", 0, None
         self.s = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET); self.s.bind("\0" + name); self.s.listen(4)
         threading.Thread(target=self.serve, daemon=True).start()
 
     def serve(self):
         while True:
-            c, _ = self.s.accept()
-            threading.Thread(target=self.client, args=(c,), daemon=True).start()
+            self.c, _ = self.s.accept(); self.conns += 1
+            self.client(self.c)
 
     def client(self, c):
         while True:
-            m = c.recv(65536)
+            try: m = c.recv(65536)
+            except OSError: m = b""
             if not m: break
             name, data = m.split(b"\0", 1)
             self.updates.append((name.decode(), decode(data)))
-            c.send(self.answer.encode())
+            try: c.send(self.answer.encode())
+            except OSError: break
+        c.close()
+
+    def drop(self):
+        if self.c: self.c.shutdown(socket.SHUT_RDWR)
 
 
 async def main():
@@ -122,19 +130,19 @@ async def main():
     auto = dict(l.split() for l in open(os.path.join(out, "acs_auto_stop_conf.txt")).read().splitlines())
     whole = json.load(open(os.path.join(out, "layer_config_common.json")))
     ours = [n for n in names if n.startswith("hassmic_")]
-    check(r.returncode == 0 and len(ours) == 36 + 2 + 1 and not [n for n in ours if re.match(r"hassmic_(solid|pulse|spin|blink|rainbow|led)_", n)],
-          f"-G: the listening ring's turns, the light's two slots and the Assistant's volume step; no palette, no LEDs' own ({len(ours)}: {r.stderr.strip()})")
+    check(r.returncode == 0 and len(ours) == 36 + 4 + 1 and not [n for n in ours if re.match(r"hassmic_(solid|pulse|spin|blink|rainbow|led)_", n)],
+          f"-G: the listening ring's turns, the light's two slots and the live ring's two, the Assistant's volume step; no palette, no LEDs' own ({len(ours)}: {r.stderr.strip()})")
     check(names[-1] == "" and len(lst) == len(names) - 1 == int(open(os.path.join(out, "acs_animation_count.txt")).read())
           and lst[:4] == ["0.active-start.animation_bin", "1.active-end.animation_bin", "2.volume_step-05.animation_bin", "3.zzz_rainbow.animation_bin"]
           and all(l == f"{i}.{n}.animation_bin" for i, (l, n) in enumerate(zip(lst, names))),
           "the index: stock's lines first and unchanged, ours numbered after them, the names in the same order, a comma after each")
     check(all(f in files for f in lst[4:]) and all(f.endswith(".animation_bin") or f in ("digest", "layer_config_common.json") or f.startswith(("acs_", "layer_config"))
                                                    for f in files), "every animation of ours a numbered binary, nothing in text")
-    check(whole["numberOfLayers"] == 6 and whole["Layers"]["0"] == ["zzz_rainbow", "hassmic_light_a", "hassmic_light_b"]
+    check(whole["numberOfLayers"] == 6 and whole["Layers"]["0"] == ["zzz_rainbow", "hassmic_light_a", "hassmic_light_b", "hassmic_live", "hassmic_live_b"]
           and whole["Layers"]["4"][:3] == ["hassmic_listen_0", "hassmic_listen_1", "hassmic_listen_2"]
           and open(os.path.join(out, "layer_config_common.txt")).read() == flat(whole["Layers"], 6),
           "the layer config: the slots last in layer 0, the turned rings first in stock's listening layer, flattened as the SCP reads it")
-    check(auto["hassmic_light_a"] == auto["hassmic_light_b"] == "0" and auto["hassmic_end_3"] == "1" and auto["hassmic_hold_3"] == "0"
+    check(auto["hassmic_light_a"] == auto["hassmic_light_b"] == auto["hassmic_live"] == auto["hassmic_live_b"] == "0" and auto["hassmic_end_3"] == "1" and auto["hassmic_hold_3"] == "0"
           and auto["active-end"] == "1", "auto-stop: stock's kept, ours by the rule (a black loop ends), the slots never")
     held = decode(open(os.path.join(out, next(l for l in lst if ".hassmic_hold_3." in l)), "rb").read())
     check(held == "loop\n1000:" + ",".join(["0000FF", "00FFFF", "00FFFF"] + ["0000FF"] * 9) + "\n",
@@ -232,6 +240,12 @@ async def main():
         c.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
         await until(lambda: slots(), 5)
         check(slots() and slots()[0][0] == "-s" and shim.updates, f"run over: the light drawn and shown again ({slots()})")
+        # ledcontroller started again (root's watcher): the connection hangs up, the light drawn into the new one unasked
+        await asyncio.sleep(0.3); open(leds, "w").close(); shim.updates.clear(); conns = shim.conns
+        shim.drop()
+        await until(lambda: slots() and shim.updates and shim.conns > conns, 3)
+        check(slots() and slots()[0][0] == "-s" and shim.updates and shim.conns == conns + 1,
+              f"ledcontroller started again: the light drawn and shown again on a new connection ({slots()})")
         open(leds, "w").close()
         c.light_command(li.key, state=False)
         await until(lambda: slots())
@@ -248,4 +262,5 @@ async def main():
     print("FAILED" if check.failed else "all good")
     sys.exit(1 if check.failed else 0)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

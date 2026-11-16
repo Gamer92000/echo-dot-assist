@@ -69,7 +69,10 @@ class Echo:
         keys = os.path.join(self.tmp, "keypad")
         if not os.path.exists(keys): os.mkfifo(keys)
         self.keypad = os.open(keys, os.O_RDWR)          # opened first: hassmic's open() would wait for a writer
-        self.log = open(os.path.join(self.tmp, "log"), "w+")
+        # hassmic's log as a file of its own: written appending (O_APPEND), read through another open file.  One open file
+        # for both shared its offset: a read's seek(0) moved hassmic's next line to the file's start, over what was
+        # there, and a value looked up last was an old one (volumes failed 3 runs in 20, upstream's 1 in 10)
+        self.logpath = os.path.join(self.tmp, "log"); open(self.logpath, "w").close(); self.log = open(self.logpath, "a")
         env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_FAKE_MIXER=self.mixer, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw",
                    HASSMIC_PLAY=os.path.join(self.tmp, "play.raw"), HASSMIC_MDNS_FILE=os.path.join(self.tmp, "mdns"),
                    HASSMIC_FAKE_ADDRS=os.path.join(self.tmp, "addrs"), HASSMIC_ARB_ADDR="127.255.255.255",
@@ -93,7 +96,8 @@ class Echo:
     def key(self, code):
         for v in (1, 0): os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, v))     # struct input_event, EV_KEY
 
-    def text(self): self.log.seek(0); return self.log.read()
+    def text(self):
+        with open(self.logpath) as f: return f.read()
 
     def config(self): return dict(l.strip().split("=", 1) for l in open(os.path.join(self.state, "config")) if "=" in l)
 
