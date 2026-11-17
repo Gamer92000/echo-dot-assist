@@ -701,9 +701,9 @@ switch it on.
   comparison (the Echo reports what it plays as heard, the speaker's delay taken out).
 - The log shows `lyrion: found "…" 9.2.0 at 192.168.1.10 (web port 9000)`, `lyrion: player … linked to …` and one
   line per track.
-- Tried on an Echo Dot 2 with Lyrion 9.1.1 (found on the network, internet radio, FLAC from the library, volume both
-  ways, the action button, "stop"), and against Lyrion 9.2.0 with the PC build (formats, gapless, pause, seek, groups
-  of two). Not yet in a group with other Squeezebox players on an Echo.
+- Tried on an Echo Dot 2 with Lyrion 9.1.1 (found on the network, internet radio, FLAC from the library, a group
+  with another Squeezebox player, volume both ways, the action button, "stop"), and against Lyrion 9.2.0 with the PC
+  build (formats, gapless, pause, seek, groups of two).
 
 ### Even volume steps
 
