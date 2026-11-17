@@ -53,6 +53,7 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                                    #   reduction, LEDs, light sensor
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
+.venv/bin/python tests/fake_ha_bt_chime.py          # a phone connects (HASSMIC_FAKE_PHONE): the chime and the spoken words are two settings
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
 .venv/bin/python tests/fake_ha_end.py         # the end of a request heard on the Echo (micend.c): a talker, dishes as loud
                                              # (no speech in the front end's records written into the capture), quieter

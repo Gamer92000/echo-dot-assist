@@ -4313,3 +4313,9 @@ word and echo cancellation in a room, all checked on our unit (2026-11-15).
       builder made then had no VERSION, libhmled.so, hassmic_rcpi4m.ko or latency (an update's files): on it the light
       ring has no Home Assistant light, no Wi-Fi motion, and the logs say "factory".  The builder's `--port` takes a
       bundle's files whole now, VERSION and update.pub included; this unit keeps the old copy until a reflash.
+- [x] Bluetooth chime apart from the words (2026-11-17): `core_bt_device` gated chime and words on "Bluetooth announcements"
+      though the chimes have switches of their own (`sound_bluetooth_on/off`, the Sounds card): the chime now always asks
+      `sound_request` (its switch decides), only the words follow the announcements setting.  An Echo that had the
+      announcements off for silence now chimes until its two sounds are off too (CHANGELOG says so; no migration:
+      the switches already say "on").  Test: `tests/fake_ha_bt_chime.py` (`HASSMIC_FAKE_PHONE` plays a2dp.c's report:
+      both on, announcements off, a sound off, the words alone).

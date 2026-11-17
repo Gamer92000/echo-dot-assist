@@ -107,7 +107,7 @@ int  core_sound_on(int s, int set);              /* sounds.h's sound has its swi
 int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
 int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
-int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
+int  core_bt_announce(int set);                  /* same: the words "Connected to <name>" when a phone connects (the chime is a sound of its own) */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */
 int  core_dnd(int set);                          /* same: do not disturb, announcements are dropped (the protocol checks) */
 int  core_volume(void);

@@ -669,7 +669,9 @@ one Echo. The log says
   Connecting and disconnecting play a chime and, like stock Alexa, "Connected to <phone>" / "Disconnected from
   <phone>": Home Assistant speaks those words, and only once "Allow the device to perform Home Assistant actions" is
   ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
-  you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
+  you hear the chime only. The two are settings of their own: "Bluetooth announcements" on the settings page turns the
+  words off (and picks their language), the sounds "A phone connects to play" and "The phone leaves" turn the chimes
+  off; any one can be off with the others on.
 
 ### Even volume steps
 
