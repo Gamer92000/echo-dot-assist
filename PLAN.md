@@ -3365,6 +3365,14 @@ Run in this order. Each step says what it proves.
       merge`, in `make unit-wakealign`) at the next alignment only if `core_transcript` saw a request for that wake
       word (`adapt_ok` = its end); else dropped, logged.  The transform comes in one request later.
       `tests/fake_ha_wakealign.py`: wake words without a transcript are not learnt from, with one from the 5th.
+      Measured (`tools/wakealign/adapt_eval.py`, the corpus's 10 German voices as households, 1233 clips, each with
+      two other German voices as a television, Pryon's end stood in for: no firmware unpacked; right from the 6th
+      request, n 2278 per cell): no adaptation 58.1 %; no false wakes 73.1 % before and after (the same: merging is
+      adding); a quarter false 72.6 -> 73.1 (73.1 -> 73.1 through a television's speaker); half false 71.6 -> 73.1
+      (both).  So false wakes cost the old way ~1.5 points at most and the fix takes them back; per household -6 to
+      +8 points either way (the adaptation also learns the room and the microphone, which a television's "Alexa" in the
+      same room shares).  A false wake a television talks on after gets a transcript and counts as a request: then
+      nothing changes.
       Tried and dropped the same day: a household filter learning from the clips' marks (kNN on log-mel prints) --
       on synthetic voices it never blocked the household but caught only 16-64 % of a television, not worth it
       without real clips to measure on.

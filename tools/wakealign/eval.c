@@ -2,8 +2,11 @@
  * (wordtail.c), the aligner alone (wakealign_end), and the aligner with the household's speaker adaptation as
  * main.c's align_thread runs it (the transform's end where it lies near Pryon's, else the plain one; what it settled
  * on added, the transform estimated anew).  Lines on stdin, one wake word each, a household's in the order it says them:
- *   <window.raw> <model.wa> <household> <pryon end in the window> <keyword dBFS>
- * the window being [Pryon's end - WAKEALIGN_BEFORE, + WAKEALIGN_AFTER] as align_ahead copies it.  Out, a line each:
+ *   <window.raw> <model.wa> <household> <pryon end in the window> <keyword dBFS> [<real>]
+ * the window being [Pryon's end - WAKEALIGN_BEFORE, + WAKEALIGN_AFTER] as align_ahead copies it; real (default 1): 0
+ * for a false wake (tools/wakealign/adapt_eval.py: a television's).  EVAL_LEARN in the environment: "all" (default:
+ * every wake word with an end near Pryon's, as main.c did before 2026-11-17), "real" (main.c since: gathered on their
+ * own and merged only for a real one, wakealign_adapt_merge), "none" (no adaptation learnt).  Out, a line each:
  *   <release start> <aligner alone> <aligner adapted> <the rule where the aligner gives no answer>   (samples in the
  * window; -1: none)
  *   cc -O2 -Isrc/hassmic tools/wakealign/eval.c src/hassmic/wakealign.c src/hassmic/wordtail.c src/hassmic/statefile.c -lm */
@@ -39,9 +42,12 @@ int main(void)
 {
     char line[1024], raw[512], wa[512], who[64]; long end; float kdb;
     static int16_t pcm[WAKEALIGN_BEFORE + WAKEALIGN_AFTER];
-    char loaded[512] = ""; struct wakealign *w = NULL;
+    char loaded[512] = ""; struct wakealign *w = NULL; int real;
+    const char *learn = getenv("EVAL_LEARN") ? getenv("EVAL_LEARN") : "all";
+    static struct wakealign_adapt one;
     while (fgets(line, sizeof line, stdin)) {
-        if (sscanf(line, "%511s %511s %63s %ld %f", raw, wa, who, &end, &kdb) != 5) continue;
+        real = 1;
+        if (sscanf(line, "%511s %511s %63s %ld %f %d", raw, wa, who, &end, &kdb, &real) < 5) continue;
         FILE *f = fopen(raw, "rb"); size_t n = f ? fread(pcm, 2, sizeof pcm / 2, f) : 0;
         if (f) fclose(f);
         if (strcmp(wa, loaded)) { wakealign_free(w); w = wakealign_load(wa); snprintf(loaded, sizeof loaded, "%s", wa); }
@@ -63,7 +69,12 @@ int main(void)
             if (ad && ad->have) { e = wakealign_end_adapt(w, pcm, n, ad, NULL); adapted = e >= 0 && NEAR(e); }
             if (!adapted) e = plain;
             final = e >= 0 && NEAR(e) ? e : -1;
-            if (ad && final >= 0) { wakealign_end_adapt(w, pcm, n, adapted ? ad : NULL, ad); wakealign_estimate(ad); }
+            if (ad && final >= 0 && !strcmp(learn, "all")) { wakealign_end_adapt(w, pcm, n, adapted ? ad : NULL, ad); wakealign_estimate(ad); }
+            else if (ad && final >= 0 && !strcmp(learn, "real") && real) {
+                memset(&one, 0, sizeof one); one.space = ad->space;
+                wakealign_end_adapt(w, pcm, n, adapted ? ad : NULL, &one);
+                wakealign_adapt_merge(ad, &one); wakealign_estimate(ad);
+            }
             if (plain >= 0 && !NEAR(plain)) plain = -1;
         }
         printf("%ld %ld %ld %ld\n", release, plain, final, w ? rule : release);   /* no model: main.c's pause stays */
