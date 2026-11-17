@@ -3960,6 +3960,57 @@ Run in this order. Each step says what it proves.
       dex looked through too).  cronos, crown, cupcake: setting and both broadcasts; athena's receiver has no
       SET_ENABLENETBOUNCE (mEnableNetBounce only from its config): setting and SET_ENABLEWIFIDIAGS.  **Open:** a day's
       run on each of them.
+- [x] Android models: captive portal DNS lookups (2026-11-17, issue #189).  A Show's owner saw DNS queries for
+      mmechocaptiveportal.com and fireoscaptiveportal.com reach 8.8.8.8 (a resolver DHCP named, so the lock admits port
+      53 to it) over and over, with no TCP after them.  Source from the firmware: boot-fosframework's
+      `AmazonCaptivePortalSettingsProviderCallback` (`insertGlobalCaptivePortalSettings`) writes fireos-res's
+      `amz_captiveportal_*_url` into Settings.Global `captive_portal_http(s)_url`/`_fallback_url` (checkers, cronos,
+      crown, athena: mmechocaptiveportal.com + fireoscaptiveportal.com; cupcake: fos6echocaptiveportal.com +
+      fireoscaptiveportal.com); AOSP's `NetworkMonitor` (services) probes them, the fetch never answers behind the lock,
+      the network never validates, and it evaluates again with a growing delay, resolving the name each time.
+      WifiDiagsUtil (the entry above) fetches both URLs too, every ~2.2 min while it runs (logcat's
+      runHttpConnectionTestAttempt on the Show 5 below: 2:13, 2:14, 2:13, 2:13 apart).  Fix:
+      `global/captive_portal_mode=0` (IGNORE = 0: `Settings$Global` in checkers' boot-framework) in ANDROID_SETTINGS of
+      the five: NetworkMonitor logs "Validation disabled." and takes the network as validated without a probe (that
+      string is in each model's services); AOSP reads the mode when a network connects (not checked in the bytecode; the
+      run below agrees: set with `captive_portal_detection_enabled` unset, "Validation disabled." after the next join),
+      so it takes the next Wi-Fi join.  The setting persists in SettingsProvider: alexa-off.sh sets it (a failed read:
+      at the next run) at the satellite's start (after an update, or at boot after boot_completed, the network then up
+      already), so the network up at that moment keeps probing and every later join reads 0.  athena's fireos-res also
+      has `amz_captiveportal_mode` = 1 (PROMPT, in resources.arsc), and only athena's boot-fosframework names both it
+      and `captive_portal_mode`: its callback presumably writes the mode too, not checked (should it at every boot
+      before the join, ours would not hold there); alexa-off.sh saves whatever stock had and alexa-on.sh puts it back
+      ("null": deleted).  On checkers the callback does not run at every boot: a marker `captive_portal_use_https` 1
+      outlived a reboot, where the callback would have written its `amz_captiveportal_use_https` 0 (resources.arsc);
+      athena's not checked.  alexa-off.sh no longer notes a failed `settings get` (empty: Java under load) as "null",
+      which alexa-on.sh would have turned into deleting stock's value: three calls at most, one only once a key failed
+      all three in that run (Java down: ~6 keys x 3 calls of ~2 s otherwise); then the setup flags are set without
+      stock's value noted (they must not wait; alexa-on.sh leaves them), any other key is left for the next run, so
+      stock's value is always noted before ours.  `tests/unit/alexaoff_test.py` (`make unit-alexaoff`, a stand-in
+      `settings`; also every ANDROID=1 device.conf has the key) fails on the old loop.
+      Echo Show 5 (checkers, 2026-11-17, its 2026.11.12 build had neither the WifiDiags broadcasts nor smartconn_status;
+      count-only OUTPUT rules on UDP 53 after hassmic_out, one with `-m string` "captiveportal"): 13 of 15 queries in 10
+      min were the names (WifiDiagsUtil + NetworkMonitor); WifiDiags stopped by hand, 2 of 2 in 10 min, both
+      NetworkMonitor's `PROBE_DNS` (`dumpsys connectivity` mValidationLogs from the join on: 1.4, 1.4, 1.5, 1.6, 1.9,
+      2.4, 3.5, 5.6 min apart; the window, 12-22 min after boot, held the last two).
+      This build pushed: alexa-off.sh set the mode at the satellite's start (stock "null" saved); after a reboot
+      mValidationLogs "Validation disabled.", the network VALIDATED, 0 of 5 and 0 of 2 queries the names in two 10 min
+      runs; then 20 min of every name (the Show's UDP 53 DNAT'd to a logging forwarder on the PC): ntp-g7g.amazon.com,
+      kindle-time.amazon.com, 2.android.pool.ntp.org, nothing else.  Those are time: Android's NetworkTimeUpdateService
+      and fosservices' time update, which schedules itself whether or not the network is a captive portal ("Captive
+      Portal Network, Scheduling Untrusted Update" / "Captive portal authenticated, Scheduling Trusted Update"), so not
+      brought on by the mode as far as its code says; not compared with a run without it.
+      Not covered: WifiDiagsUtil's runs before android_tell reaches it (one in the first minute after the reboot there),
+      and other daemons' lookups.  Blocking port 53 per uid cannot work (netd resolves for every app, hassmic included,
+      which needs public names: GitHub, HA's external URL); a hosts file entry would, but changes a stock file for two
+      names.
+      Dots (no Android framework, no NetworkMonitor; their libace_netsvc_core / libace_connectivity_manager name
+      acsechocaptiveportal.com (biscuit's and radar's fireoscaptiveportal.com too, cannoli's luma_svc that one):
+      wifisvc's tests, which main.sh stops once there is an address): no DNS query at all in 10 min on a Dot 3
+      (2026.11.13) and a Dot 5 (2026.11.16), DHCP naming 8.8.8.8 as dns2 there too (the same rules; a ping of
+      fireoscaptiveportal.com counted, so they see one).  **Open:** the time lookups (auto_time 0 would end Android's;
+      fosservices' not looked at); what a validated network sets off over a day; athena's callback and stock mode on a
+      device; cronos, crown, cupcake, athena not run.
 - [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
       Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
       Of the four supported Shows' extracted firmware images checked here, only athena declares

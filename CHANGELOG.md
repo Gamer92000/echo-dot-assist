@@ -2,6 +2,23 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — Fewer lookups of Amazon's hosts on the Echo Shows and the Echo Input
+
+- **Android's own captive portal test switched off: it looked Amazon's hosts up every few minutes (tried on an Echo
+  Show 5, 1st generation; the same change, not tried yet, on the Echo Show 5 2nd generation, both Echo Show 8 and the
+  Echo Input).** Android on these Echos keeps testing whether the Wi-Fi reaches the internet by fetching a page from
+  Amazon's captive portal hosts (mmechocaptiveportal.com and fireoscaptiveportal.com on the Shows). The firewall has
+  always stopped the fetch itself, but every attempt still looked the names up first, so the queries left the Echo
+  again and again (seen by an owner monitoring the network). Android's test is now switched off (its setting "captive
+  portal mode"; Amazon's value is put back when the Echo goes back to Alexa). On the Echo Show 8 2nd generation Fire
+  OS may set Amazon's value again at every start, which would undo it there; not known yet. It is set when the
+  satellite starts after the update (or at its next start, should Android not answer then) and takes effect the next
+  time the Echo joins the Wi-Fi: from the Echo's next restart on (a restart of the satellite alone does not join the
+  Wi-Fi again). Android then counts the Wi-Fi as working without testing it. Amazon's own network test may still look
+  the names up once in the first minute after a restart, before the satellite stops it. On the Echo Show 5, after a
+  restart: no lookup of those names in 40 minutes, where Android had made one every few minutes. Thanks to
+  Edowndotdown (issue #189).
+
 ## 2026-11-17 — Wi-Fi motion after Wi-Fi off and on
 
 - **Wi-Fi motion: the Wi-Fi driver is hooked again after Wi-Fi went off and on.** On the Echo Dot 3, Echo Dot 5, Echo

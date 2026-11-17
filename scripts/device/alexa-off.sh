@@ -60,14 +60,33 @@ fi
 SETTINGS=/data/local/hassmic/alexa-settings
 if command -v settings > /dev/null; then
     want=; [ -n "$(echo $SETUP_PACKAGES)" ] && want="global/device_provisioned=1 secure/user_setup_complete=1"
+    tries=3
     for t in $want $ANDROID_SETTINGS; do
         ns=${t%%/*} kv=${t#*/}; k=${kv%%=*} val=${kv#*=}
         # SettingsProvider's own file first (plain XML up to Android 11; it writes within 200 ms of a change): already
         # the value, no Java call (~2 s each, checkers).  Anything else asks settings as before
         grep -qF "name=\"$k\" value=\"$val\"" /data/system/users/0/settings_$ns.xml 2>/dev/null && continue
-        v=$(settings get $ns $k 2>/dev/null | tr -d '\r')
-        [ "$v" = "$val" ] && continue
-        grep -q "^$ns $k " $SETTINGS 2>/dev/null || echo "$ns $k ${v:-null}" >> $SETTINGS
+        # Nothing back is a failed call (Java under load), not "unset" (that answers "null"); noted as null, alexa-on.sh
+        # would delete stock's value.  A value stored as "" would look the same (none of these keys has one).  So three
+        # calls at most, and one only once a key failed all three in this run (with Java down every key would cost three
+        # of ~2 s).  Then the setup flags are set all the same, stock's value not noted (alexa-on.sh leaves them): they
+        # must not wait.  Any other key is left for the next run of this script, which reads it again, so that stock's
+        # value is always noted before ours is set.
+        n=0; v=
+        while [ -z "$v" ] && [ $n -lt $tries ]; do
+            [ $n = 0 ] || sleep 1; n=$((n + 1))
+            v=$(settings get $ns $k 2>/dev/null | tr -d '\r')
+        done
+        if [ -z "$v" ]; then
+            tries=1
+            case " $want " in
+            *" $t "*) echo "alexa-off: $ns $k could not be read: set without stock's value noted";;
+            *) echo "alexa-off: $ns $k could not be read: left for the next run"; continue;;
+            esac
+        else
+            [ "$v" = "$val" ] && continue
+            grep -q "^$ns $k " $SETTINGS 2>/dev/null || echo "$ns $k $v" >> $SETTINGS
+        fi
         settings put $ns $k "$val" || echo "alexa-off: $ns $k could not be set"
     done
 fi
