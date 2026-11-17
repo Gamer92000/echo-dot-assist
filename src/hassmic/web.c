@@ -33,7 +33,8 @@
  *   it goes on to root.
  *   The timer's own sound (sounds.c): POST /api/timer-sound, a WAV the page made of the file picked, signed; the
  *   Echo checks the format only, it decodes nothing else.
- *   The log: GET /api/log/0 (boot.log) and /1 (its rotated part), signed, for the page's viewer.  What it says is
+ *   The log: GET /api/log/0 (boot.log) and /1 (its rotated part), signed, for the page's viewer; POST /api/syslog/test
+ *   puts a line into it for the syslog server (logfwd.c), whose state comes with GET /api/state ("syslog").  What it says is
  *   plain on the network then, like the rest of the page: names, addresses, when the Echo was spoken to.  Secrets do
  *   not go out: the one hassmic logs, the Sendspin pairing token (scripts/lib/setup.sh reads it there over adb), is
  *   blanked on the way.
@@ -62,6 +63,7 @@
 #include "soundpack.h"
 #include "update.h"
 #include "wifi.h"
+#include "logfwd.h"
 #include "ws.h"
 #include "statefile.h"
 #include "../third_party/monocypher.h"
@@ -558,9 +560,12 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     n = app(o, n, cap, ",\"ha\":%s,\"volume\":%d,\"kiosk_app\":%s,\"settings\":[", core_ha_linked() ? "true" : "false", core_volume(), kiosk_app() ? "true" : "false");
     for (int i = 0, k = settings_count(); i < k && n < cap - 600; i++) {
         const struct setting *s = settings_at(i); const char *const *names; int nc = settings_choices(s, &names);
-        n = app(o, n, cap, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%d,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
-                              i ? "," : "", s->name, s->label, s->group, s->type == S_BOOL ? "bool" : s->type == S_INT ? "int" : "choice",
-                              settings_get(s), settings_min(s), settings_max(s), s->export_ ? "true" : "false", s->feature ? "true" : "false", s->unit ? s->unit : "");
+        char val[2 * LOGFWD_SERVER_MAX + 16];      /* a number, or an S_TEXT's text as a JSON string */
+        if (s->type == S_TEXT) { val[0] = '"'; size_t l = jesc(val + 1, sizeof val - 2, settings_get_text(s)); snprintf(val + 1 + l, sizeof val - 1 - l, "\""); }
+        else snprintf(val, sizeof val, "%d", settings_get(s));
+        n = app(o, n, cap, "%s{\"name\":\"%s\",\"label\":\"%s\",\"group\":\"%s\",\"type\":\"%s\",\"value\":%s,\"min\":%d,\"max\":%d,\"export\":%s,\"feature\":%s,\"unit\":\"%s\",\"choices\":[",
+                              i ? "," : "", s->name, s->label, s->group, s->type == S_BOOL ? "bool" : s->type == S_INT ? "int" : s->type == S_TEXT ? "text" : "choice",
+                              val, settings_min(s), settings_max(s), s->export_ ? "true" : "false", s->feature ? "true" : "false", s->unit ? s->unit : "");
         for (int c = 0; c < nc && n < cap - 200; c++) { jesc(v, sizeof v, names[c]); n = app(o, n, cap, "%s\"%s\"", c ? "," : "", v); }
         n = app(o, n, cap, "]}");
     }
@@ -583,7 +588,8 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     pthread_mutex_unlock(&core_lock);
     float t = diag_soc_temp(), cpu = diag_cpu();
     pthread_mutex_lock(&lk); int adb_wait = login.state == 1 && login.kind == W_ADB; pthread_mutex_unlock(&lk);
-    n = app(o, n, cap, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"diag\":{\"soc_temp\":", adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false");
+    { char sl[600]; logfwd_status_json(sl, sizeof sl); n = app(o, n, cap, "],\"syslog\":%s", sl); }      /* its own lock */
+    n = app(o, n, cap, ",\"adb\":{\"open\":%s,\"waiting\":%s},\"diag\":{\"soc_temp\":", adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false");
     n = isnan(t) ? app(o, n, cap, "null") : app(o, n, cap, "%.1f", t);
     n = app(o, n, cap, ",\"cpu\":");
     n = isnan(cpu) ? app(o, n, cap, "null") : app(o, n, cap, "%.0f", cpu);
@@ -1101,25 +1107,13 @@ static void wifi_api(int fd, struct req *r)
 
 #define LOG_SEND_MAX (2 << 20)      /* main.sh rotates at 1 MB, checked every 10 s: the tail of this much is plenty */
 
-static const char *log_path(void) { const char *e = getenv("HASSMIC_LOG"); return e ? e : "/data/local/hassmic/boot.log"; }
-
-/* The Sendspin pairing token ("SP:0" and base32, sendspin_pairing_token) blanked in place: it lets a server pair */
-static void log_redact(char *t, size_t n)
-{
-    for (size_t i = 0; i + 4 <= n; i++) {
-        if (memcmp(t + i, "SP:0", 4)) continue;
-        size_t j = i + 4;
-        while (j < n && (isupper((unsigned char)t[j]) || isdigit((unsigned char)t[j]))) t[j++] = '*';
-        i = j;
-    }
-}
 
 static void log_api(int fd, struct req *r)
 {
     char path[300]; int part; FILE *f; long size, from; char *t; size_t n;
     if (!signed_ok(r, 0)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
     if (sscanf(r->path, "/api/log/%d", &part) != 1 || part < 0 || part > 1) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
-    snprintf(path, sizeof path, part ? "%s.1" : "%s", log_path());
+    snprintf(path, sizeof path, part ? "%s.1" : "%s", logfwd_path());
     if (!(f = fopen(path, "r"))) { respond_s(fd, r, 200, "text/plain; charset=utf-8", NULL, "", 0); return; }    /* no rotated part yet */
     fseek(f, 0, SEEK_END); size = ftell(f);
     from = size > LOG_SEND_MAX ? size - LOG_SEND_MAX : 0;
@@ -1129,7 +1123,7 @@ static void log_api(int fd, struct req *r)
     fclose(f);
     size_t skip = 0;
     if (from) { char *nl = memchr(t, '\n', n); skip = nl ? (size_t)(nl - t) + 1 : 0; }       /* whole lines only */
-    log_redact(t + skip, n - skip);
+    logfwd_redact(t + skip, n - skip);
     respond_s(fd, r, 200, "text/plain; charset=utf-8", NULL, t + skip, n - skip);
     free(t);
 }
@@ -1236,6 +1230,21 @@ static void handle(int fd)
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         if (!r.body || r.blen != 5 || memcmp(r.body, "reset", 5)) respond_sjson(fd, &r, 400, "{\"error\":\"say reset\"}");
         else { respond_sjson(fd, &r, 200, "{\"reset\":true}"); core_reset("settings page"); }
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/syslog/test")) {
+        /* a line into the log like any other: the server gets it the way it gets the rest (logfwd.c), or the page sees
+         * why not in the status that comes back with the next state */
+        char o[700], sl[600];
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        pthread_mutex_lock(&core_lock);
+        const struct setting *on = settings_find("syslog"), *srv = settings_find("syslog_server");
+        int ready = on && srv && settings_get(on) && settings_get_text(srv)[0];
+        pthread_mutex_unlock(&core_lock);
+        if (!ready) { respond_sjson(fd, &r, 409, "{\"error\":\"Turn on remote logging and enter a server first\"}"); free(r.body); return; }
+        fprintf(stderr, "syslog: test line from the settings page of %s\n", core_name);
+        logfwd_status_json(sl, sizeof sl);
+        snprintf(o, sizeof o, "{\"syslog\":%s}", sl);
+        respond_sjson(fd, &r, 200, o);
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/reboot")) {      /* body "reboot", as reset's */
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }

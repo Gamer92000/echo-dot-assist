@@ -1059,7 +1059,8 @@ satellite)
     [ "$D" != "$SYS" ] && chmod 755 $D
     {
         rotate_log
-        echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s, $(cat $D/VERSION 2>/dev/null || echo factory) from $D"
+        # the boot's id at the end: hassmic's syslog sender (logfwd.c) puts "boot+" times of this boot in real time, and only those
+        echo "== satellite start, uptime $(cut -d. -f1 /proc/uptime)s, $(cat $D/VERSION 2>/dev/null || echo factory) from $D, boot $(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
         sh $D/lockdown.sh services        # stops the cloud daemons that were not up yet at "on boot"; the firewall is the watcher's
         # wake word sets under a short name (echo-de) from installs by hand: the name scripts/artifacts.sh gives them
         [ -f $D/artifact-install.sh ] && READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" sh $D/artifact-install.sh migrate /data/local/hassmic/state /data/local/hassmic

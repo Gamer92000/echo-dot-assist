@@ -1044,6 +1044,28 @@ once more. WPA2 and open networks only; a WPA2/WPA3 mixed network joins as WPA2 
 **Log** (System): `boot.log` with a filter, the older part, and a download for bug reports ([reading it](../README.md#when-something-is-wrong)). The Sendspin token is
 blanked; the rest travels unencrypted, like the whole page.
 
+**Remote logging** (System): the same lines to a syslog server on your network, as they are written, beside
+`boot.log`. Server: an address or a host name (`.local` names by mDNS), with `:port` where it is not 514
+(`192.168.1.10`, `logs.lan:5514`, `[fd00::1]:514`). UDP (any server, but fire and forget: a missing server is noticed only when its computer answers "port closed"; one that
+silently drops the packets, a firewall for instance, looks reachable and the lines sent meanwhile are lost) or TCP
+(nothing is lost, the Echo notices an absent server at once; the server must accept TCP; RFC 6587 octet counting). RFC 5424 (the default: the line's time in UTC to the millisecond)
+or RFC 3164 (the Echo's own time zone, no year). Host: the Echo's node name (`echo-dot-3-5695c4`), app: `hassmic`,
+facility daemon; severity: warning for a line with "error", "failed", "cannot" or "refused" (red in the page's log
+viewer too), notice for the system's `==` lines, info for the rest. Over TCP, or over UDP where the server answers "port closed", the lines
+wait in `boot.log` while the server or the network is away and follow once it is back, at 500 a second at most, with their own times; a restart of hassmic or
+the Echo carries on where it was (at most the last minute is sent twice). Lines from before the clock came from Home
+Assistant (`boot+<seconds>`) get their real time once the Echo has it; those of an earlier boot keep `boot+` in the
+text and no time of their own. Only if `boot.log` is rotated twice while the server is away (about 2 MB of log) are lines
+lost, and the log says so. "Send test message" writes a line into the log, which then goes the way every line does;
+the row above it says whether the server is reached and how much is still waiting. The Sendspin token is blanked; the
+rest travels unencrypted.
+
+**The log in Home Assistant**: hassmic answers ESPHome's log subscription. In Home Assistant, Settings → Devices &
+services → ESPHome → the Echo → Configure → "Subscribe to logs from the device": the Echo's lines from then on appear in
+Home Assistant's log (`[W][hassmic]: …` for failures as warnings, the rest as info). `aioesphomeapi-logs <echo-ip>` and
+the ESPHome dashboard read it the same way. Only lines written while subscribed; a client that does not keep up misses
+lines rather than slowing the Echo, and is told how many.
+
 **Restart** (System; also a button in Home Assistant): reboots the Echo, as pulling the plug does, and nothing is
 forgotten. For an Echo that is stuck while its page still answers; back in about a minute.
 

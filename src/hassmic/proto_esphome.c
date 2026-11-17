@@ -68,6 +68,8 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/uio.h>
@@ -79,6 +81,7 @@
 #include "arb.h"
 #include "dropin.h"
 #include "settings.h"
+#include "logfwd.h"
 #include "ble.h"
 #include "ring.h"
 #include "ringlive.h"
@@ -116,6 +119,7 @@ enum {
     BLE_RAW_ADV = 93, BLE_SCANNER_STATE = 126, BLE_SCANNER_SET_MODE = 127, LIST_EVENT = 107, EVENT = 108,
     LIST_UPDATE = 116, UPDATE_STATE, UPDATE_COMMAND, LIST_BUTTON = 61, BUTTON_COMMAND = 62,
     LIST_LIGHT = 15, LIGHT_STATE = 24, LIGHT_COMMAND = 32,
+    SUBSCRIBE_LOGS = 28, LOGS_RESP = 29,
     DEVICE_CAPS_REQ = 149, DEVICE_CAPS_RESP, SENDSPIN_TOKEN_REQ = 159, SENDSPIN_TOKEN_RESP,
 };
 /* The API version we speak: 1.15 is the first with DeviceCapabilitiesRequest, which Home Assistant asks on every
@@ -166,8 +170,8 @@ enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3
  * client that subscribed to the voice assistant (first come, first served - also like the firmware). */
 #define MAX_CLIENTS 4
 /* lock held.  enc: Noise frames (tx is used under the lock, rx by the client's reader only); keyed: with the device key;
- * actions: runs Home Assistant actions for us */
-static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions, ha_states; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
+ * actions: runs Home Assistant actions for us; logs: the log level it subscribed to (0 none), log_drop: lines it missed */
+static struct { int fd, states, enc, keyed, ble, ble_free, ble_user, actions, ha_states, logs, log_drop; struct noise_cs tx, rx; } clients[MAX_CLIENTS] = { { .fd = -1 }, { .fd = -1 }, { .fd = -1 }, { .fd = -1 } };
 static int va_fd = -1;                  /* lock held: voice assistant subscriber */
 static __thread int reply_fd = -1;      /* the client whose request this thread is handling */
 static int cancelled;                   /* lock held: the user cancelled the run; its events are dropped.  2: a new run
@@ -1781,6 +1785,55 @@ static void ask_time(int c, int force)
     send_msg(GET_TIME_REQ, NULL);
 }
 
+/* ---------------------------------------------------------------- logs (logfwd.c: boot.log as it is written) */
+
+enum { LOG_WARN = 2, LOG_INFO = 3, LOG_CONFIG = 4 };   /* ESPHome's levels */
+
+/* Room for need more bytes without blocking: send_to() writes with core_lock held and a 5 s send timeout, and a client
+ * that subscribes to logs and stops reading (a debugging client paused) must not hold up the satellite.  The kernel
+ * blocks a writer once what it holds (about twice the bytes: its buffers' own size) passes SO_SNDBUF */
+static int log_room(int fd, size_t need)
+{
+    int q = 0, sb = 0; socklen_t l = sizeof sb;
+    if (ioctl(fd, SIOCOUTQ, &q) < 0 || getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sb, &l) < 0) return 0;
+    return (size_t)q * 2 + 2 * need + 4096 <= (size_t)sb;
+}
+
+/* lock held.  One message as ESPHome's own look: "[W][hassmic]: text", which its dashboard and Home Assistant read */
+static void log_send(int c, int level, const char *msg, size_t n)
+{
+    char t[2048]; PB(b, sizeof t + 16);
+    int h = snprintf(t, sizeof t, "[%c][hassmic]: ", level <= LOG_WARN ? 'W' : level == LOG_CONFIG ? 'C' : 'I');
+    if (n > sizeof t - (size_t)h) n = sizeof t - (size_t)h;
+    memcpy(t + h, msg, n);
+    if (!log_room(clients[c].fd, (size_t)h + n + 32)) { clients[c].log_drop++; return; }
+    if (clients[c].log_drop) {                          /* say what it missed, once there is room again */
+        char d[96]; PB(db, 128); int k = snprintf(d, sizeof d, "[W][hassmic]: %d log lines dropped: the link did not take them", clients[c].log_drop);
+        pb_uint(&db, 1, LOG_WARN); pb_bytes(&db, 3, d, (size_t)k); send_to(clients[c].fd, LOGS_RESP, &db);
+        clients[c].log_drop = 0;
+    }
+    pb_uint(&b, 1, (uint64_t)level); pb_bytes(&b, 3, t, (size_t)h + n);
+    send_to(clients[c].fd, LOGS_RESP, &b);
+}
+
+/* lock held: "dump_config", what ESPHome's firmware answers with its components' settings */
+static void log_config(int c)
+{
+    char t[700], st[600];
+    int n = snprintf(t, sizeof t, "hassmic %s (%s), %s, %s (node %s)", VERSION, BUILD, board.model, core_name, node_name());
+    log_send(c, LOG_CONFIG, t, (size_t)n);
+    logfwd_status_json(st, sizeof st);
+    n = snprintf(t, sizeof t, "syslog: %s", st);
+    log_send(c, LOG_CONFIG, t, (size_t)n);
+}
+
+/* lock held (proto->log, from main.c): a line of boot.log to every client that asked for its level */
+static void log_line(int level, const char *msg, size_t n)
+{
+    int lv = level == LOGFWD_WARN ? LOG_WARN : LOG_INFO;
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].logs >= lv) log_send(i, lv, msg, n);
+}
+
 static int handle(unsigned type, const unsigned char *p, size_t len)
 {
     const unsigned char *end = p + len; struct pbf f; int keep = 1;
@@ -1809,6 +1862,15 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
         send_mp_state(); send_all_settings(); send_token_state(c); send_web_state();
         ask_time(c, 1); break;
+    case SUBSCRIBE_LOGS: {                              /* level 0 (NONE) ends it, as aioesphomeapi's docs say */
+        int lv = 0, dump = 0;
+        while (pb_next(&p, end, &f)) { if (f.field == 1 && !f.wire) lv = f.v > 7 ? 7 : (int)f.v; else if (f.field == 2 && !f.wire) dump = f.v != 0; }
+        if (c < 0) break;
+        if (!clients[c].logs != !lv) logfwd_live(lv ? 1 : -1);
+        clients[c].logs = lv; clients[c].log_drop = 0;
+        if (dump && lv) log_config(c);                  /* asked for, whatever the level: as ESPHome's own */
+        break;
+    }
     case GET_TIME_RESP: {
         uint32_t epoch = 0; char tz[128] = "";
         while (pb_next(&p, end, &f)) {
@@ -2008,7 +2070,7 @@ static void serve(int fd)
                                        adbwifi_start(adb_changed); wifimotion_start(wifi_changed); update_start(update_changed);
                                        if (core_bluetooth(-1)) { ble_start(&ble_handler); a2dp_start(bt_changed); } } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
-    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; if (!n) core_link(1, 0); }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = clients[slot].logs = clients[slot].log_drop = 0; if (!n) core_link(1, 0); }
     int keyed = have_key;
     pthread_mutex_unlock(&core_lock);
     if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); free(pt); return; }
@@ -2047,7 +2109,8 @@ static void serve(int fd)
 done:
 
     pthread_mutex_lock(&core_lock);
-    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; n = 0;
+    if (clients[slot].logs) logfwd_live(-1);
+    clients[slot].fd = -1; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = clients[slot].logs = clients[slot].log_drop = 0; n = 0;
     ble_update();
     if (!ble_subscribers()) {                           /* nobody left to use them */
         int users = 0;
@@ -2141,4 +2204,4 @@ static void dropin_result(const char *result)   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut, log_line };

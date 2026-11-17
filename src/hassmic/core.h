@@ -52,6 +52,8 @@ struct proto {
                                                  * the server goes on with what it has (stop() aborts the run) */
     void (*reply_cut)(void);                    /* may be NULL: the reply playing is cut (flush) while the run goes on: stop
                                                  * fetching it now, not at the server's next chunk */
+    void (*log)(int level, const char *msg, size_t n);  /* may be NULL: a line just written to boot.log (logfwd.h: its
+                                                 * level, the text after its time), for clients that asked for logs */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 

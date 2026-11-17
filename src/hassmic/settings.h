@@ -5,12 +5,12 @@
 #define SETTINGS_H
 #include <stddef.h>
 
-enum stype { S_BOOL, S_INT, S_CHOICE };
+enum stype { S_BOOL, S_INT, S_CHOICE, S_TEXT };
 
 struct setting {
     const char *name, *label, *group, *unit;
     enum stype type;
-    int min, max;                       /* S_INT */
+    int min, max;                       /* S_INT; S_TEXT: max its length */
     int export_;                        /* goes into an export: not tied to this one Echo (its name, keys, pairings) */
     int feature;                        /* its entities are in Home Assistant only while it is on */
 };
@@ -45,6 +45,7 @@ int  settings_min(const struct setting *s);                     /* S_INT: s->min
 int  settings_max(const struct setting *s);                     /* S_INT: s->max, or less where this Echo has less */
 int  settings_get(const struct setting *s);                     /* S_CHOICE: the index */
 int  settings_choices(const struct setting *s, const char *const **names);   /* S_CHOICE: count and the value names */
+const char *settings_get_text(const struct setting *s);         /* S_TEXT's value ("" for any other) */
 /* Set from text ("on"/"off"/"1"/"0", a number, a choice's value name).  0 ok, -1 unknown or out of range: err says why.
  * Saves, and has the protocol show it (proto->settings_changed). */
 int  settings_set(const char *name, const char *value, char *err, size_t errsz);

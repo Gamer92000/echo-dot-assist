@@ -20,6 +20,7 @@
 #include "spkgain.h"
 #include "update.h"
 #include "wifimotion.h"
+#include "logfwd.h"
 #include "statefile.h"
 #include "buttons.h"
 #include <ctype.h>
@@ -36,6 +37,8 @@ static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeass
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
+static const char *const syslog_protos[2] = { "udp", "tcp" };
+static const char *const syslog_formats[2] = { "rfc5424", "rfc3164" };
 /* the aligner's languages first (tools/wakealign/build.sh; main.c speech_locale), then those it has no model for yet,
  * which it takes the wake word's own for, as before: the screen's date speaks them all (src/ui/lang.c).  Stored by
  * name, so the list may grow */
@@ -85,6 +88,11 @@ static int backlight_auto, backlight_level = 47, backlight_adjust;
  * Off by default: dashboard colours stay constant.  The requested value is saved separately from root's readback,
  * so a failed Binder call cannot look successful or change the preference when another setting is saved */
 static int adaptive_colour, loading_preset;
+/* The log to a syslog server (logfwd.c): off by default, the log stays on the Echo.  RFC 5424 over UDP: what rsyslog,
+ * syslog-ng, Graylog, Vector and Loki's receivers take without a word of their own configuration */
+static int syslog_on, syslog_tcp, syslog_3164;
+static char syslog_server[LOGFWD_SERVER_MAX + 1];
+static void syslog_apply(void) { logfwd_syslog(syslog_on, syslog_server, syslog_tcp, syslog_3164); }
 
 static const char *state_dir(void) { const char *e = getenv("HASSMIC_STATE"); return e ? e : "/data/local/hassmic/state"; }
 static void path(char *out, size_t cap, const char *file) { snprintf(out, cap, "%s/%s", state_dir(), file); }
@@ -104,7 +112,7 @@ static int colour_actual(void)
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, UPDATES, HTTPS_VERIFY, SYSLOG, SYSLOG_SERVER, SYSLOG_PROTO, SYSLOG_FORMAT, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -215,6 +223,11 @@ static const struct setting table[NSET] = {
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* https.c keeps it: media from a Home Assistant that serves HTTPS itself (issue #30) */
     [HTTPS_VERIFY] = { "https_verify", "Check HTTPS certificates", "System", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* logfwd.c: boot.log to a syslog server beside the file.  Exported: one log server for the house */
+    [SYSLOG]      = { "syslog", "Send log to a syslog server", "System", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SYSLOG_SERVER] = { "syslog_server", "Syslog server", "System", NULL, S_TEXT, 0, LOGFWD_SERVER_MAX, 1, 0 },
+    [SYSLOG_PROTO] = { "syslog_protocol", "Syslog transport", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
+    [SYSLOG_FORMAT] = { "syslog_format", "Syslog message format", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* stored on/off; root's lockdown.sh lets Kiosk Satellite's uid out unless state/config says off (screen models) */
     [KIOSK_NET]   = { "kiosk_internet", "Kiosk Satellite internet access", "System", NULL, S_BOOL, 0, 1, 0, 0 },
     /* stored on/off: root's main.sh grants or revokes the app's RECORD_AUDIO (screen models; not exported:
@@ -332,6 +345,8 @@ int settings_choices(const struct setting *s, const char *const **names)
     case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
     case MUSIC_PAGE: *names = music_pages; return 3;
+    case SYSLOG_PROTO: *names = syslog_protos; return 2;
+    case SYSLOG_FORMAT: *names = syslog_formats; return 2;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
     default: *names = NULL; return 0;
@@ -382,6 +397,9 @@ int settings_get(const struct setting *s)
     case WIFI_SENS: return wifimotion_sensitivity(-1);
     case UPDATES: return update_channel(-1);
     case HTTPS_VERIFY: return https_verify(-1);
+    case SYSLOG: return syslog_on;
+    case SYSLOG_PROTO: return syslog_tcp;
+    case SYSLOG_FORMAT: return syslog_3164;
     case ARB: return arb_arbitrate(-1);
     case ARB_MODE: return arb_mode(-1);
     case ARB_AUTO: return arb_window_auto(-1);
@@ -463,6 +481,9 @@ static void put(enum id i, int v)
     case WIFI_SENS: wifimotion_sensitivity(v); break;
     case UPDATES: update_channel(v); break;
     case HTTPS_VERIFY: https_verify(v); break;
+    case SYSLOG: syslog_on = v; syslog_apply(); break;
+    case SYSLOG_PROTO: syslog_tcp = v; syslog_apply(); break;
+    case SYSLOG_FORMAT: syslog_3164 = v; syslog_apply(); break;
     case ARB: arb_arbitrate(v); break;                          /* arb.c keeps it */
     case ARB_MODE: arb_mode(v); break;
     case ARB_AUTO: arb_window_auto(v); break;
@@ -512,11 +533,25 @@ static void put(enum id i, int v)
     }
 }
 
-/* text to a value: -1 if it is not one of s's */
+const char *settings_get_text(const struct setting *s) { return s - table == SYSLOG_SERVER ? syslog_server : ""; }
+
+/* S_TEXT's setter, as put() for the others */
+static void put_text(enum id i, const char *v)
+{
+    if (i == SYSLOG_SERVER) { snprintf(syslog_server, sizeof syslog_server, "%s", v); syslog_apply(); }
+}
+
+/* text to a value: -1 if it is not one of s's (S_TEXT: *out 0 when it takes it) */
 static int parse(const struct setting *s, const char *v, int *out)
 {
     const char *const *names; char *end; long n;
     switch (s->type) {
+    case S_TEXT: {
+        char host[LOGFWD_SERVER_MAX + 1]; int port;
+        *out = 0;
+        if (strlen(v) > (size_t)s->max) return -1;
+        return s - table == SYSLOG_SERVER ? logfwd_server_parse(v, host, sizeof host, &port) : -1;
+    }
     case S_BOOL:
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true")) { *out = 1; return 0; }
         if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false")) { *out = 0; return 0; }
@@ -539,6 +574,7 @@ static size_t format(const struct setting *s, char *out, size_t cap)
     const char *const *names; int v = settings_get(s);
     if (s->type == S_BOOL) return (size_t)snprintf(out, cap, "%s", v ? "on" : "off");
     if (s->type == S_CHOICE) { int k = settings_choices(s, &names); return (size_t)snprintf(out, cap, "%s", v >= 0 && v < k ? names[v] : ""); }
+    if (s->type == S_TEXT) return (size_t)snprintf(out, cap, "%s", settings_get_text(s));
     return (size_t)snprintf(out, cap, "%d", v);
 }
 
@@ -553,7 +589,7 @@ static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS
 
 void settings_save(void)
 {
-    char p[300], v[48]; struct statefile s;
+    char p[300], v[LOGFWD_SERVER_MAX + 1]; struct statefile s;
     path(p, sizeof p, "config");
     if (statefile_open(&s, p, 0666)) { fprintf(stderr, "settings: cannot write %s.tmp\n", p); return; }
     fprintf(s.f, "# hassmic settings: name=value; the web page and Home Assistant write it\n");
@@ -643,7 +679,9 @@ void settings_load(void)
             /* the ring's level only counts with auto off: ledcontroller started its own auto at boot.  The band's
              * height main.c set before the band started (settings_peek: a preset not applied yet included); the
              * config's here would flip it to that and back to the preset's */
-            if (i == LED_AUTO) led_auto = x; else if (i == LED_LEVEL) led_level = x; else if (i != BAND) put(i, x);
+            if (i == LED_AUTO) led_auto = x; else if (i == LED_LEVEL) led_level = x;
+            else if (table[i].type == S_TEXT) put_text(i, v);
+            else if (i != BAND) put(i, x);
         }
     }
     fclose(f);
@@ -716,9 +754,14 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
     const struct setting *s = settings_find(name); int v;
     if (!s && loading_preset && colour_supported() && !strcmp(name, table[SCR_COLOUR].name)) s = &table[SCR_COLOUR];
     if (!s) { snprintf(err, errsz, "%s: no such setting on this Echo", name); return -1; }
+    if (parse(s, value, &v) && s - table == SYSLOG_SERVER) {
+        snprintf(err, errsz, "%s: \"%.*s\" is not a valid host name or IP address (add :port if it isn't %d)", name, LOGFWD_SERVER_MAX, value, LOGFWD_PORT);
+        return -1;
+    }
     if (parse(s, value, &v)) { snprintf(err, errsz, "%s: \"%s\" is not a value it takes", name, value); return -1; }
     int was = settings_get(s);
-    put((enum id)(s - table), v);
+    if (s->type == S_TEXT) put_text((enum id)(s - table), value);
+    else put((enum id)(s - table), v);
     if (s - table == WAKE_ENGINE && settings_get(s) != v) { snprintf(err, errsz, "%s: %s", name, core_wake_refused()); return -1; }
     if (s - table == TIMER_SOUND && settings_get(s) != v) {
         snprintf(err, errsz, "%s: %s", name, v == TIMER_SOUND_CUSTOM ? "no sound of its own on this Echo: upload one on its page first"
@@ -737,7 +780,7 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
 
 size_t settings_text(char *out, size_t cap, int export_only)
 {
-    size_t n = 0; char v[48];
+    size_t n = 0; char v[LOGFWD_SERVER_MAX + 1];
     index_table();
     for (int i = 0; i < nids && n < cap; i++) {
         const struct setting *s = &table[ids[i]];

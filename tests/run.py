@@ -53,6 +53,7 @@ TESTS = [
     ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
     ("web", [PY, "tests/fake_web.py"]),
+    ("syslog", [PY, "tests/fake_syslog.py"]),
     ("update", [PY, "tests/fake_ha_update.py"]),
     ("wakesound", [PY, "tests/fake_ha_wakesound.py"]),
     ("remote-bargein", [PY, "tests/fake_ha_remote_bargein.py"]),
