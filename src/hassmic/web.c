@@ -67,6 +67,7 @@
 #include "../third_party/monocypher.h"
 #include <ctype.h>
 #include "mass.h"
+#include "lyrion.h"
 #include "screen.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -605,6 +606,7 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
         n = app(o, n, cap, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
     n = app(o, n, cap, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
+    n = app(o, n, cap, ",\"lyrion\":"); n += lyrion_status_json(o + n, cap - n);
     if (screen_present()) {                                       /* the screen: its home app, its music pages */
         n = app(o, n, cap, ",\"screen\":"); n += screen_status_json(o + n, cap - n);
         n = app(o, n, cap, ",\"mass\":"); n += mass_status_json(o + n, cap - n);
@@ -1062,6 +1064,22 @@ static void mass_api(int fd, struct req *r)
     respond_s(fd, r, rc ? 500 : 200, "application/json", NULL, o, n);
 }
 
+/* /api/lyrion  POST "<host[:port] hex | ->": Lyrion Music Server's address for the player (lyrion.c), "-" finds it on
+ * the network.  Signed; the answer is what /api/state has under "lyrion" */
+static void lyrion_api(int fd, struct req *r)
+{
+    char hh[400] = "", host[200] = ""; int hl = 0;
+    if (!signed_ok(r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (strcmp(r->method, "POST")) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    if (sscanf(r->body, "%399s", hh) != 1 || (strcmp(hh, "-") && (hl = unhex_any((uint8_t *)host, sizeof host - 1, hh)) < 0)) {
+        respond_sjson(fd, r, 400, "{\"error\":\"bad request\"}"); return;
+    }
+    host[hl] = 0;
+    if (lyrion_set_server(host)) { respond_sjson(fd, r, 400, "{\"error\":\"Give a host name or an IP address, with :port for a web port other than 9000\"}"); return; }
+    char o[1024]; size_t n = lyrion_status_json(o, sizeof o);
+    respond_s(fd, r, 200, "application/json", NULL, o, n);
+}
+
 /* /api/wifi        GET   the network now, the last scan, the last switch (wifi.c)
  * /api/wifi/scan   POST  root scans                                              -> {"id"}
  * /api/wifi/join   POST  "<ssid hex> <password sealed, hex | ->": root switches,  -> {"id"}
@@ -1269,6 +1287,7 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
     else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);
+    else if (!strcmp(r.path, "/api/lyrion")) lyrion_api(fd, &r);
     else if (!strcmp(r.path, "/api/screen")) screen_api(fd, &r);
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound/", 11)) sound_api(fd, &r);

@@ -55,7 +55,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Only the nearest Echo answers           | ✅ decided in the cloud        | ✅ decided on your network                            |
 | Timers, announcements, follow-ups       | ✅                             | ✅                                                    |
 | Drop In between Echos                   | ✅ through Amazon              | ✅ [on your network](docs/GUIDE.md#drop-in)           |
-| Multiroom music                         | Amazon speaker groups          | [Music Assistant](docs/GUIDE.md#music) (Sendspin)     |
+| Multiroom music                         | Amazon speaker groups          | [Music Assistant](docs/GUIDE.md#music) (Sendspin), or [Lyrion Music Server](docs/GUIDE.md#lyrion-music-server) |
 | Bluetooth speaker for your phone        | SBC                            | SBC, AAC, aptX, aptX HD                               |
 | Plays on a Bluetooth speaker            | ✅                             | ✅                                                    |
 | Bluetooth proxy for Home Assistant      | –                              | ✅                                                    |
