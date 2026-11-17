@@ -8,8 +8,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   "Language you speak", an Echo in a Brazilian time zone on Automatic took Portuguese, which the Echo has no sounds
   for, and Amazon's Brazilian "Alexa" none either: it went by the level only. Languages without sounds now count as
   not said, whether picked on the page or from the time zone, so the Echo does as before they were listed: in Brazil
-  English sounds, as across the Americas. The date on the Echo Show's screen stays in the zone's language. Thanks to
-  giggio (issue #176).
+  English sounds. The date on the Echo Show's screen stays in the zone's language. An Echo Show in Mexico, Central
+  America or Saskatchewan no longer writes its date in Portuguese. Thanks to giggio (issue #176).
 
 ## 2026-11-17 — Drop In sounds as Alexa's did
 

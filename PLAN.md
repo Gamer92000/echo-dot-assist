@@ -3637,7 +3637,14 @@ Run in this order. Each step says what it proves.
       `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
       (Brazil's before "America/"); the aligner (no MFA model for them in build.sh) skips them, the page's as the
       zone's (`speech_locale` `aligner`, `align_lang`), and goes on as before they were listed: issue #176, Brazil's
-      zones had lost "America/"'s en-US, and alexa-pt-BR (own locale pt-BR, no `.wa` either) every aligner.  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
+      zones had lost "America/"'s en-US, and alexa-pt-BR (own locale pt-BR, no `.wa` either) was left with no
+      aligner.  Zones match by whole name or folder, not prefix: "America/Bahia" caught America/Bahia_Banderas,
+      `tz_lookup`'s pick for CST6 (Mexico, Central America, Saskatchewan).  Open: `state/timezone` is `tz_lookup`'s first zone with HA's POSIX rule
+      unless the set one has it (CET: Europe/Amsterdam, EET: Europe/Athens, GMT/BST: Europe/Guernsey, `<-03>3`: America/Araguaina for
+      Argentina, Uruguay, Paraguay, the Guianas; `<-04>4`: America/Boa_Vista for Venezuela, Bolivia, Guyana; WET:
+      Europe/Lisbon for the Canaries), so Automatic gives the zone's language only where the Echo's own zone
+      survived: the Show's date in Dutch for most of Central Europe, Portuguese in those of South America.  The
+      aligner skips nl and pt, so it goes as before 7f0caba there.  The page's help still names the zones' languages.  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
       `ui_date`: day and month names per language (bionic's strftime is C locale only), English for none or one not
       known, Japanese left out (no kanji in Roboto).  `bt_langs` has ro.  `core_transcript` compares folded (`fold`:
       U+00C0..U+017F and ș ț without marks, lower case, no hyphens): "Închide" was never lower-cased, and the old

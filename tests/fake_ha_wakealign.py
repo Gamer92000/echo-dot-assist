@@ -14,7 +14,7 @@ window, so each wake word (SIGUSR1: ended 128 ms before the capture thread sees 
 by the capture's clock: the log's "request from capture sample" at its boot+ time (CLOCK_BOOTTIME), 16 samples a ms.
 The German aligner puts its end 70 ms before MFA's for every Pryon's end from 400 ms before the word's to 200 ms after
 it (the English ones, in a German voice, find none near), so the end and the adaptation are checked in German."""
-import asyncio, glob, os, re, tempfile, time
+import asyncio, glob, os, re, shutil, tempfile, time
 import numpy as np
 from aioesphomeapi import VoiceAssistantEventType as Ev
 from esphome_common import ROOT, LEAD_IN, check, until, sync, home_assistant, run
@@ -61,16 +61,18 @@ async def main(e):
     await request(e, ha, r"by the level|the word ends")         # where the capture is: the next ones timed by it
     check(re.search(r"aligned by \S*/wakealign/alexa-en-US\.wa \(\? spoken\)", e.log()),
           "no language, no time zone: the firmware's alexa by alexa-en-US.wa")
-    # a language the aligner has no model for counts as unsaid, the zone's as the page's: Brazil falls into "America/"
-    # as before Portuguese was listed (issue #176; each a file other than the one before, or the log says nothing)
-    for z, lang, want in (("Europe/London", "en", r"alexa-en-GB\.wa \(en-GB spoken\)"),
-                          ("America/Sao_Paulo", "auto", r"alexa-en-US\.wa \(en-US spoken\)"),
-                          ("Europe/London", "en", r"alexa-en-GB\.wa \(en-GB spoken\)"),
-                          ("America/Sao_Paulo", "pt", r"alexa-en-US\.wa \(en-US spoken\)"),
-                          ("Europe/London", "de", r"alexa-de-DE\.wa \(de-DE spoken\)")):
+    # a language the aligner has no model for counts as unsaid, the zone's as the page's (issue #176): Amazon's
+    # Brazilian "Alexa" (its own pt-BR has no file either) in Brazil by "America/"'s en-US, as before Portuguese was
+    # listed; each a file other than the one before, or the log says nothing
+    for word, z, lang, want in ((None, "Europe/London", "en", r"alexa aligned by \S*/alexa-en-GB\.wa \(en-GB spoken\)"),
+                                ("alexa-pt-BR", "America/Sao_Paulo", "auto", r"alexa-pt-BR aligned by \S*/alexa-en-US\.wa \(en-US spoken\)"),
+                                (None, "Europe/London", "en", r"alexa-pt-BR aligned by \S*/alexa-en-GB\.wa \(en-GB spoken\)"),
+                                (None, "America/Sao_Paulo", "pt", r"alexa-pt-BR aligned by \S*/alexa-en-US\.wa \(en-US spoken\)"),
+                                ("alexa", "Europe/London", "de", r"alexa aligned by \S*/alexa-de-DE\.wa \(de-DE spoken\)")):
+        if word: await ha.cli.set_voice_assistant_configuration([word]); await sync(ha.cli)
         zone(e, z); e.page.set(speech_language=lang)
         lines, secs = await request(e, ha, want)
-        check(secs is not None, f"time zone {z}, language {lang}: {want.replace(chr(92), '')}")
+        check(secs is not None, f"time zone {z}, language {lang}: {want.replace(chr(92), '').replace('S*/', '')}")
     lines, secs = await request(e, ha, r"the word ends|by the level")
     check(re.search(r"the word ends [-+]\d+ ms from Pryon's end \(aligned in \d+ ms\)", lines) and secs is not None,
           f"the request from the word's end as aligned, after the silence: {re.findall(r'wake: (?:the word|the aligner).*', lines)}")
@@ -110,8 +112,12 @@ async def main(e):
 
 if __name__ == "__main__":
     cap = tempfile.mktemp(suffix=".raw"); capture(cap)
+    models = tempfile.mkdtemp(); os.makedirs(os.path.join(models, "alexa-pt-BR"))       # Amazon's Brazilian "Alexa" installed
+    open(os.path.join(models, "alexa-pt-BR", "pryon.manifest"), "w").close()
     try: run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_CAP": cap, "HASSMIC_WAKEALIGN": os.path.join(ROOT, "wakealign"),
-                                                                   "HASSMIC_FAKE_KEYWORD": "1", "HASSMIC_FAKE_ALIGN_SLOW": SLOW}, log=True)
+                                                                   "HASSMIC_FAKE_KEYWORD": "1", "HASSMIC_FAKE_ALIGN_SLOW": SLOW,
+                                                                   "HASSMIC_MODELS": models}, log=True)
     finally:
         for f in (cap, SLOW):
             if os.path.exists(f): os.unlink(f)
+        shutil.rmtree(models, ignore_errors=True)

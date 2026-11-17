@@ -1722,7 +1722,8 @@ static void wake_align_load(int slot, const struct core_wake_word *w)
     wakealign_free(wake_align[slot]); wake_align[slot] = NULL;
 }
 
-/* The aligner has models for loc's language (tools/wakealign/build.sh) */
+/* The aligner has models for loc's language (tools/wakealign/build.sh LOCALES: a language added there goes here too,
+ * or its files are never picked) */
 static int align_lang(const char *loc)
 {
     static const char *const have[] = { "de", "en", "fr", "es", "ja" };
@@ -1743,7 +1744,9 @@ static void speech_locale(const struct core_wake_word *w, int aligner, char *out
     static const char *const langs[][2] = { { "de", "de-DE" }, { "en", "en-US" }, { "fr", "fr-FR" }, { "es", "es-ES" }, { "ja", "ja-JP" },
         { "it", "it-IT" }, { "pt", "pt-PT" }, { "nl", "nl-NL" }, { "sv", "sv-SE" }, { "da", "da-DK" }, { "nb", "nb-NO" },
         { "fi", "fi-FI" }, { "pl", "pl-PL" }, { "ro", "ro-RO" } };
-    static const char *const zones[][2] = {      /* by prefix, the first that matches */
+    /* the first that matches: a zone by its whole name, or every zone in a folder ("America/"); never by prefix
+     * (7f0caba's "America/Bahia" caught Mexico's America/Bahia_Banderas, tz.c's pick for CST6: a Portuguese date) */
+    static const char *const zones[][2] = {
         { "Europe/Berlin", "de-DE" }, { "Europe/Vienna", "de-DE" }, { "Europe/Zurich", "de-DE" }, { "Europe/Busingen", "de-DE" },
         { "Europe/Vaduz", "de-DE" }, { "Europe/Paris", "fr-FR" }, { "Europe/Monaco", "fr-FR" }, { "Europe/Madrid", "es-ES" },
         { "Atlantic/Canary", "es-ES" }, { "America/Mexico_City", "es-MX" }, { "America/Monterrey", "es-MX" }, { "America/Tijuana", "es-MX" },
@@ -1765,8 +1768,10 @@ static void speech_locale(const struct core_wake_word *w, int aligner, char *out
     out[0] = 0;
     state_file(p, sizeof p, "timezone");
     if ((f = fopen(p, "r"))) { if (fscanf(f, "%95s", zone) != 1) zone[0] = 0; fclose(f); }
-    for (size_t i = 0; zone[0] && !zl && i < sizeof zones / sizeof *zones; i++)
-        if (!strncmp(zone, zones[i][0], strlen(zones[i][0])) && (!aligner || align_lang(zones[i][1]))) zl = zones[i][1];
+    for (size_t i = 0; zone[0] && !zl && i < sizeof zones / sizeof *zones; i++) {
+        size_t zn = strlen(zones[i][0]);
+        if (!strncmp(zone, zones[i][0], zn) && (zones[i][0][zn - 1] == '/' || !zone[zn]) && (!aligner || align_lang(zones[i][1]))) zl = zones[i][1];
+    }
     /* a language picked: the zone's variety of it where the zone has one (English in London: en-GB's dictionary) */
     if (ln && zl && !strncmp(zl, l, ln) && zl[ln] == '-') { snprintf(out, cap, "%s", zl); return; }
     for (size_t i = 0; ln && i < sizeof langs / sizeof *langs; i++)

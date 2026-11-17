@@ -183,6 +183,13 @@ async def main(e):
     check(await until(lambda: last("lg ") == "lg ro", 5), f"Romanian: told {last('lg ')}")
     e.page.set(speech_language="auto")
     check(await until(lambda: last("lg ") != "lg ro", 5), f"automatic again: told {last('lg ')}")
+    # the zone by its whole name or folder, never by prefix: America/Bahia is Brazil's, America/Bahia_Banderas (tz.c's
+    # pick for Mexico's CST6) only "America/"'s (the zone file written as clock.c leaves it, the setting set to tell it)
+    for z, want in (("America/Bahia", "lg pt"), ("America/Bahia_Banderas", "lg en")):
+        open(os.path.join(e.state, "timezone"), "w").write(z + "\n")
+        e.page.set(speech_language="ro"); await until(lambda: last("lg ") == "lg ro", 5)
+        e.page.set(speech_language="auto")
+        check(await until(lambda: last("lg ") == want, 5), f"time zone {z}: {want} (told {last('lg ')})")
 
 
 run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT),
