@@ -197,16 +197,26 @@ int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len
 void      bt_close(void) { s_close(&bt); }
 int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, "HASSMIC_VOIP", "/tmp/hassmic_voip.raw", rate, channels); }
 long long voip_queued_us(void) { return s_queued_us(&voip); }
-int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
+/* $HASSMIC_VOIP_FAIL: while that file exists the Voip stream fails, as a mixer stream can (call.c drops micHfp then) */
+int       voip_write(const void *data, size_t len)
+{
+    const char *fail = getenv("HASSMIC_VOIP_FAIL");
+    if (fail && access(fail, F_OK) == 0) return -1;
+    return s_write(&voip, data, len);
+}
 void      voip_close(void) { s_close(&voip); }
 
-/* A call's microphone: $HASSMIC_CALL_CAP looped at real-time speed, as the capture (none without it, as on Android) */
+/* A call's microphone: $HASSMIC_CALL_CAP looped at real-time speed, as the capture (none without it, as on Android).
+ * While the file $HASSMIC_CALL_CAP_STALL exists, each read waits 1.5 s and brings nothing, as the mixer's does when the
+ * stream stalls (audio_mixer.c) */
 static FILE *callcap; static short callblock[800];
 int  callmic_present(void) { return getenv("HASSMIC_CALL_CAP") != NULL; }
 int  callmic_open(void) { const char *p = getenv("HASSMIC_CALL_CAP"); if (!callcap && p) callcap = fopen(p, "rb"); return callcap ? 0 : -1; }
 int  callmic_read(const void **data)
 {
     if (!callcap) return -1;
+    const char *stall = getenv("HASSMIC_CALL_CAP_STALL");
+    if (stall && access(stall, F_OK) == 0) { usleep(1500000); return 0; }
     size_t n = fread(callblock, 2, 800, callcap);
     if (n < 800) { memset(callblock + n, 0, (800 - n) * 2); rewind(callcap); }
     usleep(50000);
@@ -254,7 +264,7 @@ void vol_write(enum vol which, int v)
 
 /* No front end on the PC.  HASSMIC_FAKE_AFE=<ms>:<voice>:<ambient> plays one that answers the wake word's energies
  * after <ms> (an Echo Show 5's took 240 and 380 ms, issue #77), for SIGUSR1's wake word too (wake_none.c) */
-void afe_listening(int on) { (void)on; }
+void afe_listening(int on) { if (getenv("HASSMIC_FAKE_LISTEN")) fprintf(stderr, "front end: listening %d\n", on); }
 void afe_stream_stopped(void) { if (getenv("HASSMIC_FAKE_AFE")) fprintf(stderr, "front end: stream stopped\n"); }
 int  afe_arbitration(long ts, long te, char *json, size_t n)
 {

@@ -31,6 +31,8 @@ const struct board board = {
     /* TI TAS2770 amplifier at 2-0044: AMP_LEVEL (reg 0x03), 0..20 = 11..21 dBV full-scale output in 0.5 dB steps.  16 from
      * boot on, never written by the firmware (2026-10-11, spkgain.c): +2 dB is all it has */
     .speaker_gain = "DAC Playback Volume",
+    /* micHfp in call mode: speech -20 dBFS against -43 in its pauses, where micAsr had -48/-65 (2026-11-13) */
+    .call_mic = 1,
     .speaker_gain_stock = 16,
     .speaker_gain_steps = 2,
 };

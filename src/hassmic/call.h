@@ -11,8 +11,11 @@
 #define CALL_FRAME 320                  /* 20 ms at CALL_RATE: what the mic side encodes, the playout plays */
 #define CALL_PKT   400                  /* the largest encoded frame (Opus at 24 kbit/s: ~60 bytes) */
 
-/* The media of a connected call: send gets each encoded frame and its number (from 0), from the capture thread, no
- * lock of call.c's held.  The generation it returns ties call_rx and call_end to this media */
+/* The media of a connected call: send gets each encoded frame and its number (from 0), in order, from the capture
+ * thread or call.c's call microphone thread, with call.c's sending lock held (tx_mu, one sender at a time) and none of
+ * its others: send may take the owner's lock but must not call into call.c.  The core's lock is taken under tx_mu too
+ * (core_dropin_listen), so the owner never calls call_mic holding its own lock or core_lock.  The generation it
+ * returns ties call_rx and call_end to this media */
 int  call_begin(void (*send)(const uint8_t *frame, size_t len, uint32_t seq, void *arg), void *arg);
 void call_end(int gen);
 /* A frame that came in: seq numbers the frames from the far end in order */
@@ -36,6 +39,5 @@ int  call_start(void);                  /* the playout and call microphone threa
  * call pipeline (the default), 0 the assistant's, -1 reads; a call running keeps the one it started with until it ends,
  * except that switching to the assistant's takes effect at once */
 int  call_mic_source(int set);
-int  call_mic_hfp(void);                /* the call running now sends the call pipeline's */
 
 #endif

@@ -23,6 +23,9 @@
  * micAsr had -48 and -65, 2026-11-13, donut: the same take on all streams), so micgain stays out of it and the gate
  * here only ducks by SUPPRESS_HFP_DB.  It cuts most of what is over 4 kHz.  callmic_thread reads it and call_mic
  * (micAsr) stands aside meanwhile; no stream, or one that stops delivering: back to micAsr for the rest of the call.
+ * The mixer's read waits up to 1.5 s for a block that does not come (audio_mixer.c), and the far end ends a call after
+ * LOST_MS (dropin.c, 5 s) without audio, so the capture thread does not wait for callmic_thread to notice: micHfp
+ * HFP_STALE_MS without a block, and micAsr goes out until micHfp is back or given up (3 empty reads).
  */
 #include "call.h"
 #include "audio.h"
@@ -92,6 +95,9 @@ enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXIT
  * less; its AGC puts speech near -20 dBFS and the room near -43 (2026-11-13) */
 #define SUPPRESS_HFP_DB -12.0f
 #define NEAR_MIN_HFP_DB -45.0f
+/* micHfp silent this long (its blocks come every 50 ms): micAsr fills in.  A gap this long plays as the far end's loss
+ * concealment (PLC_FRAMES) and a moment of silence; the two sources swapping restarts the encoder and the gate */
+#define HFP_STALE_MS 250
 
 static pthread_mutex_t ml = PTHREAD_MUTEX_INITIALIZER;   /* everything below; taken after dropin.c's */
 static pthread_cond_t live_cond = PTHREAD_COND_INITIALIZER;
@@ -112,6 +118,7 @@ static float far_floor;                 /* the quietest the far end has played l
 static atomic_int use_hfp = 1;          /* call_mic_source */
 static atomic_int src_hfp;              /* the call running now sends micHfp (callmic_thread), not micAsr */
 static atomic_int voip_gen = -1;        /* the call whose Voip stream is open (call mode on): the playout's */
+static atomic_llong hfp_at;             /* when callmic_thread last had a block of micHfp (now_ms) */
 
 static long long now_ms(void)
 {
@@ -134,7 +141,6 @@ int call_mic_source(int set)
     return atomic_load(&use_hfp);
 }
 
-int call_mic_hfp(void) { return atomic_load(&src_hfp); }
 
 static int call_gen_is(int gen)
 {
@@ -258,7 +264,11 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
     uint32_t seq = m.tx_seq++;
     pthread_mutex_unlock(&ml);
 
-    if (enc_gen != gen || enc_hfp != hfp) {         /* a new call or another source: a fresh encoder, gain and suppressor */
+    /* A new call or another source (micHfp stalled or back, call_mic switched): a fresh encoder, gain and suppressor.
+     * Listening mode is the front end's, told to the core: kept across a swap, or a side that talked when micHfp stalled
+     * left it on for the rest of the call (the core hears of "off" only on a change of want) */
+    if (enc_gen != gen) { near_until = 0; listen_on = 0; listen_at = 0; }    /* the core cleared it as the last call ended */
+    if (enc_gen != gen || enc_hfp != hfp) {
         int e = 0;
         if (enc) { opus_encoder_destroy(enc); enc = NULL; }
         enc = opus_encoder_create(RATE, 1, OPUS_APPLICATION_VOIP, &e);
@@ -267,7 +277,7 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
         opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
         opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
         micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, 1);
-        es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = hfp ? -40 : -70; near_until = 0; listen_on = 0; listen_at = 0;
+        es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = hfp ? -40 : -70;
         enc_gen = gen; enc_hfp = hfp;
     }
     int16_t f[FRAME];
@@ -311,7 +321,8 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
 
 void call_mic(const int16_t *pcm, size_t n, int own)
 {
-    if (!atomic_load(&running) || !call_live() || atomic_load(&src_hfp)) { mic_n = 0; return; }
+    if (!atomic_load(&running) || !call_live()) { mic_n = 0; return; }
+    if (atomic_load(&src_hfp) && now_ms() - atomic_load(&hfp_at) < HFP_STALE_MS) { mic_n = 0; return; }   /* micHfp goes out */
     while (n) {
         size_t k = FRAME - mic_n < n ? FRAME - mic_n : n;
         memcpy(mic + mic_n, pcm, k * 2); mic_n += k; pcm += k; n -= k;
@@ -344,15 +355,25 @@ static void *callmic_thread(void *arg)
             fprintf(stderr, "call: no call microphone (%s), the assistant's for this call\n", atomic_load(&voip_gen) != gen ? "no call mode" : "micHfp does not open");
             wait_call_over(gen); continue;
         }
+        atomic_store(&hfp_at, now_ms());           /* before src_hfp: the capture thread stands aside from now on */
         atomic_store(&src_hfp, 1);
         fprintf(stderr, "call: the call pipeline's microphone (micHfp)\n");
         int16_t f[FRAME]; size_t fn = 0; int empty = 0; const char *why = NULL;
         while (call_gen_is(gen)) {
             if (!atomic_load(&use_hfp)) { why = "switched to the assistant's"; break; }
+            /* the Voip stream failed (the playout closed it): call mode off, micHfp the bare mic again on donut, and
+             * without our gain.  The playout also clears voip_gen as a call ends: not this, then */
+            if (atomic_load(&voip_gen) != gen) { if (call_gen_is(gen)) why = "call mode ended"; break; }
             const void *d; int n = callmic_read(&d);
             if (n < 0) { why = "micHfp is gone"; break; }
-            if (n == 0) { if (++empty >= 3) { why = "micHfp delivers nothing"; break; } continue; }
-            empty = 0;
+            if (n == 0) {                               /* the capture thread's micAsr has filled in since HFP_STALE_MS */
+                if (!empty) fprintf(stderr, "call: micHfp stalls, the assistant's microphone meanwhile\n");
+                fn = 0;
+                if (++empty >= 3) { why = "micHfp delivers nothing"; break; }
+                continue;
+            }
+            if (empty) fprintf(stderr, "call: micHfp is back\n");
+            empty = 0; atomic_store(&hfp_at, now_ms());
             const int16_t *p = d; int own = core_own_sound(), muted = core_muted();
             for (int i = 0; i < n / 2; i++) { f[fn++] = muted ? 0 : p[i]; if (fn == FRAME) { send_frame(f, own, 1); fn = 0; } }
         }
@@ -407,12 +428,17 @@ static void *playout(void *arg)
             missing = len ? 0 : missing + 1;
             if (got != FRAME) memset(pcm, 0, sizeof pcm);
             long long q = open ? voip_queued_us() : 0;
-            if (open && voip_write(pcm, sizeof pcm) < 0) { fprintf(stderr, "call: the Voip stream failed\n"); voip_close(); open = 0; }
+            if (open && voip_write(pcm, sizeof pcm) < 0) {
+                fprintf(stderr, "call: the Voip stream failed\n"); voip_close(); open = 0;
+                atomic_store(&voip_gen, -1);            /* call mode off: callmic_thread leaves micHfp */
+            }
             if (!open) usleep(20000);
             pthread_mutex_lock(&ml);
-            float pdb = level_db(pcm, FRAME);
+            /* what plays, for the echo suppressor: nothing once the Voip stream failed, or the far end's voice, no longer
+             * heard here, would duck this side's mic for the rest of the call */
+            float pdb = open ? level_db(pcm, FRAME) : -100;
             ref[ref_n++ % REF_N].t = now_ms() + q / 1000; ref[(ref_n - 1) % REF_N].db = pdb;   /* when it plays */
-            far_floor = pdb < far_floor ? (pdb > -90 ? pdb : -90) : far_floor + 0.03f;
+            if (open) far_floor = pdb < far_floor ? (pdb > -90 ? pdb : -90) : far_floor + 0.03f;
             pthread_mutex_unlock(&ml);
         }
         if (skipped || stretched) fprintf(stderr, "call: playout skipped ahead %d times (more than %d ms waiting), waited %d times for a late frame\n",

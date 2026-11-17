@@ -1,6 +1,7 @@
 /* Device backend: capture micAsr and play on the TTS stream through libmixerAPI, so the AEC reference stays intact. */
 #include "resample.h"
 #include "audio.h"
+#include "board.h"
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -163,9 +164,10 @@ long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
 
-/* micHfp: a stream of its own beside micAsr (the mixer gives each type to one client) */
+/* micHfp: a stream of its own beside micAsr (the mixer gives each type to one client).  Only where it was measured to
+ * carry the call path (board.call_mic): the Echo 2 and the Echo Dot 5 have one in AFE.cfg, untried */
 static MixerHandle callmic; static int callmic_held;
-int callmic_present(void) { return 1; }
+int callmic_present(void) { return board.call_mic; }
 int callmic_open(void)
 {
     if (callmic) return 0;

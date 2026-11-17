@@ -62,6 +62,11 @@ class Echo:
                                                                 # the Echo's, so a stall of the PC under load does not end a call
         if speech or cap: self.env["HASSMIC_CAP"] = cap or SPEECH
         if call_cap: self.env["HASSMIC_CALL_CAP"] = call_cap
+        self.stall = os.path.join(self.state, "callmic.stall")  # exists: the call microphone stalls (audio_file.c)
+        self.env["HASSMIC_CALL_CAP_STALL"] = self.stall
+        self.voip_fail = os.path.join(self.state, "voip.fail")  # exists: the Voip stream fails (audio_file.c)
+        self.env["HASSMIC_VOIP_FAIL"] = self.voip_fail
+        self.env["HASSMIC_FAKE_LISTEN"] = "1"                   # "front end: listening 0|1" in the log
         self.trace = os.path.join(self.state, "dropin.trace")
         self.env["HASSMIC_DROPIN_TRACE"] = self.trace
         self.states, self.starts, self.seq = {}, [], []     # seq: (object id, state or event type) as they came
@@ -328,6 +333,77 @@ async def main():
         a.cli.switch_command(a.by["mute"].key, False)
         a.press("end_drop_in")
         check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
+        await asyncio.sleep(0.3)
+
+        # 7c. the call microphone stalls mid-call (each read waits 1.5 s for nothing, as the mixer's does): the hall's
+        # micAsr fills in at once, so the kitchen hears no gap that would end the call (lost after 4 s here).  A short
+        # stall: micHfp back, and the listening mode its tone had switched on goes off while micAsr's silence fills in
+        # (a swap of sources once left it on for good).  A long one: after three empty reads the hall gives micHfp up
+        # for the rest of the call
+        b.page.set(call_mic="call")
+        mark = len(b.text())
+        await a.call(b.node)
+        check(await until(lambda: a.dropin()[0] == "connected", 3), "connected")
+        a.cli.switch_command(a.by["mute"].key, True)    # the kitchen silent: the hall's tone is never taken for its echo
+        check(await until(lambda: "call: the call pipeline's microphone (micHfp)" in b.text()[mark:], 3), "  the hall sends micHfp")
+        check(await until(lambda: "front end: listening 1" in b.text()[mark:], 2), "  the hall's tone switches its listening mode on")
+        await asyncio.sleep(0.5)
+        smark = len(b.text())
+        open(b.stall, "w").close()
+        check(await until(lambda: "call: micHfp stalls, the assistant's microphone meanwhile" in b.text()[smark:], 3), "  a short stall: micAsr meanwhile")
+        check(await until(lambda: "front end: listening 0" in b.text()[smark:], 2.5), "  micAsr's silence: listening mode off")
+        os.remove(b.stall)                              # before the third empty read
+        check(await until(lambda: "call: micHfp is back" in b.text()[smark:], 3), "  micHfp is back")
+        check(await until(lambda: "front end: listening 1" in b.text()[smark:].split("call: micHfp is back")[-1], 2), "  and its tone switches listening mode on again")
+        await asyncio.sleep(2.5)
+        x = np.fromfile(a.voip, np.int16).astype(float)[-16000 * 2:]
+        t = np.arange(len(x)) / 16000; tdb = 20 * np.log10(abs((x * np.exp(-2j * np.pi * 700 * t)).sum()) * 2 / len(x) / np.sqrt(2) / 32768 + 1e-12)
+        check(-30 < tdb < -14 and "delivers nothing" not in b.text()[smark:], f"  the kitchen plays the hall's 700 Hz again ({tdb:.1f} dB)")
+        lmark = len(b.text())
+        open(b.stall, "w").close()
+        check(await until(lambda: "call: micHfp stalls, the assistant's microphone meanwhile" in b.text()[lmark:], 3), "  the hall's micHfp stalls: micAsr meanwhile")
+        check(await until(lambda: "call: micHfp delivers nothing: the assistant's microphone for the rest of this call" in b.text()[lmark:], 7),
+              "  three empty reads: micAsr for the rest of the call")
+        await asyncio.sleep(1)
+        os.remove(b.stall)
+        check(a.dropin()[0] == "connected", f"  the call goes on ({a.dropin()})")
+        amark = len(a.text())
+        a.press("end_drop_in")
+        check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
+        m = await until(lambda: "longest gap" in a.text()[amark:], 2) and re.search(r"longest gap (\d+) ms", a.text()[amark:])
+        check(bool(m) and int(m.group(1)) < 800, f"  the kitchen's longest wait for the hall's audio: {m.group(1) if m else '?'} ms (a read alone waits 1500)")
+        await asyncio.sleep(0.3)
+
+        # 7d. the hall's Voip stream fails mid-call: call mode is off, so micHfp goes for the rest of the call.  A normal
+        # hang-up afterwards says nothing of call mode
+        a.cli.switch_command(a.by["mute"].key, False)   # muted, the kitchen could not call
+        await asyncio.sleep(0.3)
+        mark = len(b.text())
+        await a.call(b.node)
+        check(await until(lambda: a.dropin()[0] == "connected", 3), "connected")
+        check(await until(lambda: "call: the call pipeline's microphone (micHfp)" in b.text()[mark:], 3), "  the hall sends micHfp")
+        open(b.voip_fail, "w").close()
+        check(await until(lambda: "call: the Voip stream failed" in b.text()[mark:], 2), "  the hall's Voip stream fails")
+        check(await until(lambda: "call: call mode ended: the assistant's microphone for the rest of this call" in b.text()[mark:], 2),
+              "  micHfp given up: the assistant's microphone")
+        # the kitchen talks on (unmuted), but nothing plays at the hall any more: its echo suppressor hears no far end
+        await asyncio.sleep(1)                          # what played before the failure: out of the echo window (600 ms)
+        n0 = sum(1 for _ in open(b.trace))
+        await asyncio.sleep(2)
+        far = [float(l.split()[2]) for l in list(open(b.trace))[n0:] if len(l.split()) >= 10]
+        check(len(far) > 50 and max(far) <= -99, f"  the hall's echo suppressor: no far end after the failure (loudest {max(far) if far else '?'} dB, {len(far)} frames)")
+        os.remove(b.voip_fail)
+        a.press("end_drop_in")
+        check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
+        mark = len(b.text())
+        await a.call(b.node)
+        check(await until(lambda: a.dropin()[0] == "connected", 3), "connected")
+        check(await until(lambda: "call: the call pipeline's microphone (micHfp)" in b.text()[mark:], 3), "  the next call sends micHfp again")
+        a.press("end_drop_in")
+        check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
+        await asyncio.sleep(1)
+        check("call mode ended" not in b.text()[mark:], "  a normal hang-up: no word of call mode ending")
+        b.page.set(call_mic="assistant")
         await asyncio.sleep(0.3)
 
         # 8. the hall vanishes mid-call: the kitchen notices

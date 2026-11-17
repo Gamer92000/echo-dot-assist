@@ -413,14 +413,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Call audio** (`call.c`, `call.h`): Drop In's audio moved out of `dropin.c` unchanged: the mic gate, echo
   suppressor and gain (`call_mic` from the capture thread, the owner's `send` per encoded 20 ms frame), the jitter
   buffer and playout on the Voip stream (`call_rx`, its thread), Opus 16 kHz; `call_begin`/`call_end` the media's
-  generation. Lock order: `dl` before call.c's `ml`.
-  Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`): on the Dots' mixer
-  `micHfp` is Amazon's "Voice" pipeline (AFE.cfg: VAEC, RES, NR, CNG, AGC -22 dBFS, Tx EQ, limiter; no beamformer)
-  once the front end is in call mode (a Voip stream open), the bare mic otherwise. `callmic_thread` opens it after the
-  playout has the Voip stream (`voip_gen`), sends it without micgain and with the gate's duck at -12 dB
-  (`SUPPRESS_HFP_DB`, `NEAR_MIN_HFP_DB`), `call_mic` (micAsr) stands aside (`src_hfp`); no stream or 3 empty reads:
-  micAsr for the rest of the call. Record streams' format getters answer -1 (mixcap.c): never refuse on that.
-  `audio_file.c`: `HASSMIC_CALL_CAP` (tests: the hall's 700 Hz tone in `fake_ha_dropin.py`); Android: none.
+  generation. Lock order: call.c's `tx_mu` (one sender at a time; `send` and `core_dropin_listen` run under it) before
+  `core_lock` and `dl`, `dl` before call.c's `ml`; nobody calls `call_mic` holding `core_lock` or `dl`.
+  Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`: the mixer's where
+  `board.call_mic`, measured: donut, biscuit; radar and cannoli have the path in AFE.cfg, unmeasured): `micHfp` is
+  Amazon's "Voice" pipeline (AFE.cfg: (V)AEC, RES, NR, CNG, AGC -22/-23 dBFS, Tx EQ, limiter; no beamformer) once the
+  front end is in call mode (a Voip stream open; on biscuit opening micHfp alone starts it). `callmic_thread` opens it
+  after the playout has the Voip stream (`voip_gen`), sends it without micgain and with the gate's duck at -12 dB
+  (`SUPPRESS_HFP_DB`, `NEAR_MIN_HFP_DB`), `call_mic` (micAsr) stands aside (`src_hfp`) while micHfp came within
+  `HFP_STALE_MS` (`hfp_at`; the mixer's read waits 1.5 s for a block that does not come, the far end gives up after
+  5 s); no stream, 3 empty reads or the Voip stream failed (`voip_gen` -1): micAsr for the rest of the call. Record
+  streams' format getters answer -1 (mixcap.c): never refuse on that. `audio_file.c`: `HASSMIC_CALL_CAP` (tests: the
+  hall's 700 Hz tone in `fake_ha_dropin.py`), `HASSMIC_CALL_CAP_STALL` (a file: while it exists reads stall, 7c),
+  `HASSMIC_VOIP_FAIL` (a file: the Voip stream fails, 7d), `HASSMIC_FAKE_LISTEN` (the front end's listening mode
+  logged); Android: none.  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
+  (`listen_on`, `near_until`): reset, the core never heard "off" and kept the front end listening for the call.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs

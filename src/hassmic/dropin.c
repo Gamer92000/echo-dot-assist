@@ -385,7 +385,8 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
 
 /* ---------------------------------------------------------------- audio */
 
-/* call.c's capture side: a frame encoded, sealed and sent (no lock of call.c's held) */
+/* call.c's sending side: a frame encoded, sealed and sent, from the capture thread or call.c's call microphone thread
+ * with call.c's tx_mu held (call.h); takes dl, never calls into call.c */
 static void send_audio(const uint8_t *frame, size_t len, uint32_t seq, void *arg)
 {
     uint8_t pkt[17 + MAXPKT + 16], nonce[24] = { 0 }, key[32]; struct sockaddr_in to;
