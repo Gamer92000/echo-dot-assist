@@ -303,7 +303,8 @@ is off.
 Like stock Alexa the Echo announces connections: a chime and "Connected to <name>" / "Disconnected from <name>". The
 words are spoken by Home Assistant, which only does that after you tick "Allow the device to perform Home Assistant
 actions" in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). The
-"Bluetooth announcements" setting on the settings page turns chime and words off. The words are English until you pick
+"Bluetooth announcements" setting on the settings page turns the words off, the sounds "Bluetooth connected" and
+"Bluetooth disconnected" (Sounds) turn the chimes off. The words are English until you pick
 another language there (Deutsch, Français, Español, Italiano, Português, Nederlands, Svenska, Dansk, Norsk,
 Suomi, Polski, Română): set it to the language of the Echo's assistant in Home Assistant, whose voice speaks them. Home
 Assistant does not tell the Echo which language its assistant uses, so this cannot follow it by itself.

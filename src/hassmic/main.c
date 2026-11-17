@@ -871,16 +871,32 @@ int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_
  * Bluetooth proxy; the stock stack may keep the radio. */
 int core_bluetooth(int set) { if (set >= 0) use_bt = set; return use_bt; }
 
-/* Stock Alexa played its Bluetooth chime and said "Now connected to <name>".  The chime is on the image; there is no TTS
- * engine on it, so the words come from Home Assistant (the protocol asks it) and only while it is connected. */
+/* Stock Alexa played its Bluetooth chime and said "Now connected to <name>".  Two settings, as two things: the chime is
+ * a sound of its own (sound_bluetooth_on/_off, which sound_request honours), the words are "Bluetooth announcements".
+ * There is no TTS engine on the image, so the words come from Home Assistant (the protocol asks it) and only while it is
+ * connected. */
 void core_bt_device(const char *name, int on)
 {
     pthread_mutex_lock(&core_lock);
-    if (use_bt_announce) {
-        sound_request(on ? SND_BT_ON : SND_BT_OFF);
-        if (connected && proto->bt_device) proto->bt_device(name, on);
-    }
+    sound_request(on ? SND_BT_ON : SND_BT_OFF);
+    if (use_bt_announce && connected && proto->bt_device) proto->bt_device(name, on);
     pthread_mutex_unlock(&core_lock);
+}
+
+/* PC tests: HASSMIC_FAKE_PHONE names a file holding "connect <name>" or "disconnect <name>", the phone a2dp.c would tell
+ * of; taken once (the file is removed), at volume_led_thread's pace.  Without it (every Echo) nothing but a pointer test */
+static void fake_phone(void)
+{
+    static const char *path; static int init;
+    if (!init) { init = 1; path = getenv("HASSMIC_FAKE_PHONE"); }
+    if (!path) return;
+    char line[128]; FILE *f = fopen(path, "r");
+    if (!f) return;
+    int ok = fgets(line, sizeof line, f) != NULL;
+    fclose(f); unlink(path);
+    line[strcspn(line, "\r\n")] = 0;
+    if (ok && !strncmp(line, "connect ", 8)) core_bt_device(line + 8, 1);
+    else if (ok && !strncmp(line, "disconnect ", 11)) core_bt_device(line + 11, 0);
 }
 
 /* While the Echo is discoverable the ring runs Amazon's blue device search chaser: `scone-setup` (stock's
@@ -3391,6 +3407,7 @@ static void *volume_led_thread(void *arg)
         at = atomic_load(&identify_until);
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
         ring_tick();
+        fake_phone();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
         if (tick % 5 == 2) live_names_check();
         usleep(200000);

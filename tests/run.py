@@ -34,6 +34,7 @@ TESTS = [
     ("arb-ringstop", [PY, "tests/fake_ha_arbitration_ringstop.py"]),
     ("stop-word", [PY, "tests/fake_ha_stop_word.py"]),
     ("esphome-features", [PY, "tests/fake_ha_esphome_features.py"]),
+    ("bt-chime", [PY, "tests/fake_ha_bt_chime.py"]),
     ("esphome-address", [PY, "tests/fake_ha_esphome_address.py"]),
     ("esphome", [PY, "tests/fake_ha_esphome.py"]),
     ("esphome-buttons", [PY, "tests/fake_ha_esphome_buttons.py"]),
