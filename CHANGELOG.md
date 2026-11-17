@@ -2,6 +2,19 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — The Echo as a Lyrion Music Server player
+
+- **New: the Echo can be a player of Lyrion Music Server (formerly Logitech Media Server, Squeezebox), off by
+  default.** Switch on "Lyrion Music Server player" on the settings page (Music & Bluetooth) and the Echo shows up in
+  Lyrion's list of players under its own name, as Squeezelite does: Lyrion plays to it, groups it with your other
+  Squeezebox players, which then play in step with it, and Home Assistant's Squeezebox integration sees it like any
+  other player. Lyrion is found on the network by itself; where it is not (another subnet, a Docker container), give
+  its address in the same card. Lyrion's volume and the Echo's are one, both ways; the action button pauses and
+  resumes, "<wake word>, stop" pauses, and two or three presses skip. FLAC, MP3 and WAV play as they are, everything
+  else Lyrion converts. Music Assistant (Sendspin) is not affected; whichever starts last plays. Tried on an Echo Dot 2
+  with Lyrion 9.1.1 (internet radio, FLAC from the library, a group with another Squeezebox player, volume, the action
+  button, "stop"), and with Lyrion 9.2.0 on the PC build (the other formats).
+
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 
 - **Light ring live: the "Fire" effect no longer stutters on an Echo that has been running for a week or more (Echo

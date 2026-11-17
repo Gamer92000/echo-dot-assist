@@ -82,6 +82,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # strict: a deviation MA would only log fails; the output's clock
                                              # 500 ppm slow (HASSMIC_FAKE_MUSIC_PPM) and AudioTrack's burst at the
                                              # start (HASSMIC_FAKE_MUSIC_BURST_MS), followed without a phase step
+.venv/bin/python tests/fake_lms.py            # Lyrion Music Server's side of SlimProto (lyrion.c): discovery, HELO, name,
+                                             # volume both ways and fades, PCM/FLAC (from the middle too)/WAV, gapless,
+                                             # a group's start at a time, pause, button, stop, the page's address, off
 .venv/bin/python tests/fake_ha_stop_word.py   # "<wake word>, stop" between two Echos: the drop cancelled, stop_ends_listening
 .venv/bin/python tests/fake_ha_remote_bargein.py  # -w remote: a wake word run beside each reply, its wake word cuts the reply and
                                              # goes on as the request, "stop" after it, failed runs asked for again (3 at most)
@@ -390,6 +393,22 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`sbc.c`); the route is the backend's (`audio_a2dp_*` in `audio.h`): the Dots' mixer by LIPC `A2DPSourceConnect`
   plus btmanagerd's AIPC service uuid 0 via `libace_aipc.so` (`docs/re-a2dp-source.md`), Android's AudioPolicy by
   `media.audio_policy` setDeviceConnectionState (`docs/re-checkers.md`; players opened meanwhile wait for the move). While on the speaker the core has a volume of its own (`core_speaker`).
+- **Lyrion Music Server player** (`lyrion.c`, `lyrion.h`; setting `lyrion`, off; page card "Lyrion Music Server",
+  `POST /api/lyrion` the server's address into `state/lyrion.server`, else discovery): SlimProto as Squeezelite speaks
+  it (HELO device 12, `Model=squeezelite,AccuratePlayPoints=1,...,flc,pcm,mp3`, the Wi-Fi MAC as player id, the name
+  kept from Lyrion's setd in `state/lyrion.name`).  Discovery: "e"+TLVs to UDP 3483 from UDP 28933 (an answer to a
+  broadcast is no conntrack reply: the port must be in 16384-32767).  Threads: control (strm/audg/setd/serv/cont/codc
+  in; STAT/RESP/DSCO/META out, sent only from it: the others set `pend` bits), stream (one per strm 's': HTTP from
+  where Lyrion says, decoded by dr_flac (a stream from the middle of a file gets a STREAMINFO made of its first frame:
+  `flac_streaminfo`), minimp3 or raw/WAV/AIFF PCM into a queue of s16 stereo chunks tagged by track), output (autostart
+  / STMl and strm 'u' at a jiffies time, 'p'/'a' with a time as silence/skip, STMs at a track's first frame, STMu once
+  played out, elapsed as heard in STAT), JSON-RPC (`mixer volume`, `pause`, `playlist index` for the Echo's own
+  volume, button, "stop", skips: SlimProto has no way for a Squeezelite to send them).  Volume: audg back to Lyrion's
+  0..100 (`lyrion.h`, SqueezePlay's curve, the old-style gain telling 41/42, 44/45, 47/48 apart;
+  `tests/unit/lyrion_test.c`), the Echo's volume once it stayed 500 ms; until then (fades on pause/stop/skip, mute =
+  gain 0) a gain on this stream only (`fade_q16`).  A new link sends the Echo's volume first.  `MUSIC_LYRION` in
+  `core_music`.  `HASSMIC_LYRION_MAC`, `_DISCOVERY` (unicast), `_DISC_PORT`, `_TRACE` for tests and bug reports;
+  `tests/fake_lms.py` (a stand-in Lyrion; checked against a real Lyrion 9.2.0 by hand, PLAN.md).
 - **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
   `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
   unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream
@@ -758,7 +777,7 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
-must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
+must stay in that range (UDP 28932 Drop In too, UDP 28933 the Lyrion player's discovery answers). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
 `state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed, and with `kiosk_dlna` on its DLNA renderer (`kiosk_dlna` in `lockdown.sh`: the TCP port of the app's own setting `flutter.ks.dlna.port`, read through `runas` as its user, while its uid listens there per `/proc/net/tcp*`; UDP 1900 to 239.255.255.250 only while its uid alone holds 1900; issue #109); its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.

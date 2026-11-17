@@ -197,7 +197,7 @@ const PAGES = [
   { id: 'sound', title: 'Sound', icon: 'speaker', nav: 'This Echo', groups: ['Sound'], intro: 'How the Echo\'s speaker sounds. The equalizer is Amazon\'s own, applied to everything the Echo plays: replies, timers, music, Bluetooth.' },
   { id: 'lights', title: 'Lights', icon: 'sun', nav: 'This Echo', groups: ['Lights'], intro: 'The light ring. It shows listening, thinking, speaking, errors and mute whatever you set here.' },
   { id: 'screen', title: 'Screen', icon: 'screen', nav: 'This Echo', when: () => !!state.screen, intro: 'The Echo Show\'s screen: what it shows when nothing else does, and the band of light along its bottom. Pull down from the top edge of the screen for the drawer: home, the face, music, Do not disturb, screen off and the volume.' },
-  { id: 'media', title: 'Music & Bluetooth', icon: 'music', nav: 'This Echo', groups: ['Music', 'Bluetooth'], intro: 'Music Assistant plays on the Echo as a Sendspin player, phones play on it over Bluetooth, and it can play on a Bluetooth speaker itself.' },
+  { id: 'media', title: 'Music & Bluetooth', icon: 'music', nav: 'This Echo', groups: ['Music', 'Bluetooth'], intro: 'Music Assistant plays on the Echo as a Sendspin player, Lyrion Music Server as one of its players if you like, phones play on it over Bluetooth, and it can play on a Bluetooth speaker itself.' },
   { id: 'features', title: 'Features', icon: 'sparkle', nav: 'This Echo', groups: ['Features'], intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
   { id: 'echos', title: 'Echos', icon: 'net', nav: 'All your Echos', always: true, intro: 'Your Echos find each other on the local network and share a key, so nothing else on the network can join them or silence them. This runs with arbitration off too: it is also how this page finds your other Echos.' },
   { id: 'compare', title: 'Compare & copy', icon: 'table', nav: 'All your Echos', always: true, intro: 'Your Echos side by side. Click the value you want and it goes to the other Echos in that row, from whichever Echo has it; click another one to turn it around. Nothing changes until you press Apply.' },
@@ -268,6 +268,7 @@ const HELP = {
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
+  lyrion: { help: 'Makes the Echo a player of Lyrion Music Server (formerly Logitech Media Server), as Squeezelite is: it shows up in Lyrion\'s list of players under the Echo\'s name, plays what Lyrion plays to it, and can be grouped with your other Squeezebox players, which then play in step. Lyrion\'s volume is the Echo\'s volume, both ways; the action button pauses and resumes, "stop" pauses, and with multiple presses on, two and three presses skip. Lyrion is found on the network by itself; if it is not (another subnet, a container without broadcasts), give its address below. Off by default: nothing on the network sees the player until you switch it on.' },
   https_verify: { help: 'Whether the Echo checks the certificate of a Home Assistant that serves HTTPS itself. Home Assistant then gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
   kiosk_internet: { help: 'Kiosk Satellite may reach the internet while this is on: for its own updates and for web pages it shows (iframes, dashboards). Only that app gets out: the Echo\'s own voice satellite stays on your network except for what it needs, and Amazon\'s software stays cut off. Off: it reaches your network only, so it shows Home Assistant but cannot update itself or load outside pages. On by default. Takes effect within seconds.' },
   kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
@@ -460,6 +461,7 @@ const SUB = {
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
+  lyrion: 'The Echo as a player in Lyrion (Squeezebox)',
   https_verify: 'Checks the certificate of an HTTPS Home Assistant',
   kiosk_internet: 'Kiosk Satellite may reach the internet',
   kiosk_mic: 'Kiosk Satellite may use the microphone',
@@ -1222,9 +1224,10 @@ const PAGE_BUILD = {
   },
   media: (el, list) => {
     const parent = (k) => (HELP[k.name] || {}).parent, plain = list.filter((x) => !x.feature && !parent(x));
-    const music = plain.filter((x) => x.group === 'Music'), bt = plain.filter((x) => x.group !== 'Music');
+    const lms = plain.filter((x) => x.name === 'lyrion'), music = plain.filter((x) => x.group === 'Music' && !lms.includes(x)), bt = plain.filter((x) => x.group !== 'Music');
     const api = state.mass ? h('div', { id: 'mass' }, massRow()) : null;     // models with a screen: its music pages
-    el.append(flow([music.length || api ? titled('Music Assistant', api, music.map(settingRow)) : null, bt.length ? titled('Announcements', bt.map(settingRow)) : null,
+    const lmsCard = lms.length ? titled('Lyrion Music Server', lms.map(settingRow), state.lyrion ? h('div', { id: 'lyrion-server' }, lyrionRow()) : null) : null;
+    el.append(flow([music.length || api ? titled('Music Assistant', api, music.map(settingRow)) : null, lmsCard, bt.length ? titled('Announcements', bt.map(settingRow)) : null,
       ...list.filter((x) => x.feature).map((s) => featureCard(s, list.filter((k) => parent(k) === s.name)))].filter(Boolean)));
   },
   features: (el, list) => {
@@ -1402,6 +1405,7 @@ const FINDABLE = [
   ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
   ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
   ['Music Assistant on the screen', 'media', 'mass', 'token library browse queue speakers groups api', () => !!state.mass],
+  ['Lyrion Music Server', 'media', 'lyrion-server', 'lms squeezebox squeezelite logitech media server slimproto player address', () => !!state.lyrion],
   ['Home app', 'screen', 'home-app', 'kiosk satellite face launcher start screen'],
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
@@ -1540,7 +1544,7 @@ function render() {
   if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
-  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint();
+  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (lyrionCtl) lyrionCtl.paint(); if (homeCtl) homeCtl.paint();
   if (fresh) route();                   // after the controls: cards are placed by their height, with what is hidden hidden
 }
 
@@ -3075,6 +3079,53 @@ function massDialog() {
       h('p', { class: 'help' }, 'The token goes only there. An IP address is surer than a name: a name (a .local one above all) goes to whoever answers to it on the network.')));
   m.foot.append(h('button', { onclick: () => m.dlg.close() }, 'Cancel'), go);
   m.show(); tok.focus();
+}
+
+// ---------------------------------------------------------------- Lyrion Music Server (lyrion.c: the Echo as a Squeezebox player)
+
+let lyrionCtl = null;
+const LYRION_STATE = { off: 'Off', searching: 'Looking for Lyrion…', connecting: 'Connecting…', up: 'Connected', unreachable: 'Not reachable' };
+
+function lyrionRow() {
+  const now = h('div', { class: 'row-val' }), btns = h('span', { class: 'btns' });
+  lyrionCtl = { paint: () => {
+    const l = state.lyrion; if (!l) return;
+    const what = !l.on ? 'Off' : LYRION_STATE[l.state] || l.state;
+    const sub = !l.on ? [l.given ? `at ${l.given}` : 'found on the network']
+      : l.state === 'up' ? [l.name ? `${l.name}${l.version ? ' ' + l.version : ''}` : null, l.server, l.playing ? 'playing' : null]
+      : l.state === 'searching' ? ['no answer to its discovery yet: give its address if it stays so']
+      : [l.given || l.server];
+    now.replaceChildren(what, h('span', { class: 'row-val-sub' }, sub.filter(Boolean).join(' · ')));
+    btns.replaceChildren(...[h('button', { onclick: lyrionDialog }, icon('music'), l.given ? 'Change…' : 'Address…'),
+      l.given ? h('button', { onclick: () => lyrionSend('-') }, 'Find it') : null].filter(Boolean));
+  } };
+  lyrionCtl.paint();
+  return infoRow('Server', 'Where Lyrion Music Server runs',
+    `The Echo looks for Lyrion on the network the way Squeezebox players do (a broadcast to port 3483). If it finds none (Lyrion in another subnet, or in a container that does not see broadcasts), give its address: a host name or an IP address, and :port if its web page is not on port 9000. The player's ID in Lyrion is this Echo's Wi-Fi MAC address${state.lyrion && state.lyrion.id ? ` (${state.lyrion.id})` : ''}.`,
+    btns, null, now);
+}
+
+async function lyrionSend(host) {
+  try {
+    state.lyrion = (await echo.call('POST', '/api/lyrion', host === '-' ? '-' : hex(enc.encode(host)))).json();
+    if (lyrionCtl) lyrionCtl.paint();
+    toast(host === '-' ? 'Saved: the Echo looks for Lyrion on the network' : 'Saved: the Echo connects there now');
+  } catch (e) { toast(errText(e)); }
+}
+
+function lyrionDialog() {
+  const m = modal('Lyrion Music Server', 'lyrion'), l = state.lyrion || {};
+  const host = h('input', { id: 'lyrion-host', type: 'text', placeholder: l.server || '192.168.1.10 or lms.local:9000', value: l.given || '', autocomplete: 'off', spellcheck: 'false' });
+  const go = h('button', { class: 'primary', onclick: async () => {
+    const v = host.value.trim();
+    if (v && !/^[A-Za-z0-9.\-_:\[\]]+$/.test(v)) { toast('A host name or an IP address, with :port if need be'); host.focus(); return; }
+    go.disabled = true; await lyrionSend(v || '-'); m.dlg.close();
+  } }, 'Save');
+  m.body.append(
+    h('div', { class: 'field' }, h('label', { for: 'lyrion-host' }, 'Address'), host,
+      h('p', { class: 'help' }, 'Empty: found on the network. The port is Lyrion\'s web port (9000 unless you changed it); the player itself always talks to port 3483.')));
+  m.foot.append(h('button', { onclick: () => m.dlg.close() }, 'Cancel'), go);
+  m.show(); host.focus();
 }
 
 // ---------------------------------------------------------------- Wi-Fi (wifi.c; root's scripts/device/wifi.sh scans and switches)

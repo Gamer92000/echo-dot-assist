@@ -71,6 +71,7 @@
 #include "core.h"
 #include "ota.h"
 #include "sendspin.h"
+#include "lyrion.h"
 #include "sounds.h"
 #include "sound.h"
 #include "whisper.h"
@@ -960,7 +961,7 @@ void core_dropin(int st, const char *peer, int outgoing)
     /* A call is the newest source, as Alexa's paused what played: music's leftovers in micAsr would open the gate and go
      * to the other side.  No resume afterwards, as between the music sources; a phone without remote control was only
      * made silent and is heard again.  Outside core_lock: sendspin takes its own lock */
-    if (st == DROPIN_LIVE && was != DROPIN_LIVE) { if (core_sendspin_port) sendspin_pause(); a2dp_pause(); }
+    if (st == DROPIN_LIVE && was != DROPIN_LIVE) { if (core_sendspin_port) sendspin_pause(); a2dp_pause(); lyrion_pause(); }
     if (st == DROPIN_IDLE && was == DROPIN_LIVE) a2dp_unyield();
 }
 
@@ -1313,12 +1314,12 @@ static void trigger(int touch, uint64_t from)
     pthread_mutex_unlock(&core_lock);
 }
 
-/* "<wake word>, stop" to music (Sendspin, a phone over Bluetooth): paused as the action button does, which resumes it.
+/* "<wake word>, stop" to music (Sendspin, Lyrion, a phone over Bluetooth): paused as the action button does, which resumes it.
  * Lock held (Sendspin's adm_lock nests inside core_lock, as for the volume).  1 = something played and was paused */
 static long long music_stopped_ms;                  /* core_lock: when a stop last paused music */
 static int music_stop(void)
 {
-    int paused = (core_sendspin_port && sendspin_stop()) | a2dp_stop();     /* both: one may not have heard it yet */
+    int paused = (core_sendspin_port && sendspin_stop()) | lyrion_stop() | a2dp_stop();   /* all: one may not have heard it yet */
     if (paused) music_stopped_ms = mono_ms();
     return paused;
 }
@@ -2553,15 +2554,17 @@ int core_timer_stop_any(int set)
 
 /* The newest music source wins: a Bluetooth device that starts pauses the Sendspin group (the controller role; the
  * whole group, since a player cannot tell whether it has the group to itself), a Sendspin stream that starts pauses the
- * Bluetooth device (AVRCP; without it the device only goes unheard until Sendspin stops).  No automatic resume. */
+ * Bluetooth device (AVRCP; without it the device only goes unheard until Sendspin stops), and either pauses Lyrion's
+ * player (its JSON-RPC, lyrion.c), which pauses them in turn when it starts.  No automatic resume. */
 void core_music(int source, int on)
 {
     int was = on ? atomic_fetch_or(&music_on, source) : atomic_fetch_and(&music_on, ~source);
     if (on && !(was & source)) {
-        if (source == MUSIC_BLUETOOTH && was & MUSIC_SENDSPIN && core_sendspin_port) sendspin_pause();
-        if (source == MUSIC_SENDSPIN && was & MUSIC_BLUETOOTH) a2dp_pause();
+        if (source != MUSIC_SENDSPIN && was & MUSIC_SENDSPIN && core_sendspin_port) sendspin_pause();
+        if (source != MUSIC_BLUETOOTH && was & MUSIC_BLUETOOTH) a2dp_pause();
+        if (source != MUSIC_LYRION && was & MUSIC_LYRION) lyrion_pause();
     }
-    if (!on && source == MUSIC_SENDSPIN && was & MUSIC_SENDSPIN) a2dp_unyield();
+    if (!on && source != MUSIC_BLUETOOTH && was & source) a2dp_unyield();
     if (!was != !atomic_load(&music_on)) playback_hint();
 }
 
@@ -2731,12 +2734,12 @@ static void on_action(void)
     pthread_mutex_lock(&core_lock);
     int busy = state == LISTENING || state == THINKING;
     pthread_mutex_unlock(&core_lock);
-    if (!busy && (a2dp_button(0) || (core_sendspin_port && sendspin_button()) || a2dp_button(1))) return;
+    if (!busy && (a2dp_button(0) || (core_sendspin_port && sendspin_button()) || lyrion_button() || a2dp_button(1))) return;
     atomic_store(&trigger_pending, 2);                  /* 2: touch */
 }
 
 /* Action button pressed twice (next) or three times (previous), setting multi_press: skips on what plays (a phone over
- * Bluetooth first, then Sendspin, as the single press pauses); with nothing to skip, the assistant busy, a Drop In call
+ * Bluetooth first, then Sendspin, then Lyrion, as the single press pauses); with nothing to skip, the assistant busy, a Drop In call
  * or a login waiting for the button, it is a single press, as without the setting.  Home Assistant's "Button" event
  * hears whatever acts as a single press, never a skip */
 static void on_multi(int n)
@@ -2748,7 +2751,7 @@ static void on_multi(int n)
     pthread_mutex_unlock(&core_lock);
     /* a Drop In in any state (a call ringing here included) is the single press's to answer or end, never a skip */
     int call = dropin_running() && dropin_status(NULL, 0) != DROPIN_IDLE;
-    if (!busy && !call && (a2dp_skip(dir) || (core_sendspin_port && sendspin_skip(dir)))) return;
+    if (!busy && !call && (a2dp_skip(dir) || (core_sendspin_port && sendspin_skip(dir)) || lyrion_skip(dir))) return;
     on_action();
 }
 
@@ -3064,6 +3067,7 @@ void core_speaker(int mode, int pct)
     if (volume != was) {
         if (connected && proto->volume_changed) proto->volume_changed(volume);
         if (core_sendspin_port) sendspin_volume_changed(volume);
+        lyrion_volume_changed(volume);
         a2dp_volume_changed(volume);
     }
     pthread_mutex_unlock(&core_lock);
@@ -3091,6 +3095,7 @@ void core_set_volume(int v)
     fprintf(stderr, "volume: %d\n", volume);
     if (connected && proto->volume_changed) proto->volume_changed(volume);
     if (core_sendspin_port) sendspin_volume_changed(volume);
+    lyrion_volume_changed(volume);
     a2dp_volume_changed(volume);
 }
 
@@ -3322,6 +3327,7 @@ static void volume_sync(void)
             fprintf(stderr, "volume: %d (changed outside)\n", volume);
             if (connected && proto->volume_changed) proto->volume_changed(volume);
             if (core_sendspin_port) sendspin_volume_changed(volume);
+            lyrion_volume_changed(volume);
             a2dp_volume_changed(volume);
         } else if (main_v != want) {                                /* the loudest of three: ours again */
             fprintf(stderr, "volume: MainVolume %d changed outside, %d again (%s)\n", main_v, want, vol_split ? "separate volumes" : "even steps");
@@ -3753,6 +3759,7 @@ int main(int argc, char **argv)
     else if (buttons_muted()) mute_latch(1, 0);
 
     if (core_sendspin_port) sendspin_start(core_sendspin_port);
+    lyrion_start();                                 /* idle until the setting "lyrion" is on */
     if (use_bt) a2dp_start(NULL);
     static const struct improv_hooks improv_hooks = { web_attention, improv_authorized };
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */

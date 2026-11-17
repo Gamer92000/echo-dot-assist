@@ -4077,6 +4077,39 @@ Run in this order. Each step says what it proves.
       ESPHome is ignored with a log line).  The front end's listening flag stays set through the reply (the stream
       never stopped), so its cancellers do not adapt while it plays: what the radar figures above were taken with;
       `listening(0)` for the reply, as `-w remote` has it, not tried.  Open: ESPHome (`-D` is Wyoming only).
+- [~] Lyrion Music Server player (`src/hassmic/lyrion.c`, setting `lyrion`, off by default; 2026-11-17): SlimProto as
+      Squeezelite speaks it, so the Echo is a player of Lyrion (Squeezebox) beside Sendspin.  Discovery ("e"+TLVs to
+      UDP 3483, answered on UDP 28933: inside the firewall's 16384-32767, an answer to a broadcast being no conntrack
+      reply) or the page's address; HELO device 12 with `Model=squeezelite,AccuratePlayPoints=1,MaxSampleRate=48000,
+      flc,pcm,mp3`; FLAC (dr_flac), MP3 (minimp3), PCM/WAV/AIFF, the rest transcoded by Lyrion; gapless; autostart /
+      STMl + strm u at a jiffies time, strm p/a with a time (a group's sync); volume both ways (audg to the Echo's
+      volume by SqueezePlay's curve; the Echo's to Lyrion by JSON-RPC `mixer volume`); button, "stop", skips by JSON-RPC.
+      **Real Lyrion Music Server 9.2.0** (git ec47a0c, run from source on the PC, Perl 5.38) against the PC build,
+      2026-11-17: listed as "Echo Dot 3 (hassmic)" / model squeezelite, renamed there and kept; FLAC, WAV, MP3 (192k),
+      AAC (m4a, transcoded by Lyrion to FLAC: faad | flac), a 48 kHz WAV (output reopened at 48 kHz): all played; two
+      FLAC tracks gapless, 12.000 s out of 2 x 6 s, the join seamless (440 then 660 Hz).  Lyrion's elapsed time read
+      over JSON-RPC 90 ms behind the wall clock from the play command (its own start delay; our 70 ms output latency
+      taken out).  A group of two PC players: STMl from both, strm u at the same jiffies, both ended within 1 ms; no
+      'p'/'a' corrections in 12 s.  Found by testing against it, and changed: (1) Lyrion fades by volume (pause, stop,
+      skip: audg in 50 ms steps to 0, then the volume back), which first walked the Echo's own volume down to 2 and up
+      again on every pause: Lyrion's volume now reaches the Echo's only once it stayed 500 ms, the steps are a gain on
+      this stream only.  (2) A resume after the whole track had come, and every seek, is a new stream from the middle of
+      the file (Lyrion's `_JumpOrResume` -> `_JumpToTime`), beginning at a frame without "fLaC": dr_flac's relaxed open
+      gave up on it (frames 0); a STREAMINFO made of the first frame's header (rate, channels, bits) goes in front now.
+      (3) dBToFixed rounds to 1/256 above -30 dB, so volumes 41/42, 44/45, 47/48 share a gain: the old-style gain in the
+      same audg (Squeezebox2 `volume_map`) tells them apart (`make unit-lyrion`: all of 1..100 back as Lyrion had them).
+      (4) The link's first audg is Lyrion's stored volume: the Echo's goes to Lyrion instead, else every connect changed
+      the Echo's volume.  `tests/fake_lms.py` (a stand-in Lyrion that sends what 9.2.0 sent, in its order).
+      **Echo Dot 2 (biscuit), Lyrion 9.1.1, 2026-11-17** (the owner's): found by discovery at once ("Moja hudba"
+      9.1.1), linked with the Wi-Fi MAC as id, the Echo's volume 70 sent over Lyrion's stored 50; internet radio that
+      Lyrion has the player fetch directly (autostart 3, MP3 256 kbit/s from the station's own server): played, the
+      mixer opened at 44.1 kHz; a second station after a pause (Lyrion stops a radio on pause and starts it anew); the
+      library's FLAC, 24 bits, played as s16; volume both ways (Lyrion's 13, 14 to the Echo; the keys' 0, 10, 20 as
+      `mixer volume`); the action button `pause 1` / `pause 0`; "Alexa, stop" (`stop: music paused`, `pause 1`).
+      A group with another Squeezebox player of the owner's: FLAC with autostart 0 (STMl, then strm u), the two in step
+      by ear (the 70 ms output latency as Sendspin measured it).  Owner: works.
+      Open: ICY metadata to META only against the stand-in; a password on Lyrion's web port (JSON-RPC refused, logged; the
+      player plays on); IPv6-only Lyrion (the player's link is IPv4).
 
 ## Cannoli local port — 2026-11-13
 

@@ -640,7 +640,7 @@ Until then those tabs say how to connect.
 ## Music
 
 One source at a time, the newest wins: a phone starting over Bluetooth pauses Music Assistant (the whole group), Music
-Assistant starting on the Echo pauses the phone. The voice assistant ducks both, from the wake word until the reply has
+Assistant starting on the Echo pauses the phone, and either pauses Lyrion Music Server's player (and the other way round). The voice assistant ducks both, from the wake word until the reply has
 ended, by 16 dB unless "Music ducking" (Sound page, 0 to 60 dB) says otherwise: raise it if commands over loud music or
 an audiobook are not understood. "<wake word>, stop" pauses either, and the action button pauses and resumes.
 
@@ -670,6 +670,40 @@ one Echo. The log says
   <phone>": Home Assistant speaks those words, and only once "Allow the device to perform Home Assistant actions" is
   ticked in the Echo's ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure). Without it
   you hear the chime only. "Bluetooth announcements" on the settings page turns both off and picks their language.
+- **Lyrion Music Server** (formerly Logitech Media Server, Squeezebox): the Echo as one of its players, below.
+
+### Lyrion Music Server
+
+Switch on "Lyrion Music Server player" (settings page, Music & Bluetooth). The Echo then shows up in Lyrion's list of
+players the way Squeezelite does, under the Echo's name ("Echo Dot 2 5695c4"; rename it in Lyrion if you like, the
+Echo keeps the new name), with the model "Echo Dot 2 (hassmic)" and its Wi-Fi MAC address as the player's ID. Lyrion
+plays to it, groups it with your other Squeezebox players (which then play in step with it), and Home Assistant's
+Squeezebox integration sees it like any other player. Off by default: nothing on the network sees the player until you
+switch it on.
+
+- **Finding Lyrion.** The Echo looks for it the way Squeezebox players do, a broadcast to port 3483, and connects to
+  the first that answers. Where none answers (Lyrion in another subnet or VLAN, or in a Docker container on a bridge
+  network, which sees no broadcasts), press "Address…" in the same card and give its host name or IP address, with
+  `:port` if Lyrion's web page is not on port 9000. The card says whether the Echo is connected, and to which server.
+- **What it plays.** FLAC, MP3 and PCM (WAV, AIFF) directly; Lyrion converts everything else (AAC, Ogg, ALAC, Opus,
+  …) to FLAC on the way, as it does for Squeezelite. Up to 48 kHz: Lyrion brings higher rates down. One track runs into
+  the next without a gap.
+- **Volume.** Lyrion's volume is the Echo's volume, both ways: turn it up in Lyrion and the Echo's volume (and Home
+  Assistant's media player) follows; press the Echo's volume keys and Lyrion's slider moves. When the Echo connects,
+  its own volume goes to Lyrion, rather than Lyrion's last one changing the Echo's. Lyrion's fades (when it pauses,
+  stops or skips) and its mute only fade and silence the music, never the Echo's volume. With "Volume control: Output
+  level is fixed at 100%" in Lyrion's player settings, the Echo keeps its own volume.
+- **Buttons and voice.** The action button pauses and resumes, "<wake word>, stop" pauses, and with "Multiple presses"
+  on, two presses skip to the next track and three to the previous one. The Echo asks Lyrion for these over its
+  JSON-RPC (the web port), as any remote control does; a Lyrion with a password (Settings → Advanced → Security) refuses
+  them, and the log says so.
+- **Sync.** In a group, Lyrion starts all players at the same moment and keeps them in step by its own play-point
+  comparison (the Echo reports what it plays as heard, the speaker's delay taken out).
+- The log shows `lyrion: found "…" 9.2.0 at 192.168.1.10 (web port 9000)`, `lyrion: player … linked to …` and one
+  line per track.
+- Tried on an Echo Dot 2 with Lyrion 9.1.1 (found on the network, internet radio, FLAC from the library, a group
+  with another Squeezebox player, volume both ways, the action button, "stop"), and against Lyrion 9.2.0 with the PC
+  build (formats, gapless, pause, seek, groups of two).
 
 ### Even volume steps
 
