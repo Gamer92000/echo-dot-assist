@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — Fire smooth again on an Echo running for weeks
+
+- **Light ring live: the "Fire" effect no longer stutters on an Echo that has been running for a week or more (Echo
+  Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5).** Fire's flicker was worked out from the time since the Echo started in a
+  number too coarse for it: after about a week it moved in steps, and after about 25 days only four times a second. It
+  is smooth again however long the Echo has been up; the other effects were not affected. Thanks to malammar (issue
+  #192).
+
 ## 2026-11-17 — Fewer lookups of Amazon's hosts on the Echo Shows and the Echo Input
 
 - **Android's own captive portal test switched off: it looked Amazon's hosts up every few minutes (tried on an Echo

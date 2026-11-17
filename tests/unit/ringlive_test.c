@@ -212,6 +212,23 @@ static void pure(void)
         char w[96]; snprintf(w, sizeof w, "effect %s: within the level, %s", ring_effects[e], e ? "moves" : "still");
         check(in && moved == (e != RING_E_NONE), w);
     }
+    /* t is the monotonic clock in ms, so days of uptime: an effect must move as smoothly after 30 days as after a
+     * minute.  Fire's noise took t as a float (24 bits: 256 ms steps past 24 days), its picture changed ~4 times a
+     * second and the writer had nothing new to write (issue #192: 3.7 frames a second) */
+    for (int e = 1; e < RING_E_MUSIC_BEAT; e++) {
+        int ch[2] = { 0, 0 };
+        for (int k = 0; k < 2; k++) {
+            long long t0 = k ? 30LL * 86400 * 1000 : 60000;
+            ringlive_effect(e, rgbw, 0.8f, 12, t0, a);
+            for (long long t = t0 + 1000 / RINGLIVE_FPS; t < t0 + 2000; t += 1000 / RINGLIVE_FPS) {
+                ringlive_effect(e, rgbw, 0.8f, 12, t, b);
+                int d = 0; for (int j = 0; j < 12; j++) for (int c = 0; c < 3; c++) if (fabsf(a[j][c] - b[j][c]) > 1e-4f) d = 1;
+                ch[k] += d; memcpy(a, b, sizeof a);
+            }
+        }
+        char w[120]; snprintf(w, sizeof w, "effect %s after 30 days' uptime: %d new pictures in 2 s (%d after a minute)", ring_effects[e], ch[1], ch[0]);
+        check(ch[1] * 4 >= ch[0] * 3, w);        /* Sparkle's own: which slots flare differs */
+    }
     ringlive_effect(RING_E_NONE, rgbw, 0.5f, 12, 0, a);
     check(fabsf(a[3][0] - 0.5f) < 1e-6f && fabsf(a[3][1] - 0.25f) < 1e-6f && a[3][2] == 0, "None: the colour at the level");
 
@@ -385,13 +402,21 @@ int main(void)
     msleep(150); get(t, sizeof t);
     check(!strncmp(t, "FD0000", 6) && !strncmp(t + 66, "00FD00", 6), "an LED light over it: red on its LED, the light around");
     one.on = 0; ringlive_led_set(1, &one);
-    /* a fade: the light off over 400 ms, half way about half (as seen), then dark and handed back */
+    /* a fade: the light off over 400 ms, through the levels in between, then dark and handed back.  Watched, not
+     * sampled at 200 ms: under make -j unit on CI's 4 cores the writer was seen at half its rate (15 frames a second)
+     * and the frame at 200 ms still the light's FD */
+    struct timespec f0, f1; clock_gettime(CLOCK_MONOTONIC, &f0);
     ringlive_fade(400); light.on = 0;
-    msleep(200); get(t, sizeof t);
-    unsigned g = 0; sscanf(t + 68, "%2x", &g);
-    char fw[96]; snprintf(fw, sizeof fw, "a fade to dark: half way at %02X (between 10 and F0)", g); check(g > 0x10 && g < 0xF0, fw);
-    msleep(500); get(t, sizeof t);
-    check(!strcmp(t, dark), "  then dark");
+    unsigned g = 0, mid = 0; int dark_ms = -1;
+    for (int i = 0; i < 100 && dark_ms < 0; i++) {
+        msleep(10); get(t, sizeof t);
+        if (sscanf(t + 68, "%2x", &g) == 1 && g > 0x10 && g < 0xF0 && !mid) mid = g;
+        clock_gettime(CLOCK_MONOTONIC, &f1);
+        if (!strcmp(t, dark)) dark_ms = (int)((f1.tv_sec - f0.tv_sec) * 1000 + (f1.tv_nsec - f0.tv_nsec) / 1000000);
+    }
+    char fw[96]; snprintf(fw, sizeof fw, "a fade to dark: through %02X on the way (between 10 and F0)", mid); check(mid, fw);
+    /* not before its time (as seen, 0.1 of the light is 01 after gamma 2.2: dark from ~375 ms); a load only makes it later */
+    snprintf(fw, sizeof fw, "  then dark, after %d ms (the fade is 400)", dark_ms); check(dark_ms >= 300, fw);
     light.on = 1; light.effect = RING_E_RAINBOW; light.fill = 100;
     msleep(200); w0 = ringlive_writes(); msleep(1000); rate = ringlive_writes() - w0;
     snprintf(w, sizeof w, "an effect moves on its own: %d frames in 1 s (at most %d)", rate, RINGLIVE_FPS); check(rate >= RINGLIVE_FPS / 2 && rate <= RINGLIVE_FPS + 1, w);

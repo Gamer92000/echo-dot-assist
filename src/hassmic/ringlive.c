@@ -217,9 +217,11 @@ static unsigned hash2(unsigned a, unsigned b)
     h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
     return h;
 }
-static float noise(unsigned j, float x)         /* smooth value noise in 0..1 */
+/* smooth value noise in 0..1.  x in double: it is the monotonic clock in ms over a few dozen, and a float's 24 bits
+ * step 256 ms past 24 days' uptime, the picture then frozen in between (issue #192: Fire at ~4 frames a second) */
+static float noise(unsigned j, double x)
 {
-    unsigned i = (unsigned)floorf(x); float f = x - floorf(x), u = f * f * (3 - 2 * f);
+    double fl = floor(x); unsigned i = (unsigned)(long long)fl; float f = (float)(x - fl), u = f * f * (3 - 2 * f);
     float a = (hash2(j, i) & 0xFFFF) / 65535.0f, b = (hash2(j, i + 1) & 0xFFFF) / 65535.0f;
     return a + (b - a) * u;
 }
@@ -265,7 +267,7 @@ void ringlive_effect(int effect, const float rgb[3], float level, int n, long lo
             if (hash2((unsigned)j, (unsigned)slot) % 9 == 0) { k = 1 - 0.7f * f; for (int i = 0; i < 3; i++) c[i] = c[i] + (1 - c[i]) * 0.5f * (1 - f); }
             } break;
         case RING_E_FIRE: {                         /* embers: orange to yellow, flickering, the colour ignored */
-            float v = noise((unsigned)j, t / 90.0f) * 0.6f + noise((unsigned)j + 97, t / 31.0f) * 0.4f;
+            float v = noise((unsigned)j, t / 90.0) * 0.6f + noise((unsigned)j + 97, t / 31.0) * 0.4f;
             k = 0.25f + 0.75f * v; c[0] = 1; c[1] = 0.18f + 0.32f * v; c[2] = 0.02f * v; } break;
         default: break;
         }

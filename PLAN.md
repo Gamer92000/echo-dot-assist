@@ -2631,6 +2631,18 @@ Run in this order. Each step says what it proves.
       - Not about the Dot 5: Home Assistant's media (play_media) puts the core in SPEAKING, whose stock ring loops,
         so the live ring waits for the whole song and the music effects never show over HA's media (any model; the
         PC test's stand-in set has no looping speaking ring).  Sendspin and Bluetooth set no pattern.  Open.
+      - Fire stood still between steps after days of uptime (issue #192, 2026-11-17): its noise took the monotonic clock
+        in ms as a float (`t / 90.0f`, 24 bits): 64 ms steps from ~6 days on, 128 from ~12, 256 from ~25.  The picture
+        then changed ~4 times a second, and the writer, which writes only a frame that changed, sent ~4 a second: so the
+        reporter's 3.7 is most likely this (inferred: the arithmetic fits) (ring-live-acs wants 10; their uptime not
+        known, the test's clock is CLOCK_MONOTONIC, a fresh CI runner passes).  `noise` takes a double now.
+        `ringlive_test.c`: every non-music effect makes at least 3/4 of the new pictures in 2 s after 30 days' uptime
+        that it makes after a minute (all but Sparkle, whose flares differ, the same number) (Fire on the old code: 4 in
+        1 s against 30 after a minute; now 60 in 2 s either way).  Not seen on an Echo (none up that long here); the
+        arithmetic is the same there.  The same test's fade was sampled once at 200 ms, which CI caught still at the
+        light's FD under `make -j unit` (4 cores; the writer stalled 200 ms or more there, not explained; the same run's
+        effect counted 15 frames in 1 s): it now watches the frames for a value in between and for dark no sooner than
+        300 ms (a load only makes it later).
 - [ ] Idea (the user, 2026-11-12): the Echo's own patterns overridden from Home Assistant, e.g. "Thinking" red when
       the speaker is recognised as one person, green as another.  The live ring would draw the slot itself (a design
       of the library, or stock's look in another colour), at once, mid-request.  An action `light_ring_override` (slot,
