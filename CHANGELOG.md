@@ -8,12 +8,14 @@ What changed for people using the Echo, newest first. Details and measurements a
   System, "Remote logging": switch it on and give the server's address (port 514 unless you add another), UDP or TCP,
   RFC 5424 or the older RFC 3164 for servers that take nothing else. Every line the Echo writes goes there as it is
   written, its own lines and the system's (firewall, updates, restarts), with the time it was written at; the log on the
-  Echo stays as it was. While the server or the network is away nothing is lost: the lines wait on the Echo and follow
-  once it is back, also after a restart of the Echo. "Send test message" shows whether the server gets it, and the page
+  Echo stays as it was. While the server or the network is away nothing is lost over TCP: the lines wait on the Echo and
+  follow once it is back, also after a restart of the Echo. (UDP does the same only where the server's computer answers
+  "port closed"; one that silently drops the packets looks reachable, and the lines sent meanwhile are lost.) "Send test message" shows whether the server gets it, and the page
   says when it does not, and why. Off by default.
 - **Home Assistant can show the Echo's log too, without a syslog server.** In the Echo's ESPHome options in Home
   Assistant, tick "Subscribe to logs from the device": its lines then appear in Home Assistant's own log, failures as
-  warnings. ESPHome's tools that read a device's log (aioesphomeapi-logs, the ESPHome dashboard) work as well.
+  warnings. ESPHome's tools that read a device's log (aioesphomeapi-logs, the ESPHome dashboard) work as well. Thanks to
+  abonforti (issue #193).
 
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 
