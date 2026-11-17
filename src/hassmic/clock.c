@@ -14,6 +14,12 @@
  * Time zone: Home Assistant's comes with its time, as the rule of its zone (tz.c turns it into a zone name).  It goes to
  * root the same way (state/timezone, one line), and main.sh sets persist.sys.timezone, plus Android's alarm service
  * where there is one (it tells the Java side).  The logs stay in UTC whatever the zone.
+ * Which of the zones with that rule is the Wi-Fi's country's (apcountry.c, tz.c); what came of it, and how, stays in
+ * state/zone, hassmic's own ("<zone> country|kept|guess|rule"; root takes state/timezone away at once, issue #176's
+ * review: the language never saw it on an Echo).  The language spoken here (main.c speech_locale, the Echo Show's
+ * date) takes the zone only when it is known: the country's, or one set before and kept, never a guess (CET without a
+ * country is Europe/Amsterdam: a Dutch date in Germany), nor hassmic's own guess kept by root since.  The country is
+ * read again with each answer of Home Assistant's (every link, every 6 h; a new network's new address closes the links).
  *
  * Log lines: hassmic's stderr is boot.log (main.sh), so every fprintf(stderr) there, and what the programs it runs print
  * (lipc tools, Amazon's idme tool), gets a time in front: "2026-10-06 15:18:02.417Z" (UTC; the settings page shows it
@@ -29,8 +35,11 @@
  */
 #include "clock.h"
 #include "tz.h"
+#include "apcountry.h"
+#include "screen.h"
 #include "statefile.h"
 #include <errno.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -77,10 +86,57 @@ void clock_from_ha(uint32_t epoch)
 static const char *const TZDATA[] = { "/data/misc/zoneinfo/current/tzdata", "/data/misc/zoneinfo/tzdata",
                                       "/system/usr/share/zoneinfo/tzdata" };
 
-void clock_zone_from_ha(const char *posix)
+static const char *const zone_hows[] = { "country", "kept", "guess", "rule" };   /* TZ_*, then a rule itself */
+#define ZONE_RULE 3
+
+/* state/zone: the zone and how it was found (zone_hows), 1 if read */
+static int zone_read(char *zone, size_t cap, int *how)
+{
+    char p[300], z[100], h[16]; FILE *f; int ok = 0;
+    snprintf(p, sizeof p, "%s/zone", state_dir());
+    if ((f = fopen(p, "r"))) { ok = fscanf(f, "%99s %15s", z, h) == 2; fclose(f); }
+    for (int i = 0; ok && i < (int)(sizeof zone_hows / sizeof *zone_hows); i++)
+        if (!strcmp(h, zone_hows[i])) { snprintf(zone, cap, "%s", z); *how = i; return 1; }
+    return 0;
+}
+
+int clock_zone(char *out, size_t cap)
+{
+    int how;
+    if (!zone_read(out, cap, &how) || (how != TZ_COUNTRY && how != TZ_KEPT)) { if (cap) out[0] = 0; return 0; }
+    return 1;
+}
+
+/* What came of Home Assistant's rule, kept in state/zone (only when it changed: /data is flash).  A zone kept from what
+ * was set is hassmic's own guess still when that is what it set before (persist.sys.timezone survives where the Echo
+ * keeps its properties) */
+static void zone_note(const char *zone, int how, const char *cc)
+{
+    char old[100] = "", p[300], line[128]; int was = -1, known_was, known;
+    zone_read(old, sizeof old, &was);
+    if (how == TZ_KEPT && was == TZ_GUESS && !strcmp(old, zone)) how = TZ_GUESS;
+    /* and the other way: a zone known before (the country's, say Europe/Amsterdam for NL) stays known when the country
+     * is missing once (a mesh node without the element, a read cut short) and the lookup calls it the guess's own */
+    if (how == TZ_GUESS && (was == TZ_COUNTRY || was == TZ_KEPT) && !strcmp(old, zone)) how = was;
+    if (was == how && !strcmp(old, zone)) return;
+    snprintf(p, sizeof p, "%s/zone", state_dir()); snprintf(line, sizeof line, "%s %s\n", zone, zone_hows[how]);
+    if (statefile_write(p, 0644, line, strlen(line))) { fprintf(stderr, "time zone: cannot write %s\n", p); return; }
+    known_was = was == TZ_COUNTRY || was == TZ_KEPT; known = how == TZ_COUNTRY || how == TZ_KEPT;
+    char why[64];
+    if (cc[0]) snprintf(why, sizeof why, "the Wi-Fi's country %s has no zone of that rule", cc);
+    else snprintf(why, sizeof why, "no country from the Wi-Fi");
+    if (how == TZ_COUNTRY) fprintf(stderr, "time zone: %s, of the Wi-Fi's country %s\n", zone, cc);
+    else if (how == TZ_KEPT) fprintf(stderr, "time zone: %s, the one set or known before (%s)\n", zone, why);
+    else if (how == TZ_GUESS) fprintf(stderr, "time zone: %s, a guess among those of that rule (%s): not taken for the language\n", zone, why);
+    if (known != known_was || (known && strcmp(old, zone))) screen_language_changed();
+}
+
+/* zone_thread: the rule worked through (the Wi-Fi's country, the lookup, the files) */
+static void zone_from_ha(const char *posix)
 {
     static char told[100];
-    char cur[100] = "", zone[100] = "", p[300], line[104];
+    char cur[100] = "", zone[100] = "", p[300], line[104], cc[3] = "";
+    int how = ZONE_RULE;
     size_t n = strlen(posix);
     if (!n) return;                                     /* an older Home Assistant (aioesphomeapi) says none */
     /* a property value (92 bytes with its end), nothing root's shell would read as more than a word, and a rule, not a
@@ -98,15 +154,60 @@ void clock_zone_from_ha(const char *posix)
     const char *e = getenv("HASSMIC_TIMEZONE"); snprintf(cur, sizeof cur, "%s", e ? e : "");   /* tests: the zone set */
 #endif
     const char *t = getenv("HASSMIC_TZDATA");
-    int found = t ? tz_lookup(t, posix, cur, zone, sizeof zone) : 0;
-    for (size_t i = 0; !t && !found && i < sizeof TZDATA / sizeof *TZDATA; i++) found = tz_lookup(TZDATA[i], posix, cur, zone, sizeof zone);
-    if (!found) snprintf(zone, sizeof zone, "%s", posix);
+    /* no zone set (the Dot 2 starts every boot without persist.sys.timezone): the one known here before stands for it,
+     * so a country missing once keeps it rather than a guess */
+    char known[100] = "", *set = cur; int kh;
+    if (!cur[0] && zone_read(known, sizeof known, &kh) && (kh == TZ_COUNTRY || kh == TZ_KEPT)) set = known;
+    apcountry_get(cc);                                  /* ~1 ms: a netlink dump (Dot 2) */
+    int found = t ? tz_lookup(t, posix, set, cc, zone, sizeof zone, &how) : 0;
+    for (size_t i = 0; !t && !found && i < sizeof TZDATA / sizeof *TZDATA; i++) found = tz_lookup(TZDATA[i], posix, set, cc, zone, sizeof zone, &how);
+    if (!found) { snprintf(zone, sizeof zone, "%s", posix); how = ZONE_RULE; }
+    zone_note(zone, how, cc);
     if (!strcmp(zone, cur)) return;
     snprintf(p, sizeof p, "%s/timezone", state_dir()); snprintf(line, sizeof line, "%s\n", zone);
     if (statefile_write(p, 0666, line, strlen(line))) { fprintf(stderr, "time zone: cannot write %s\n", p); return; }
     if (strcmp(told, zone) && found) fprintf(stderr, "time zone: Home Assistant's, %s (%s), handed to root (was %s)\n", zone, posix, cur[0] ? cur : "none");
     else if (strcmp(told, zone)) fprintf(stderr, "time zone: Home Assistant's rule %s handed to root as it is: no zone of this Echo's data has it (was %s)\n", posix, cur[0] ? cur : "none");
     snprintf(told, sizeof told, "%s", zone);
+}
+
+/* Home Assistant's answer comes in with core_lock held (proto_esphome.c), and the work is not for under it: the
+ * netlink dump waits on the kernel's rtnl lock, which a driver may hold a while, and the lookup reads every one of the
+ * ~600 zones' rules.  So a thread of its own takes the newest rule given (older ones still waiting are dropped: the
+ * same rule, or one gone stale), one at a time, in order */
+static pthread_mutex_t zone_lock = PTHREAD_MUTEX_INITIALIZER;
+static char zone_pending[128];
+static int zone_busy;
+
+static void *zone_thread(void *arg)
+{
+    char posix[128];
+    (void)arg;
+    pthread_mutex_lock(&zone_lock);
+    while (zone_pending[0]) {
+        snprintf(posix, sizeof posix, "%s", zone_pending); zone_pending[0] = 0;
+        pthread_mutex_unlock(&zone_lock);
+        zone_from_ha(posix);
+        pthread_mutex_lock(&zone_lock);
+    }
+    zone_busy = 0;
+    pthread_mutex_unlock(&zone_lock);
+    return NULL;
+}
+
+void clock_zone_from_ha(const char *posix)
+{
+    pthread_t t; pthread_attr_t a; int start;
+    if (!posix[0]) return;                              /* an older Home Assistant (aioesphomeapi) says none */
+    pthread_mutex_lock(&zone_lock);
+    snprintf(zone_pending, sizeof zone_pending, "%.*s", (int)sizeof zone_pending - 1, posix);
+    if (strlen(posix) >= sizeof zone_pending) snprintf(zone_pending, sizeof zone_pending, "?");   /* too long: refused there */
+    start = !zone_busy; zone_busy = 1;
+    pthread_mutex_unlock(&zone_lock);
+    if (!start) return;
+    pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &a, zone_thread, NULL)) zone_thread(NULL);     /* no thread: here then, as before */
+    pthread_attr_destroy(&a);
 }
 
 /* ---------------------------------------------------------------- the log */

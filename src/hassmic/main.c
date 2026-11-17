@@ -1731,8 +1731,8 @@ static int align_lang(const char *loc)
     return 0;
 }
 
-/* The language spoken here, as a locale: the page's speech_language, else the time zone Home Assistant gave (clock.c
- * state/timezone; a German speaker's "Alexa" with the English wake word is found far better with German sounds,
+/* The language spoken here, as a locale: the page's speech_language, else the time zone Home Assistant gave where it is
+ * known (clock.c clock_zone: the Wi-Fi's country's, or the one set; a German speaker's "Alexa" with the English wake word is found far better with German sounds,
  * settings.c SPEECH_LANG), else the word's own ("computer-en-US"); "" when none of them says.  A language picked on the
  * page in the zone's variety of it where the zone has one (en in London: en-GB).  For the aligner (aligner 1) a
  * language it has no model for counts as unsaid, both as the setting and as the zone's: it goes on as before those
@@ -1764,10 +1764,9 @@ static void speech_locale(const struct core_wake_word *w, int aligner, char *out
         { "Europe/Chisinau", "ro-RO" }, { "Europe/Tiraspol", "ro-RO" },
         { "Europe/London", "en-GB" }, { "Europe/Dublin", "en-GB" }, { "Australia/", "en-AU" }, { "Asia/Kolkata", "en-IN" },
         { "Asia/Calcutta", "en-IN" }, { "Canada/", "en-CA" }, { "America/", "en-US" }, { "US/", "en-US" } };
-    const char *l = settings_speech_language(), *zl = NULL; char p[300], zone[96] = ""; FILE *f; size_t ln = strlen(l);
+    const char *l = settings_speech_language(), *zl = NULL; char zone[100]; size_t ln = strlen(l);
     out[0] = 0;
-    state_file(p, sizeof p, "timezone");
-    if ((f = fopen(p, "r"))) { if (fscanf(f, "%95s", zone) != 1) zone[0] = 0; fclose(f); }
+    clock_zone(zone, sizeof zone);
     for (size_t i = 0; zone[0] && !zl && i < sizeof zones / sizeof *zones; i++) {
         size_t zn = strlen(zones[i][0]);
         if (!strncmp(zone, zones[i][0], zn) && (zones[i][0][zn - 1] == '/' || !zone[zn]) && (!aligner || align_lang(zones[i][1]))) zl = zones[i][1];

@@ -4,32 +4,21 @@ aioesphomeapi's timezone.py) the zone tz_lookup finds must have that very rule, 
 set is kept when it has it;
 a rule no zone has finds none; a file that is not bionic's finds none."""
 import os, struct, subprocess, sys, tempfile
-from importlib import resources
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from tzdata_file import build
 
 tz_test = sys.argv[1]
-root = resources.files("tzdata") / "zoneinfo"
-zones = {}
-def walk(d, pre=""):
-    for e in d.iterdir():
-        if e.is_dir(): walk(e, pre + e.name + "/")
-        elif not e.name.endswith((".py", ".tab", ".zi")) and not e.name.startswith(("__", "tzdata")):
-            b = e.read_bytes()
-            if b[:4] == b"TZif": zones[pre + e.name] = b
-walk(root)
+path = tempfile.mktemp(suffix=".tzdata")
+zones, zonetab, blob = build(path)
 names = sorted(zones)
-index, data = b"", b""
-for n in names:
-    index += struct.pack(">40siii", n.encode(), len(data), len(zones[n]), 0)
-    data += zones[n]
-hdr = 24
-zonetab = (root / "zone.tab").read_bytes()                                  # ZoneCompactor appends it as it is
 listed = {l.split("\t")[2] for l in zonetab.decode().splitlines() if l and not l.startswith("#")}
-blob = struct.pack(">12siii", b"tzdata2026e\0", hdr, hdr + len(index), hdr + len(index) + len(data)) + index + data + zonetab
-path = tempfile.mktemp(suffix=".tzdata"); open(path, "wb").write(blob)
 rule = lambda n: zones[n].split(b"\n")[-2].decode()
 
-def look(posix, cur=None):
-    return subprocess.run([tz_test, path, posix] + ([cur] if cur else []), capture_output=True, text=True, check=True).stdout.strip()
+def found(posix, cur=None, cc=None):
+    """(zone, how) or ("-", None)"""
+    out = subprocess.run([tz_test, path, posix, cur or ""] + ([cc] if cc else []), capture_output=True, text=True, check=True).stdout.split()
+    return (out[0], out[1]) if len(out) == 2 else ("-", None)
+look = lambda posix, cur=None, cc=None: found(posix, cur, cc)[0]
 
 fails = 0
 def check(ok, what):
@@ -46,8 +35,29 @@ check(look(rule("Europe/Berlin"), "America/Chicago") == "Europe/Amsterdam", "and
 check(look(rule("America/Chicago")) == "America/Chicago", f"US Central: an area name ({look(rule('America/Chicago'))})")
 aliases = [(n, z) for n in ("Australia/Sydney", "Asia/Kolkata", "Europe/London", "America/New_York") if (z := look(rule(n))) not in listed]
 check(not aliases, f"a name zone.tab lists, not an old one (Australia/ACT, Asia/Calcutta) {aliases}")
+# the Wi-Fi's country picks among the zones of a rule: zone.tab's first zone of that country with it
+check(found(rule("Europe/Berlin")) == ("Europe/Amsterdam", "guess"), "no country, no zone set: a guess")
+check(found(rule("Europe/Berlin"), None, "DE") == ("Europe/Berlin", "country"), "DE: Europe/Berlin, by the country")
+check(found(rule("Europe/Berlin"), "Europe/Amsterdam", "DE") == ("Europe/Berlin", "country"), "a zone set in another country gives way")
+check(found(rule("Europe/Berlin"), "Europe/Busingen", "DE") == ("Europe/Busingen", "country"), "one of the country's zones set: kept")
+check(found(rule("Europe/Berlin"), "Europe/Berlin") == ("Europe/Berlin", "kept"), "no country: the zone set kept")
+check(found(rule("Europe/Berlin"), "Europe/Amsterdam") == ("Europe/Amsterdam", "guess"), "the zone set is the guess's own: a guess still")
+check(found(rule("Europe/Berlin"), None, "US") == ("Europe/Amsterdam", "guess"), "a country with no zone of that rule: as none")
+check(found(rule("Europe/Berlin"), "Europe/Paris", "US") == ("Europe/Paris", "kept"), "and the zone set kept then")
+check(look(rule("America/Regina"), None, "MX") == "America/Mexico_City", "CST6 in Mexico: America/Mexico_City")
+check(look(rule("America/Regina"), None, "CA") == "America/Regina", "CST6 in Canada: America/Regina")
+check(look(rule("Australia/Sydney"), None, "AU").startswith("Australia/"), f"AU with Sydney's rule: an Australia/ zone, not Antarctica/Macquarie ({look(rule('Australia/Sydney'), None, 'AU')})")
+check(look(rule("America/Argentina/Buenos_Aires"), None, "AR") == "America/Argentina/Buenos_Aires", "<-03>3 in Argentina")
+check(look(rule("America/Sao_Paulo"), None, "BR") in ("America/Belem", "America/Fortaleza", "America/Sao_Paulo"), f"<-03>3 in Brazil: {look(rule('America/Sao_Paulo'), None, 'BR')}")
+check(look(rule("Europe/Lisbon"), None, "ES") == "Atlantic/Canary", "WET in Spain: the Canaries")
+check(found(rule("Europe/Berlin"), None, "de")[1] == "guess", "a country is two capitals as the element has it")
+tab = [l.split("\t") for l in zonetab.decode().splitlines() if l and not l.startswith("#")]
+wrong = [(cc, z, got) for cc, _, z, *_ in tab if z in zones and rule(z)
+         and not ((got := found(rule(z), None, cc))[1] == "country" and [cc, got[0]] in [[c, n] for c, _, n, *_ in tab])]
+check(not wrong, f"every zone.tab country, every rule of its zones: a zone of that country {wrong[:3]}")
 open(path, "wb").write(blob[:-len(zonetab)])
 check(look(rule("Europe/Berlin")) == "Europe/Amsterdam", "without zone.tab: area order alone")
+check(found(rule("Europe/Berlin"), None, "DE") == ("Europe/Amsterdam", "guess"), "without zone.tab: no country either")
 check(look("XYZ5ABC,M3.2.0,M11.1.0") == "-", "a rule no zone has: none")
 open(path, "wb").write(b"not tzdata" + blob[10:])
 check(look(rule("Europe/Berlin")) == "-", "not bionic's file: none")

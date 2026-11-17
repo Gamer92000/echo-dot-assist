@@ -522,8 +522,13 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
   for all children). Host: `HASSMIC_CLOCK_SYNCED=0` plays an unset clock.
   Time zone: GetTimeResponse field 2 (a POSIX TZ string, aioesphomeapi's `timezone.py`; HA keeps the name) ->
-  `clock_zone_from_ha` -> `tz.c` `tz_lookup`: a zone of bionic's one-file `tzdata` whose TZif footer is that rule (the
-  zone set kept when it has it, else zone.tab's names in area order), else the string itself -> `state/timezone` ->
+  `clock_zone_from_ha` (with `core_lock` held: hands the rule to a thread of its own, `zone_thread`) -> `tz.c` `tz_lookup`: a zone of bionic's one-file `tzdata` whose TZif footer is that rule (the
+  Wi-Fi's country's first in zone.tab, `apcountry.c`: the associated BSS's 802.11d Country element by an unprivileged
+  nl80211 GET_SCAN dump, `HASSMIC_FAKE_COUNTRY` a file for tests; else the zone set kept when it has it, else zone.tab's
+  names in area order: a guess; no zone set: the last known one stands for it), else the string itself.  How it was found stays in hassmic's own `state/zone`
+  (`<zone> country|kept|guess|rule`, `zone_note`; a kept zone that is hassmic's earlier guess stays a guess), which
+  `clock_zone` gives `speech_locale` only when known (country, kept): the language never from a guess (CET:
+  Europe/Amsterdam) nor from `state/timezone`, which root takes away at once.  The zone -> `state/timezone` ->
   `main.sh` `tz_set` (a name or a rule, never a path): `persist.sys.timezone`, plus `service call alarm 3` for
   names where the framework runs.  `HASSMIC_TZDATA`, `HASSMIC_TIMEZONE` (the zone set) for tests;
   `tests/unit/tz_ref.py` builds a tzdata from Python's.

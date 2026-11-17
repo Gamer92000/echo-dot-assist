@@ -2,7 +2,7 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
-## 2026-11-17 — The wake word's end found by its sounds again in Brazil
+## 2026-11-18 — The language you speak, from the right time zone
 
 - **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to
   "Language you speak", an Echo in a Brazilian time zone on Automatic took Portuguese, which the Echo has no sounds
@@ -10,6 +10,13 @@ What changed for people using the Echo, newest first. Details and measurements a
   not said, whether picked on the page or from the time zone, so the Echo does as before they were listed: in Brazil
   English sounds. The date on the Echo Show's screen stays in the zone's language. An Echo Show in Mexico, Central
   America or Saskatchewan no longer writes its date in Portuguese. Thanks to giggio (issue #176).
+- **"Language you speak" on Automatic now follows the country you are in.** Home Assistant tells the Echo only its
+  zone's offset and summer time, which Germany shares with France, the Netherlands and others; the Echo picked the
+  first such zone (Europe/Amsterdam for all of them), and on an Echo the time zone did not reach the language at all.
+  The Echo now asks its Wi-Fi router which country it is in (most routers say so; tried on an Echo Dot 2: "DE") and
+  takes that country's zone: German sounds for the wake word in Germany, the Echo Show's date in German. Where the
+  router says no country, a zone set on the Echo before counts, a mere guess never does: then the wake word's own
+  language and an English date, as with no zone at all.
 
 ## 2026-11-17 — Drop In sounds as Alexa's did
 

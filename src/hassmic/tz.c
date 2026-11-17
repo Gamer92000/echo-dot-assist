@@ -10,8 +10,13 @@
  * unused) and every zone's TZif file as zic wrote it, which since TZif version 2 ends in "\n<POSIX TZ string>\n".
  *
  * Many zones share a rule (Europe/Amsterdam, Europe/Berlin, Europe/Paris...): any of them shows the right time from
- * now on, which is all the Echo needs; only the name differs.  The zone already set is kept when it is one of them,
- * else the first of the most usual area among those zone.tab lists (the file's last part): the data holds old names as
+ * now on, which is all the Echo needs; only the name differs, and the name is what says the language (main.c
+ * speech_locale, the Echo Show's date).  So the Wi-Fi's country (apcountry.c: the access point's 802.11d element)
+ * picks among them where it has one of them: zone.tab (the file's last part) gives each zone its country, area order
+ * and then the order of a country's lines its main zone (DE: Europe/Berlin, not Busingen; AU: Australia/..., not
+ * Antarctica/Macquarie).  Without it the zone already set is kept when it
+ * is one of them, else the first of the most usual area among those zone.tab lists: a guess (CET: Europe/Amsterdam
+ * for all of Central Europe; tzdata2025a on the Dot 3, issue #176's review).  The data holds old names as
  * zones of their own (Australia/ACT, Asia/Calcutta, US/Eastern; Dot 3's tzdata2025a: 596 zones, all with the string).  A rule the Echo's (older) data does not have, as a zone that changed it
  * since the firmware was built (Mexico's 2022 end of summer time), finds a zone with that rule elsewhere, or none:
  * then the string itself goes to root, which native code (and the logs' local time, if any) still gets right.
@@ -46,6 +51,18 @@ static int listed(const char *tab, const char *n)
     return 0;
 }
 
+/* the line of zone.tab that lists n for country cc ("CC<tab>coordinates<tab>name..."), counting from 0; -1 none */
+static int country_line(const char *tab, const char *cc, const char *n)
+{
+    size_t l = strlen(n); int line = 0;
+    for (const char *p = tab; p && *p; p = strchr(p, '\n'), p = p ? p + 1 : NULL, line++) {
+        const char *c = strchr(p, '\t'), *z = c ? strchr(c + 1, '\t') : NULL, *e = strchr(p, '\n');
+        if (!z || (e && z > e) || c - p != 2 || memcmp(p, cc, 2)) continue;
+        if (!strncmp(z + 1, n, l) && (z[1 + l] == '\t' || z[1 + l] == '\n' || !z[1 + l])) return line;
+    }
+    return -1;
+}
+
 /* lower is more usual: a name zone.tab lists, then by area; names without an area (CET, EST5EDT, Poland) and Etc/ last */
 static int rank(const char *tab, const char *n) { return area(n) + (tab && !listed(tab, n) ? 40 : 0); }
 
@@ -60,11 +77,12 @@ static int footer(FILE *fp, long off, uint32_t len, char *f)
     return 1;
 }
 
-int tz_lookup(const char *path, const char *posix, const char *cur, char *out, size_t cap)
+int tz_lookup(const char *path, const char *posix, const char *cur, const char *country, char *out, size_t cap, int *how)
 {
     unsigned char h[24], e[ENTRY_LEN];
-    char f[FOOTER_MAX + 1], best[NAME_LEN + 1] = "", name[NAME_LEN + 1];
-    int best_rank = 999, found = 0;
+    char f[FOOTER_MAX + 1], best[NAME_LEN + 1] = "", ccbest[NAME_LEN + 1] = "", name[NAME_LEN + 1];
+    int best_rank = 999, cc_line = -1, cc_rank = 999, found = 0, has_cur = 0, cur_in = 0;
+    const char *cc = country && strlen(country) == 2 ? country : NULL;
     char *tab = NULL;
     FILE *fp = fopen(path, "rb");
     if (!fp) return 0;
@@ -85,12 +103,22 @@ int tz_lookup(const char *path, const char *posix, const char *cur, char *out, s
         if (!name[0] || start > zt - data || len > zt - data - start) continue;
         if (!footer(fp, (long)(data + start), len, f) || strcmp(f, posix)) continue;
         found = 1;
-        if (cur && !strcmp(name, cur)) { snprintf(best, sizeof best, "%s", cur); break; }
-        int r = rank(tab, name);
+        int cl = cc && tab ? country_line(tab, cc, name) : -1, r = rank(tab, name);
+        if (cur && !strcmp(name, cur)) { has_cur = 1; cur_in = cl >= 0; }
+        /* the country's: by area first (AU with Sydney's rule: Australia/Hobart, not Antarctica/Macquarie, zone.tab's
+         * first AU line of that rule), then zone.tab's order */
+        if (cl >= 0 && (cc_line < 0 || r < cc_rank || (r == cc_rank && cl < cc_line))) { cc_line = cl; cc_rank = r; snprintf(ccbest, sizeof ccbest, "%s", name); }
         if (r < best_rank) { best_rank = r; snprintf(best, sizeof best, "%s", name); }
     }
     fclose(fp); free(tab);
-    if (!found || strlen(best) >= cap) return 0;
+    if (!found) return 0;
+    int h_ = TZ_GUESS;
+    /* the zone set kept; the one a guess gives counts as a guess still: an older hassmic set it so (the Dot 3 keeps its
+     * properties), and a guess gives no language */
+    if (has_cur && (cur_in || cc_line < 0)) { h_ = cur_in ? TZ_COUNTRY : strcmp(cur, best) ? TZ_KEPT : TZ_GUESS; snprintf(best, sizeof best, "%s", cur); }
+    else if (cc_line >= 0) { snprintf(best, sizeof best, "%s", ccbest); h_ = TZ_COUNTRY; }
+    if (strlen(best) >= cap) return 0;
     memcpy(out, best, strlen(best) + 1);
+    if (how) *how = h_;
     return 1;
 }

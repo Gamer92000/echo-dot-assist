@@ -3639,12 +3639,19 @@ Run in this order. Each step says what it proves.
       zone's (`speech_locale` `aligner`, `align_lang`), and goes on as before they were listed: issue #176, Brazil's
       zones had lost "America/"'s en-US, and alexa-pt-BR (own locale pt-BR, no `.wa` either) was left with no
       aligner.  Zones match by whole name or folder, not prefix: "America/Bahia" caught America/Bahia_Banderas,
-      `tz_lookup`'s pick for CST6 (Mexico, Central America, Saskatchewan).  Open: `state/timezone` is `tz_lookup`'s first zone with HA's POSIX rule
-      unless the set one has it (CET: Europe/Amsterdam, EET: Europe/Athens, GMT/BST: Europe/Guernsey, `<-03>3`: America/Araguaina for
-      Argentina, Uruguay, Paraguay, the Guianas; `<-04>4`: America/Boa_Vista for Venezuela, Bolivia, Guyana; WET:
-      Europe/Lisbon for the Canaries), so Automatic gives the zone's language only where the Echo's own zone
-      survived: the Show's date in Dutch for most of Central Europe, Portuguese in those of South America.  The
-      aligner skips nl and pt, so it goes as before 7f0caba there.  The page's help still names the zones' languages.  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
+      `tz_lookup`'s pick for CST6 (Mexico, Central America, Saskatchewan).  The zone's name from HA's POSIX rule alone was
+      `tz_lookup`'s first of that rule unless the set one had it (CET: Europe/Amsterdam, EET: Europe/Athens,
+      GMT/BST: Europe/Guernsey, `<-03>3`: America/Araguaina for Argentina, Uruguay, Paraguay, the Guianas; `<-04>4`:
+      America/Boa_Vista for Venezuela, Bolivia, Guyana; WET: Europe/Lisbon for the Canaries): a Dutch date in Germany.
+      And `speech_locale` read `state/timezone`, which root's `tz_set` takes away within 10 s: on an Echo the zone
+      reached the language only in that window (Dot 2, 2026-11-18: no `state/timezone`, `persist.sys.timezone`
+      Europe/Amsterdam, `persist.puffin.locale` de-DE).  Now: the Wi-Fi's country (`apcountry.c`, nl80211 GET_SCAN
+      dump as the daemon's user: the Dot 2's AP "DE" in 0.6 ms) picks the zone of that country in zone.tab, and
+      `state/zone` keeps how it was found; the language takes only a country's or a kept zone, never a guess (nor the
+      guess's own zone set by an older hassmic).  `tests/unit/tz_ref.py` (every zone.tab country and rule),
+      `apcountry_test.c` (ASan/UBSan), `fake_ha_esphome_timers.py` (HA's Berlin rule + DE: Europe/Berlin, country).
+      Open: the other models' drivers (gen4m donut, the Shows, cannoli) not tried for IEs in cfg80211's scan results;
+      without them there is no country and nothing changes.  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
       `ui_date`: day and month names per language (bionic's strftime is C locale only), English for none or one not
       known, Japanese left out (no kanji in Roboto).  `bt_langs` has ro.  `core_transcript` compares folded (`fold`:
       U+00C0..U+017F and ș ț without marks, lower case, no hyphens): "Închide" was never lower-cased, and the old

@@ -3,13 +3,14 @@
 timers ringing and what stops them, a new run after an error, the timer that runs next, encryption provisioned by Home Assistant (key, mDNS,
 refusals, clearing), the Sendspin pairing token over the keyed link only, the time and zone over the keyed link, noise reduction, LED brightness, the light sensor and the
 Echo Show's screen brightness (HASSMIC_FAKE_BACKLIGHT: a model with one)."""
-import asyncio, base64, os, re, signal, subprocess, time
+import asyncio, base64, os, re, signal, subprocess, tempfile, time
 from datetime import datetime
 from aioesphomeapi import NumberInfo, NumberState, SwitchInfo, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
 from aioesphomeapi import APIClient, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm, ZERO_NOISE_PSK
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
 from aioesphomeapi.model import SendspinPairingTokenStatus
 from esphome_common import ROOT, check, until, sync, peak, speech, home_assistant, run
+from tzdata_file import build as build_tzdata
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 17101, 17102, 17103, 17104, 17105
 
@@ -238,6 +239,7 @@ async def main(e):
         except err: ok = True
         check(ok, f"with a key: {what} connection refused ({err.__name__})")
 
+    open(os.path.join(state, "country"), "w").write("DE\n")           # the Wi-Fi's (apcountry.c's HASSMIC_FAKE_COUNTRY)
     enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode(), timezone="Europe/Berlin")
     await asyncio.wait_for(enc.connect(login=True), 5)
     info = await enc.device_info()
@@ -265,11 +267,22 @@ async def main(e):
     boot = time.clock_gettime(time.CLOCK_BOOTTIME)
     check(abs(t - time.time()) <= 2 and re.fullmatch(r"\d+\.\d\d", at) and 0 <= boot - float(at) < 5,
           f"keyed link: Home Assistant's time in state/clock for root, with the boot clock as /proc/uptime words it: {t} {at}")
-    # and its zone, as its rule (the PC has no bionic tzdata: the rule itself; tz_ref.py checks the names)
-    from aioesphomeapi.timezone import iana_to_posix_tz
-    try: tz = open(os.path.join(state, "timezone")).read()
-    except OSError: tz = ""
-    check(tz == iana_to_posix_tz("Europe/Berlin") + "\n", f"keyed link: Home Assistant's time zone in state/timezone for root: {tz!r}")
+    # and its zone, sent as its rule: the zone of that rule in the Wi-Fi's country (DE, written before the link) of a
+    # bionic tzdata built from Python's, for root; and kept as known, for the language (tz_ref.py checks the names)
+    def read(f):
+        try: return open(os.path.join(state, f)).read()
+        except OSError: return ""
+    await until(lambda: read("zone") and read("timezone"), 3)          # clock.c's zone thread writes both
+    check(read("timezone") == "Europe/Berlin\n" and read("zone") == "Europe/Berlin country\n",
+          f"keyed link: Home Assistant's rule as the zone of the Wi-Fi's country, in state/timezone for root and state/zone: {read('timezone')!r} {read('zone')!r}")
+    # the next link with no country from the Wi-Fi (an AP without the element, a read cut short) and no zone set: the
+    # zone known before stands, kept, never the guess (Europe/Amsterdam for that rule)
+    open(os.path.join(state, "country"), "w").write("")
+    again = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode(), timezone="Europe/Berlin")
+    await asyncio.wait_for(again.connect(login=True), 5); again.subscribe_states(lambda s: None)
+    await until(lambda: read("zone") != "Europe/Berlin country\n", 3)
+    check(read("zone") == "Europe/Berlin kept\n", f"no country on the next link: the zone known before kept: {read('zone')!r}")
+    await again.disconnect()
     started.clear(); mic.clear()
     enc.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio, handle_announcement_finished=handle_finished)
     await sync(enc); proc.send_signal(signal.SIGUSR1)
@@ -357,4 +370,6 @@ async def main(e):
     ps = {x["name"]: x for x in page.state()["settings"]}
     check(all(k in ps for k in ("screen_brightness_auto", "screen_brightness", "screen_brightness_adjust")), "on the settings page")
 
-run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1"})
+TZDATA = tempfile.mktemp(suffix=".tzdata"); build_tzdata(TZDATA)          # bionic's, from Python's tzdata
+try: run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1", "HASSMIC_TZDATA": TZDATA})
+finally: os.unlink(TZDATA)

@@ -41,7 +41,10 @@ System) off takes any certificate, but then anyone on your network could slip th
   which need not be the wake word's: German voices saying the English "Alexa" were found in 48 of 75 tests with
   German sounds, in 23 with English ones. So "Language you speak" (settings page, Wake word) picks it; automatic goes
   by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain, Mexico: Spanish;
-  Japan; else English), then by the wake word's own language. The list also has Italian, Portuguese, Dutch, Swedish,
+  Japan; the UK, Ireland, the US, Canada, Australia, India: English), then by the wake word's own language. Home
+  Assistant tells the Echo only the zone's offset and summer time, which Germany shares with France, the Netherlands
+  and others, so the country comes from your Wi-Fi router (see "Time and time zone" below); without it, only a zone
+  set on the Echo before counts. The list also has Italian, Portuguese, Dutch, Swedish,
   Danish, Norwegian, Finnish, Polish and Romanian, which automatic picks by the time zone too: there are no sounds for
   them yet, so for the wake word they count as not said, picked or automatic, and the Echo goes on as before they
   were listed (in Brazil: English); the Echo Show writes its date in the language picked. It also learns from your requests how the word sounds
@@ -796,8 +799,10 @@ Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (I
 Time and time zone: the Echo takes both from Home Assistant, over the encrypted connection only (no time before
 Home Assistant has given it its key), when it connects and every 6 hours. Change Home Assistant's time zone and the Echo
 follows within those 6 hours, or at once when Home Assistant reconnects. Home Assistant says the zone as its rule
-(offset and summer time), not its name, so the Echo picks a zone with that rule from its own time zone data: it may
-call Europe/Berlin "Europe/Amsterdam", with the same time. Its log stays in UTC.
+(offset and summer time), not its name, so the Echo picks a zone with that rule from its own time zone data, the
+one of the country your Wi-Fi router says it is in (Germany: Europe/Berlin, not Europe/Amsterdam, which has the same
+time). Where the router says no country, it keeps a zone set on it before, else takes one with the right time whose
+name may be another country's; that one never sets the language ("Language you speak", under Voice). Its log stays in UTC.
 
 A new IP address (the router hands out another one, or a Wi-Fi switch): Home Assistant finds the Echo again by itself,
 within about two minutes. It ignores the Echo's announcement while it still holds the old connection (90 s), so the
