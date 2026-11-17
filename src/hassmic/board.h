@@ -70,6 +70,11 @@ struct board {
      * yet, 350 ms, what the Echo Show 8 needed for its 120 ms wake blip (2026-10-14); -1: measured, nothing lost, and
      * the HAL's cold open short enough for earsup.c without it (open + 85 ms under D_MAX, 400 ms; logcat) */
     int cold_lead_ms;
+    /* audio_mixer.c: the mixer's micHfp carries the front end's call path ("Voice" in AFE.cfg: echo canceller, residual
+     * echo suppressor, noise reduction, AGC) while a Voip stream is open, measured on this model; a call then sends it
+     * (call.c, setting call_mic).  0: not measured, the assistant's micAsr as before.  Measured: donut (a talker,
+     * 2026-11-13), biscuit (a talker and the echo, 2026-11-17); PLAN.md "Calls with Amazon's call microphone" */
+    int call_mic;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's

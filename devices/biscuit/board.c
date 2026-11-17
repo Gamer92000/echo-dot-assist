@@ -40,4 +40,7 @@ const struct board board = {
      * ext_speaker_output path (/system/etc/audio_device.xml) sets 6, the 3.5 mm jack's 11 (issue #19, 2026-10-11) */
     .speaker_gain = "HP Driver Gain Volume",
     .speaker_gain_stock = 6,
+    /* micHfp in call mode, 300-3400 Hz (2026-11-17): a talker 22 dB over the room (micAsr 11), at -30 dBFS (micAsr -55);
+     * the Echo's own speech 15 dB under micRaw's */
+    .call_mic = 1,
 };

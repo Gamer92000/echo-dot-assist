@@ -2,6 +2,19 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — Drop In sounds as Alexa's did
+
+- **Drop In sounds as Alexa's did: the microphone of Amazon's own calls (Echo Dot 3 and Echo Dot 2).** A call sent the
+  stream made for speech to text, turned up by the Echo: dull, with much of the room in it. It now sends what Amazon's
+  front end makes for calls: its own noise reduction, an even level and its echo canceller for calls (measured on a
+  Dot 3: the voice 23 dB over the room, against 17 dB before and 13 dB for the bare microphone; on a Dot 2 the Echo's
+  own sound 15 dB further down than in the bare microphone). It is a little duller (little over 4 kHz) and much
+  steadier. New setting "Call microphone" (Features, under Drop In): Amazon's call processing (default) or the
+  assistant's stream as before. Should the call microphone stop delivering during a call, the assistant's takes over
+  within a quarter of a second, and for the rest of the call if it does not come back. The Echo 2 and the Echo Dot 5
+  have the same call processing but keep the assistant's stream until it has been tried on them; the Echo Shows and
+  the Echo Input keep it too: their audio has no call stream. Thanks to arpena.
+
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 
 - **Light ring live: the "Fire" effect no longer stutters on an Echo that has been running for a week or more (Echo

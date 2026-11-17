@@ -2663,6 +2663,52 @@ Run in this order. Each step says what it proves.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
+- [~] Calls with Amazon's call microphone (2026-11-13, Echo Dot 3): a user's calls from a Dot 3 sounded dull and full of
+      the room next to a phone's, and worse than stock's Drop In had. micAsr is the ASR path (no NR, no AGC) under our
+      +20..+30 dB gain.  AFE.cfg (`/system/vendor/etc/audio-algorithms/`) has a "Voice" path beside "ASR": VOIP
+      MicPreProcess +6 dB, VAEC, Frequency Masking Lite RES, Recursive Magnitude Estimation NR, Random Filler CNG, FB AGC
+      (target -22 dBFS, +20 dB constant), VOIP Tx Parametric IIR = VOIPTxParametricEQ.cfg (+6 dB peak at 1.9 kHz, -3 dB
+      shelf over 3.5 kHz), Tx limiter; no beamformer.  Its output is **micHfp while a Voip stream is open** (logcat
+      "VoIP mode 1"); without one micHfp is the bare mic (the Drop In entry below saw that case).  micPstn is the bare
+      mic at 8 kHz.  One take on all four streams in call mode, listening mode on, a talker across a kitchen: speech /
+      pauses micRaw -52/-65 dBFS, micAsr -48/-65, micHfp -20/-43, micPstn -52/-65; micHfp 15 dB less over 4 kHz than
+      micAsr.  (An earlier reading of "muffled microphones" was a wrong reference: the bare mic at 30 cm has speech's
+      usual tilt; across the room the room takes 5-8 dB over 4 kHz.)  Calls now send micHfp (`call.c`
+      `callmic_thread`, setting `call_mic`), without micgain, the gate's duck -12 dB.  On the Dot 3 (a SIP call from a
+      phone, a branch with a SIP client on this code): "exactly as I recall" stock's, in G.711 and in Opus.  First try
+      refused the stream: its format getters answer -1.  `fake_ha_dropin.py` 7b: the hall's call microphone (a 700 Hz
+      tone, `HASSMIC_CALL_CAP`) arrives at its own level (-21.8 for -20), switching mid-call goes back to micAsr.
+      Dot 2 (biscuit, 2026-11-17): AFE.cfg's "Voice" path has AEC (not VAEC), Frequency Masking RES, the same NR and
+      CNG, FB AGC target -23 dBFS, +20 constant, +12 at most (donut: +6 pre-gain, +15), no pre-process.  13 s of speech
+      played on Voip (volume 50), micRaw and micHfp read beside it, no talker: 300-3400 Hz, the echo micRaw -50.6 /
+      micHfp -67.5 dBFS (-14.6 dB; the front end logged ERLE 10 dB), the room without the far end -65.6 / -59.1 (+6.5,
+      the AGC); micHfp dips to -80 under the echo (RES), its coherence with micRaw is ~0.  So micHfp is the call path
+      here too, and the Drop In entry's "micHfp is the bare mic" (2026-10-08) was wrong.  Unlike donut, opening micHfp
+      alone starts the call path ("AFE VoIP Diagnostics started"): on TTS the echo was 13 dB under micRaw's as well.  A
+      talker's level from the AGC's figures: donut's -52 dBFS talker in micRaw + 32 dB = -20, so the gate's -45
+      (`NEAR_MIN_HFP_DB`) and the far end's 25 dB over its floor (`FAR_OVER_DB`) hold with room to spare.
+      Dot 2 with a talker (2026-11-17, the same Echo, call mode, a talker for 12 s then the Echo's speech on Voip;
+      micRaw, micHfp and hassmic's micAsr dump side by side), 300-3400 Hz, voice median / p90, its quiet after, the echo
+      alone: micRaw -51.7 / -48.4, -65.0, -63.2; micAsr -55.4 / -47.6, -66.7, -66.9; micHfp -30.4 / -22.0, -52.8,
+      -64.0.  Voice over the room: micHfp 22 dB, micRaw 13, micAsr 11; the echo 11 dB under micHfp's room.  Full band
+      micHfp -26 / -16 dBFS (AGC target -23).  The gate: 99 % of the voice frames over `NEAR_MIN_HFP_DB`, 91 % over the
+      room + 9.  Over 4 kHz 6 dB less than micRaw.  Half of every stream's energy was a 120 Hz hum of the room (in
+      micRaw too).  The front end's own "Near-End Active Speech SNR" said 1-2 dB for these takes: not to be trusted.
+      Per model: `board.call_mic` (donut and biscuit 1); radar and cannoli have the path in AFE.cfg (radar VAEC + Lite
+      RES as donut, cannoli AEC as biscuit) and keep micAsr until measured as above.
+      A stall: the mixer's read waits up to 1.5 s for nothing (audio_mixer.c), callmic_thread gave up after three, and
+      the capture thread stood aside all along: 4.5 s without audio, and the far end ends a call after 5 s (4 s in
+      the test, where it did).  Now the capture thread sends micAsr once micHfp has been silent `HFP_STALE_MS` (250);
+      micHfp takes over again when it is back, after three empty reads it is given up.  A Voip stream that fails also
+      ends micHfp for the call (`voip_gen`: the bare mic again, without our gain).  Each swap of sources restarted
+      the gate with listening mode's state, so a side that talked as micHfp stalled kept the front end listening (its
+      canceller frozen) for the call: the state is kept across a swap now.  `fake_ha_dropin.py` 7c
+      (`HASSMIC_CALL_CAP_STALL`): a short stall, micAsr meanwhile, listening mode off in its silence, micHfp back and
+      heard; a long one, longest gap at the kitchen under 800 ms, the call goes on; 7d (`HASSMIC_VOIP_FAIL`).  After a
+      failed Voip stream the playout went on telling the echo suppressor what it no longer played: the far end's voice
+      ducked this side for the rest of the call; it counts as silence now (7d: the hall's trace).
+      Open: Echo to Echo with micHfp on both ends, the -12 dB tuned on a trace, double talk, the Echo 2 and Echo Dot 5,
+      a call while music plays.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
       invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock
@@ -2754,7 +2800,8 @@ Run in this order. Each step says what it proves.
       - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
         tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
         on Voip against -45..-58 on TTS (floor -72). Voip follows MainVolume (+9 dB from 30 to 60). micHfp is the bare
-        mic (floor -46), not a call Tx stream.
+        mic (floor -46), not a call Tx stream (wrong: it is the call path, 2026-11-17, "Calls with Amazon's call
+        microphone").
       - Connect 4 ms after the invite (auto). Jitter: micAsr comes in 50 ms blocks, frames leave in bursts of 2-3; a
         3-frame prebuffer started level with the bursts and stayed a frame ahead: 639 of 802 frames came after their
         turn. Now 4 frames from the oldest and an underrun conceals without moving on: 0 of 805 missing, 9 waits at the

@@ -83,6 +83,8 @@ Rough order. Each step is safe to stop at.
      `volume_curve`: see [Volume curve](#volume-curve); until it is measured, `board_vol_dot2` with the comment the
      other models have.  `cold_lead_ms` (Android models): `tools/cold-lead.py` with a microphone on the PC beside the
      Echo measures what a sound loses when the output was closed; -1 where nothing, unset (350 ms) until measured.
+     `call_mic` (mixer models): 1 once micHfp, read beside micRaw while speech plays on a Voip stream, has the echo well
+     under micRaw's (the call path; PLAN.md "Calls with Amazon's call microphone" has the take); unset, calls send micAsr.
    - `device.mk`: API level from `ro.build.version.sdk`. If the model has Amazon's `mixer` (`libmixerAPI.so`) and
      `libpryon.so`, the existing backends should work once `probe.sh`, `mixcap` and `pryon_test` agree. If not, write a
      new `audio_*.c` or `wake_*.c` behind `audio.h` / `wake.h` and name it here.
