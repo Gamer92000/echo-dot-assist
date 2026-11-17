@@ -242,25 +242,30 @@ static void caption(struct scene *s, int m, int *used)
     }
 }
 
-/* the face's bottom line: the track playing, with its own play/pause; a tap anywhere else on it opens the music */
+/* what plays, as a card in the bottom right corner with its own play/pause; a tap anywhere else on it opens the music.
+ * A bar under the eyes across half the screen was in the way of the face (asked on an Echo Show 5, 2026-11-04): the
+ * corner leaves the face and its clock where they are */
 static void miniplayer(struct scene *s)
 {
-    float w = s->w, h = s->h, y0 = 0.79f * h, y1 = 0.95f * h, x0 = 0.22f * w, x1 = 0.78f * w, ph = y1 - y0;
-    rrect(s, ID_FACE + 30, x0, y0, x1, y1, ph / 2, pressed(s, A_TOMUSIC, 0) ? 0x2A2E35 : DARK, 255);
-    float a = ph - U(12);
-    if (!image(s, ID_FACE + 31, &s->art, x0 + U(6), y0 + U(6), a, a, a / 2)) {
-        rrect(s, ID_FACE + 31, x0 + U(6), y0 + U(6), x0 + U(6) + a, y0 + U(6) + a, a / 2, 0x30343B, 255);
-        icon(s, ID_FACE + 32, IC_NOTE, x0 + U(6) + a / 2, y0 + ph / 2, a * 0.32f, DIM, 0x30343B);
+    float ch = U(76), cw = U(300) < 0.4f * s->w ? U(300) : 0.4f * s->w;
+    float x1 = s->w - U(18), y1 = s->h - U(18), x0 = x1 - cw, y0 = y1 - ch;
+    rrect(s, ID_FACE + 30, x0, y0, x1, y1, U(18), pressed(s, A_TOMUSIC, 0) ? 0x2A2E35 : DARK, 255);
+    float a = ch - U(16);
+    if (!image(s, ID_FACE + 31, &s->art, x0 + U(8), y0 + U(8), a, a, U(10))) {
+        rrect(s, ID_FACE + 31, x0 + U(8), y0 + U(8), x0 + U(8) + a, y0 + U(8) + a, U(10), 0x30343B, 255);
+        icon(s, ID_FACE + 32, IC_NOTE, x0 + U(8) + a / 2, y0 + ch / 2, a * 0.32f, DIM, 0x30343B);
     }
-    float tx = x0 + U(18) + a, tw = x1 - tx - ph - U(8);
-    text(s, ID_FACE + 35, s->title[0] ? s->title : "Music Assistant", U(23), 1, tw, tx, y0 + U(8), 0, FG, 255);
-    text(s, ID_FACE + 36, s->artist, U(19), 0, tw, tx, y0 + U(34), 0, DIM, 255);
-    hit(s, x0, y0, x1 - ph, y1, A_TOMUSIC, 0);
-    if (can(s, s->mstate == 1 ? "pause" : "play")) {
-        float bx = x1 - ph / 2, by = (y0 + y1) / 2;
-        rrect(s, ID_FACE + 37, bx - a / 2, by - a / 2, bx + a / 2, by + a / 2, a / 2, pressed(s, A_PLAYPAUSE, 0) ? 0xB0B4BA : FG, 255);
-        icon(s, ID_FACE + 38, s->mstate == 1 ? IC_PAUSE : IC_PLAY, bx + (s->mstate == 1 ? 0 : a * 0.03f), by, a * 0.27f, DARK, FG);
-        hit(s, x1 - ph, y0, x1, y1, A_PLAYPAUSE, 0);
+    float b = ch - U(30);                                       /* the button's diameter */
+    int playable = can(s, s->mstate == 1 ? "pause" : "play");
+    float tx = x0 + U(20) + a, tw = x1 - tx - (playable ? b + U(18) : U(12));
+    text(s, ID_FACE + 35, s->title[0] ? s->title : "Music Assistant", U(19), 1, tw, tx, y0 + U(15), 0, FG, 255);
+    text(s, ID_FACE + 36, s->artist, U(16), 0, tw, tx, y0 + U(40), 0, DIM, 255);
+    hit(s, x0, y0, playable ? x1 - b - U(16) : x1, y1, A_TOMUSIC, 0);
+    if (playable) {
+        float bx = x1 - U(12) - b / 2, by = (y0 + y1) / 2;
+        rrect(s, ID_FACE + 37, bx - b / 2, by - b / 2, bx + b / 2, by + b / 2, b / 2, pressed(s, A_PLAYPAUSE, 0) ? 0xB0B4BA : FG, 255);
+        icon(s, ID_FACE + 38, s->mstate == 1 ? IC_PAUSE : IC_PLAY, bx + (s->mstate == 1 ? 0 : b * 0.03f), by, b * 0.27f, DARK, FG);
+        hit(s, x1 - b - U(16), y0, x1, y1, A_PLAYPAUSE, 0);
     }
 }
 
@@ -272,8 +277,9 @@ static void big_clock(struct scene *s, int m)
     clock_text(s, clk, sizeof clk);
     ui_date(day, sizeof day, &tm, s->lang);
     /* 0.56 of the height fits the Shows' 960 x 454; a narrower screen takes it smaller.  Measured on "88:88" so the
-     * digits keep one size all day (a tabular look without a tabular font).  With the music's bar at the bottom
-     * (0.79 of the height down) the clock is a little smaller and higher, or the date touched it */
+     * digits keep one size all day (a tabular look without a tabular font).  With what plays in the bottom corner
+     * (miniplayer's card, 0.8 of the height down) the clock is a little smaller and higher: at full size the date
+     * ended 6 px above the card on 960 x 470, and a long one (up to 0.9 of the width) reaches over the card's side */
     int player = m == M_IDLE && s->music && (s->title[0] || s->mstate);
     float px = (player ? 0.48f : 0.56f) * h, fit = (float)text_measure(s, "88:88", px, 0);
     if (fit > 0.92f * w) px *= 0.92f * w / fit;
@@ -301,7 +307,7 @@ int face_view(struct scene *s, float dt)
     moving = eyes(s, m, dt);
     caption(s, m, &used);
     clock_text(s, clk, sizeof clk);
-    if (!used && s->music && (s->title[0] || s->mstate)) miniplayer(s), used = 1;
+    if (!used && s->music && (s->title[0] || s->mstate)) miniplayer(s);     /* (in its corner: the clock stays) */
     if (used) text(s, ID_FACE + 20, clk, U(33), 0, s->w, s->w - U(28), U(14), 2, DIM, 255);
     else text(s, ID_FACE + 20, clk, U(47), 0, s->w, s->w / 2.0f, 0.83f * s->h, 1, DIM, 255);
     if (s->face.poke_at && s->now - s->face.poke_at < POKE_MS + 400) moving = 1;

@@ -3574,7 +3574,7 @@ Run in this order. Each step says what it proves.
       maybe an hour back; the UI's count restarts as it takes over: no frames behind an app counted it) and the UI counts the same timeout itself (`scene_active`: a touch,
       a pattern coming on, the volume, mute, Do not disturb, music starting (not its stop: a new Sendspin session says "stopped" again), the music view, the drawer, an app in front;
       the face while it is not waiting), then `face.c` `big_clock`: the digits at 0.56 of the height (0.48 with the
-      music's bar), sized on "88:88", the date under them, mic off and Do not disturb on a line, one hit over all of
+      music's card in the corner), sized on "88:88", the date under them, mic off and Do not disturb on a line, one hit over all of
       it (`A_WAKE`: the waking touch does nothing else).  An app or the music page in front: dark after the timeout as
       before (the clock is the face's).  Told as `ck <on> <min>` beside `wo`.  Cost: `ui_test` counts 0 frames in 20 s on the clock
       against 117 for the idle face.  Checked on the PC: `ui_test` under ASan/UBSan (the face at half the timeout, the
