@@ -112,7 +112,8 @@ set its key (it does so when you adopt the Echo): both the pairing-token request
 hands to Music Assistant, which then pairs by itself) and the older "Sendspin pairing token" text sensor, which has no
 state until then. Before adoption someone on the network could set a key first and then ask, but that takes the Echo
 from Home Assistant, which you would notice. The token is also in the Echo's log, read over adb, and at the end of
-`scripts/setup.sh`. The settings page never shows it, and its log viewer blanks it.
+`scripts/setup.sh`. The settings page never shows it, and its log viewer blanks it, as do the lines sent to a syslog
+server and to ESPHome's log subscribers (both plain on the network, like the page).
 
 ## Arbitration between Echos
 

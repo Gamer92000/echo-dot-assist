@@ -3972,6 +3972,26 @@ Run in this order. Each step says what it proves.
       dex looked through too).  cronos, crown, cupcake: setting and both broadcasts; athena's receiver has no
       SET_ENABLENETBOUNCE (mEnableNetBounce only from its config): setting and SET_ENABLEWIFIDIAGS.  **Open:** a day's
       run on each of them.
+- [x] The log to a syslog server and to ESPHome's log subscribers (2026-11-17, `logfwd.c`).  A request: the log only
+      lived on the Echo and was read from the page, which does not help when the Echo fell off the network, when the
+      part needed has rotated out, or to line its events up with Home Assistant's.  One thread follows `boot.log`
+      (inotify; the file, not hassmic's pipe: root's main.sh lines are there too), so the file is the queue: the sender's
+      offset (with the 32 bytes before it, to know the place after a rotation) moves only once a line went out, and is
+      saved at most once a minute (`state/syslog.pos`).  Rotation (copy + truncate): the rest from `boot.log.1` when
+      its bytes match there.  UDP: a connected socket, the first line after a (re)start a probe that counts once 3.5 s
+      passed without an error (a refused port, ARP failing), so a server that is absent does not flap between "not
+      reached" and "reached again" at every try; TCP: octet counting (5424), a newline after each 3164 message, the
+      offset moves once the kernel took all of it.  At most 500 lines a second, in batches of 50 (a backlog read in
+      64 KB pieces, not one per line).  `boot+` times put in real time only for lines after this boot's
+      `== satellite start ... boot <id>` (main.sh now names it) or a saved place of the same boot.  ESPHome:
+      SubscribeLogsRequest (28) / SubscribeLogsResponse (29), lines as `[W|I][hassmic]: text`, dump_config answered
+      with the version and the syslog state; a line goes to a client only when its socket has room (SIOCOUTQ against
+      SO_SNDBUF: send_to() holds core_lock and waits up to 5 s on a full one), what it missed is told in the next.
+      Nothing to do (the default): no watch on the file, the thread sleeps on its pipe.  Settings gain a text type
+      (`S_TEXT`, `syslog_server`).  Tests: `tests/fake_syslog.py` (UDP, TCP, refused and back, a rotation while away, a
+      restart, `boot+`, the token, both formats, ESPHome levels, off), `make unit-logfwd`; both also under ASan/UBSan.
+      **Open:** not run on an Echo yet (only the PC and the ARM build); a day against a real rsyslog/Graylog; Home
+      Assistant's own log subscription (its option) not tried against a real Home Assistant.
 - [x] Android models: captive portal DNS lookups (2026-11-17, issue #189).  A Show's owner saw DNS queries for
       mmechocaptiveportal.com and fireoscaptiveportal.com reach 8.8.8.8 (a resolver DHCP named, so the lock admits port
       53 to it) over and over, with no TCP after them.  Source from the firmware: boot-fosframework's

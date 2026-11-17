@@ -79,6 +79,7 @@
 #include "board.h"
 #include "clock.h"
 #include "statefile.h"
+#include "logfwd.h"
 
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
@@ -2091,6 +2092,14 @@ static int arb_send_key(const char *node, const char *network, const char *key)
 
 static void arb_notify(void) { pthread_mutex_lock(&core_lock); if (proto->arb_changed) proto->arb_changed(); pthread_mutex_unlock(&core_lock); }
 
+/* logfwd.c's thread: a line of boot.log for the protocol's log subscribers */
+static void log_live(int level, const char *msg, size_t n)
+{
+    pthread_mutex_lock(&core_lock);
+    if (proto->log) proto->log(level, msg, n);
+    pthread_mutex_unlock(&core_lock);
+}
+
 void core_settings_changed(void) { if (connected && proto->settings_changed) proto->settings_changed(); }
 int  core_ha_linked(void) { return connected; }
 void core_entities_changed(void) { if (connected && proto->entities_changed) proto->entities_changed(); }
@@ -3758,6 +3767,7 @@ int main(int argc, char **argv)
     if (use_bt) improv_start(&improv_hooks);                 /* setup over Bluetooth, when there is no network (improv.c) */
     if (ota_port) ota_start(ota_port);
     pthread_mutex_lock(&core_lock); core_timer_sound_default(); settings_load(); settings_preset(); pthread_mutex_unlock(&core_lock);    /* whatever the protocol */
+    logfwd_start(core_node_name(), log_live);               /* boot.log on to syslog and ESPHome's log subscribers */
     ringlive_begin();                   /* the mute and the Echo's own patterns known: what the last run left lit, dark */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };

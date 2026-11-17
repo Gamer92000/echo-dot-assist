@@ -269,6 +269,12 @@ const HELP = {
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
   https_verify: { help: 'Whether the Echo checks the certificate of a Home Assistant that serves HTTPS itself. Home Assistant then gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
+  syslog: { help: 'Sends the Echo\'s log to a syslog server on your network, line by line as it is written. The log on the Echo stays as it is; this is a copy. Useful when the Echo has dropped off the network, when you need something from hours ago that has already rotated out here, or to line the Echo\'s events up with Home Assistant\'s. If the server or the network is down, nothing is lost: the lines wait on the Echo and are sent, with their original times, once the server is reachable again, even after a restart. Each message names the Echo by its node name and "hassmic" as the app. Like this page, the log is sent unencrypted; the Sendspin pairing token is blanked out. Just want to see the log in Home Assistant? Open the Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure) and tick "Subscribe to logs from the device": no syslog server needed.',
+    status: () => syslogStatus() },
+  syslog_server: { help: 'The IP address or host name of your syslog server. Add the port after a colon if it is not 514. Examples: 192.168.1.10, logs.lan:5514, nas.local, [fd00::1]:514. Works with rsyslog, syslog-ng, Graylog, Vector, Grafana Loki (via Alloy or promtail), Synology Log Center and QNAP QuLog.',
+    placeholder: 'e.g. 192.168.1.10 or logs.lan:5514' },
+  syslog_protocol: { help: 'UDP works with every syslog server. If the server is switched off, the Echo notices and keeps the lines until it is back, but a single message lost on the way stays lost. TCP makes sure every line arrives, in order. The server has to accept TCP for that (rsyslog: imtcp; syslog-ng: transport("tcp")).' },
+  syslog_format: { help: 'RFC 5424 is the current standard: times in UTC, to the millisecond, with the year. Choose RFC 3164 (classic BSD syslog) only for an old server that accepts nothing else; it uses the Echo\'s local time and has no year.' },
   kiosk_internet: { help: 'Kiosk Satellite may reach the internet while this is on: for its own updates and for web pages it shows (iframes, dashboards). Only that app gets out: the Echo\'s own voice satellite stays on your network except for what it needs, and Amazon\'s software stays cut off. Off: it reaches your network only, so it shows Home Assistant but cannot update itself or load outside pages. On by default. Takes effect within seconds.' },
   kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
   kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
@@ -461,6 +467,10 @@ const SUB = {
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
   https_verify: 'Checks the certificate of an HTTPS Home Assistant',
+  syslog: 'A copy of the log, line by line as it is written',
+  syslog_server: 'IP address or host name; add :port if it isn\'t 514',
+  syslog_protocol: 'UDP works with any server; TCP never drops a line',
+  syslog_format: 'RFC 5424 for current servers, RFC 3164 for older ones',
   kiosk_internet: 'Kiosk Satellite may reach the internet',
   kiosk_mic: 'Kiosk Satellite may use the microphone',
   kiosk_camera: 'Kiosk Satellite may use the camera, also to scan a QR code',
@@ -492,6 +502,8 @@ const SUB = {
   drop_in_answer: 'How a call connects',
 };
 const CHOICE_NAMES = {
+  syslog_protocol: { udp: 'UDP', tcp: 'TCP' },
+  syslog_format: { rfc5424: 'RFC 5424', rfc3164: 'RFC 3164' },
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
   speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese', it: 'Italian',
     pt: 'Portuguese', nl: 'Dutch', sv: 'Swedish', da: 'Danish', nb: 'Norwegian', fi: 'Finnish', pl: 'Polish', ro: 'Romanian' },
@@ -1029,6 +1041,11 @@ function control(s, prefix = 's-') {
     const paint = () => { r.style.setProperty('--p', `${((r.value - s.min) * 100) / (s.max - s.min)}%`); out.textContent = fmt(s, +r.value); };
     r.oninput = paint; r.onchange = () => set(s.name, r.value);
     return { el: h('div', { class: 'slider' }, r, out), update: (x) => { if (!r.matches(':active')) { r.value = x.value; paint(); } } };     // not while dragging
+  }
+  if (s.type === 'text') {             // saved on Enter or leaving the field; not overwritten while someone types in it
+    const i = h('input', { type: 'text', id, maxlength: String(s.max), spellcheck: 'false', autocomplete: 'off', autocapitalize: 'off',
+      placeholder: (HELP[s.name] || {}).placeholder || '', onchange: () => set(s.name, i.value.trim()) });
+    return { el: h('div', { class: 'text-ctl' }, i), update: (x) => { if (document.activeElement !== i) i.value = x.value; } };
   }
   const names = CHOICE_NAMES[s.name] || {}, modes = (HELP[s.name] || {}).modes;
   if (modes) {                          // choices worth weighing: a small card each, what each gives and costs one click away
@@ -2223,6 +2240,7 @@ function pretty(name, raw) {
   if (!s) return raw;
   if (s.type === 'bool') return raw === 'on' ? 'On' : 'Off';
   if (s.type === 'choice') return act((CHOICE_NAMES[name] || {})[raw] || raw);
+  if (s.type === 'text') return raw || '—';
   return fmt(s, +raw);
 }
 
@@ -3322,7 +3340,10 @@ function buildSystem(el, list) {
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
     titled('This Echo', nameRow(), named('note', noteRow()), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
-      list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
+      list.filter((s) => (!s.name.startsWith('kiosk_') || state.kiosk_app) && !s.name.startsWith('syslog')).map(settingRow)),
+    list.some((s) => s.name === 'syslog') ? named('syslog', titled('Remote logging', list.filter((s) => s.name.startsWith('syslog')).map(settingRow),
+      infoRow('Test', 'Check that the server receives the log', 'Writes the line "syslog: test line from the settings page" to the Echo\'s log. It is sent like every other line, so look for it on your server. If it does not show up, the status under "Send log to a syslog server" says why.',
+        h('button', { onclick: syslogTest }, icon('up'), 'Send test message')))) : null,
     titled('When something is wrong', named('log', logRow()),
       named('debug', infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
       named('restart', infoRow('Restart', 'Back in about a minute, nothing is forgotten', HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…'))),
@@ -3333,6 +3354,26 @@ function buildSystem(el, list) {
     h('div', { class: 'card', id: 'browsers' },
       infoRow('Approved browsers', 'Browsers that may change settings on this Echo', null, null),
       h('div', { class: 'clients' }, clientsBox))]));
+}
+
+// Remote logging (logfwd.c): where the sender is, from GET /api/state's "syslog"
+const kb = (b) => b < 1024 ? `${b} bytes` : b < 1048576 ? `${Math.round(b / 1024)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+function syslogStatus() {
+  const g = state.syslog; if (!g || g.state === 'off') return null;
+  const to = `${g.server} (${g.protocol.toUpperCase()})`, waiting = g.behind ? ` ${kb(g.behind)} waiting to be sent.` : '';
+  if (g.state === 'no_server') return h('p', { class: 'f-model' }, 'Enter a server below to start sending.');
+  if (g.state === 'bad_name') return h('p', { class: 'f-bad' }, icon('warn'), h('span', {}, `Can't find ${g.server.replace(/:\d+$/, '')}: the name doesn't resolve on your network. Check the spelling or enter the IP address instead. The log is kept on the Echo in the meantime.`));
+  if (g.state === 'down') return h('p', { class: 'f-bad' }, icon('warn'), h('span', {}, `Can't reach ${to}: ${g.error}. The log is kept on the Echo and sent as soon as the server is back.${waiting}`));
+  if (g.state === 'connecting') return h('p', { class: 'f-model' }, `Connecting to ${to}…`);
+  return h('p', { class: 'f-model' }, `Sending to ${to}. ${g.sent} line${g.sent === 1 ? '' : 's'} sent since the Echo started.${waiting}`);
+}
+
+async function syslogTest() {
+  try {
+    await echo.call('POST', '/api/syslog/test', 'test');
+    toast('Test message sent: check your syslog server');
+    setTimeout(() => load().catch(() => {}), 1500);       // what the sender made of it
+  } catch (e) { toast(errText(e)); }
 }
 
 // Restart (main.c core_reboot): root reboots the Echo, as a power cycle does; this page is back once it is up again

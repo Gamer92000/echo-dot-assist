@@ -93,6 +93,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ma_api.py         # Music Assistant's API for the screen (mass.c) against a stand-in server:
                                              # the page's sealed token, auth, players, queue, lists, commands, images
 .venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
+.venv/bin/python tests/fake_syslog.py         # the log to a syslog server (UDP, TCP, away and back, rotation, restart)
+                                             # and ESPHome's log subscription (levels, dump_config, NONE)
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
                                              # the turned files -G makes, what plays, root failing, caps
@@ -430,6 +432,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   Web UI address, Sendspin token (a secret: never on the page), Identify, Light ring (where root installed `ring.c`'s
   set), Button (event entity: presses and 1 s holds, `core_button_events`, from `buttons.c` `event` and `on_action`;
   types stable, automations use them). The rest is page-only; diagnostics too (`diag.c`).
+- **Log forwarding** (`logfwd.c`, `logfwd.h`): `boot.log` followed by one thread (inotify; idle with nothing to do) to
+  a syslog server (settings `syslog`, `syslog_server` (S_TEXT, host[:port]), `syslog_protocol` udp/tcp,
+  `syslog_format` rfc5424/rfc3164; page System, card "Remote logging", `POST /api/syslog/test`, state's `syslog`) and to
+  ESPHome's log subscribers (`proto->log`, main.c `log_live`; SubscribeLogs 28/29, only into a socket with room).  The
+  file is the queue: an offset moved once a line went out, `state/syslog.pos` at most once a minute, rotation followed
+  into `boot.log.1` by the 32 bytes before the offset; UDP's first line a probe (3.5 s without an error), TCP octet
+  counting; `boot+` times real only after this boot's `== satellite start ... boot <id>` (main.sh).  `logfwd_redact`
+  is the page's log viewer's too.  `HASSMIC_SYSLOG_SAVE_MS`, `HASSMIC_BOOT_ID` for tests.
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.

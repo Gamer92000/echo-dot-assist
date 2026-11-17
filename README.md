@@ -173,7 +173,8 @@ to the last one that worked. What changed: [CHANGELOG.md](CHANGELOG.md). What on
 The settings page's **Log** (System page) shows what the Echo did; over adb it is
 `adb shell tail -30 /data/local/hassmic/boot.log`. Lines start with UTC once the Echo has the time from Home Assistant
 (the page shows your time zone), `boot+<seconds>` before that: behind the firewall only Home Assistant sets the clock,
-on connecting and every 6 hours.
+on connecting and every 6 hours. The log can also go to a syslog server or into Home Assistant's log
+([guide](docs/GUIDE.md#settings-page)).
 
 <details>
 <summary><b>The wake word and the button do nothing</b></summary>
