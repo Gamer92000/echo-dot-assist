@@ -4103,9 +4103,12 @@ Run in this order. Each step says what it proves.
       **Echo Dot 2 (biscuit), Lyrion 9.1.1, 2026-11-17** (the owner's): found by discovery at once ("Moja hudba"
       9.1.1), linked with the Wi-Fi MAC as id, the Echo's volume 70 sent over Lyrion's stored 50; internet radio that
       Lyrion has the player fetch directly (autostart 3, MP3 256 kbit/s from the station's own server): played, the
-      mixer opened at 44.1 kHz.  Owner: works.
-      Open: on an Echo, the library's FLAC, a group with real Squeezebox players (the latency of 70 ms, by ear), the
-      buttons; ICY metadata to META only against the stand-in; a password on Lyrion's web port (JSON-RPC refused, logged; the
+      mixer opened at 44.1 kHz; a second station after a pause (Lyrion stops a radio on pause and starts it anew); the
+      library's FLAC, 24 bits, played as s16; volume both ways (Lyrion's 13, 14 to the Echo; the keys' 0, 10, 20 as
+      `mixer volume`); the action button `pause 1` / `pause 0`; "Alexa, stop" (`stop: music paused`, `pause 1`).
+      Owner: works.
+      Open: on an Echo, a group with real Squeezebox players (the latency of 70 ms, by ear); ICY metadata to META only
+      against the stand-in; a password on Lyrion's web port (JSON-RPC refused, logged; the
       player plays on); IPv6-only Lyrion (the player's link is IPv4).
 
 ## Cannoli local port — 2026-11-13

@@ -12,7 +12,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   its address in the same card. Lyrion's volume and the Echo's are one, both ways; the action button pauses and
   resumes, "<wake word>, stop" pauses, and two or three presses skip. FLAC, MP3 and WAV play as they are, everything
   else Lyrion converts. Music Assistant (Sendspin) is not affected; whichever starts last plays. Tried on an Echo Dot 2
-  with Lyrion 9.1.1 (internet radio), and with Lyrion 9.2.0 on the PC build (the library's formats, groups).
+  with Lyrion 9.1.1 (internet radio, FLAC from the library, volume, the action button, "stop"), and with Lyrion 9.2.0
+  on the PC build (the other formats, groups).
 
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 
