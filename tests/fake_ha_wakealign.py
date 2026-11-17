@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py): the wake word's
 end by the aligner (main.c align_resolve, align_thread, word_tail_end; issue #79) with the models of wakealign/.  The
-file for the language spoken (the page's, else the time zone's, else the word's own; en-CA as en-US), the request after
+file for the language spoken (the page's, else the time zone's, else the word's own; en-CA as en-US; a language with
+no model as none, issue #176), the request after
 the 800 ms of silence either way; an aligner too slow (HASSMIC_FAKE_ALIGN_SLOW) is waited for 1 s past its window, then
 the level decides, and a wake word while it still runs goes by the level at once; the speaker adaptation in use and
 saved from the 5th request.  HASSMIC_FAKE_KEYWORD: the PC's wake word has a level, so its end is looked for.
@@ -60,7 +61,12 @@ async def main(e):
     await request(e, ha, r"by the level|the word ends")         # where the capture is: the next ones timed by it
     check(re.search(r"aligned by \S*/wakealign/alexa-en-US\.wa \(\? spoken\)", e.log()),
           "no language, no time zone: the firmware's alexa by alexa-en-US.wa")
+    # a language the aligner has no model for counts as unsaid, the zone's as the page's: Brazil falls into "America/"
+    # as before Portuguese was listed (issue #176; each a file other than the one before, or the log says nothing)
     for z, lang, want in (("Europe/London", "en", r"alexa-en-GB\.wa \(en-GB spoken\)"),
+                          ("America/Sao_Paulo", "auto", r"alexa-en-US\.wa \(en-US spoken\)"),
+                          ("Europe/London", "en", r"alexa-en-GB\.wa \(en-GB spoken\)"),
+                          ("America/Sao_Paulo", "pt", r"alexa-en-US\.wa \(en-US spoken\)"),
                           ("Europe/London", "de", r"alexa-de-DE\.wa \(de-DE spoken\)")):
         zone(e, z); e.page.set(speech_language=lang)
         lines, secs = await request(e, ha, want)

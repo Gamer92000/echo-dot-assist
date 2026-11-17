@@ -3635,8 +3635,9 @@ Run in this order. Each step says what it proves.
       userActivity leaves a dark screen asleep.
 - [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
       `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
-      (Brazil's before "America/"), and the aligner finds no `.wa` for them, so it takes the word's own as with no
-      language (no MFA model for them in build.sh).  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
+      (Brazil's before "America/"); the aligner (no MFA model for them in build.sh) skips them, the page's as the
+      zone's (`speech_locale` `aligner`, `align_lang`), and goes on as before they were listed: issue #176, Brazil's
+      zones had lost "America/"'s en-US, and alexa-pt-BR (own locale pt-BR, no `.wa` either) every aligner.  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
       `ui_date`: day and month names per language (bionic's strftime is C locale only), English for none or one not
       known, Japanese left out (no kanji in Roboto).  `bt_langs` has ro.  `core_transcript` compares folded (`fold`:
       U+00C0..U+017F and ș ț without marks, lower case, no hyphens): "Închide" was never lower-cased, and the old

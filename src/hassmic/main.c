@@ -1722,14 +1722,24 @@ static void wake_align_load(int slot, const struct core_wake_word *w)
     wakealign_free(wake_align[slot]); wake_align[slot] = NULL;
 }
 
-/* The language spoken here, as a locale of tools/wakealign/build.sh's: the page's speech_language, else the time zone
- * Home Assistant gave (clock.c state/timezone; a German speaker's "Alexa" with the English wake word is found far better
- * with German sounds, settings.c SPEECH_LANG), else the word's own ("computer-en-US"); "" when none of them says.  A
- * language picked on the page in the zone's variety of it where the zone has one (en in London: en-GB) */
-static void speech_locale(const struct core_wake_word *w, char *out, size_t cap)
+/* The aligner has models for loc's language (tools/wakealign/build.sh) */
+static int align_lang(const char *loc)
 {
-    /* every one of settings.c's speech_langs: those with no model of the aligner's (from "it") find no file for their
-     * locale, and align_resolve takes the word's own, as with no language at all */
+    static const char *const have[] = { "de", "en", "fr", "es", "ja" };
+    for (size_t i = 0; i < sizeof have / sizeof *have; i++) if (!strncmp(loc, have[i], 2) && (!loc[2] || loc[2] == '-')) return 1;
+    return 0;
+}
+
+/* The language spoken here, as a locale: the page's speech_language, else the time zone Home Assistant gave (clock.c
+ * state/timezone; a German speaker's "Alexa" with the English wake word is found far better with German sounds,
+ * settings.c SPEECH_LANG), else the word's own ("computer-en-US"); "" when none of them says.  A language picked on the
+ * page in the zone's variety of it where the zone has one (en in London: en-GB).  For the aligner (aligner 1) a
+ * language it has no model for counts as unsaid, both as the setting and as the zone's: it goes on as before those
+ * languages were listed (issue #176: Brazil's zones fall into "America/", en-US, and alexa-pt-BR is aligned with
+ * English sounds again, where pt-BR found no file and the word's own pt-BR none either) */
+static void speech_locale(const struct core_wake_word *w, int aligner, char *out, size_t cap)
+{
+    /* every one of settings.c's speech_langs; from "it" the aligner has no model (the screen's date speaks them) */
     static const char *const langs[][2] = { { "de", "de-DE" }, { "en", "en-US" }, { "fr", "fr-FR" }, { "es", "es-ES" }, { "ja", "ja-JP" },
         { "it", "it-IT" }, { "pt", "pt-PT" }, { "nl", "nl-NL" }, { "sv", "sv-SE" }, { "da", "da-DK" }, { "nb", "nb-NO" },
         { "fi", "fi-FI" }, { "pl", "pl-PL" }, { "ro", "ro-RO" } };
@@ -1738,8 +1748,8 @@ static void speech_locale(const struct core_wake_word *w, char *out, size_t cap)
         { "Europe/Vaduz", "de-DE" }, { "Europe/Paris", "fr-FR" }, { "Europe/Monaco", "fr-FR" }, { "Europe/Madrid", "es-ES" },
         { "Atlantic/Canary", "es-ES" }, { "America/Mexico_City", "es-MX" }, { "America/Monterrey", "es-MX" }, { "America/Tijuana", "es-MX" },
         { "America/Cancun", "es-MX" }, { "America/Merida", "es-MX" }, { "America/Chihuahua", "es-MX" }, { "Asia/Tokyo", "ja-JP" },
-        /* languages the aligner has no model for (their files are not found: the word's own, as before), for the
-         * screen's date (core_speech_language); Brazil's zones before "America/" */
+        /* languages the aligner has no model for (it skips them: align_lang), for the screen's date
+         * (core_speech_language); Brazil's zones before "America/" */
         { "Europe/Rome", "it-IT" }, { "Europe/San_Marino", "it-IT" }, { "Europe/Vatican", "it-IT" }, { "Europe/Lisbon", "pt-PT" },
         { "Atlantic/Madeira", "pt-PT" }, { "Atlantic/Azores", "pt-PT" }, { "America/Sao_Paulo", "pt-BR" }, { "America/Bahia", "pt-BR" },
         { "America/Fortaleza", "pt-BR" }, { "America/Recife", "pt-BR" }, { "America/Belem", "pt-BR" }, { "America/Manaus", "pt-BR" },
@@ -1755,10 +1765,12 @@ static void speech_locale(const struct core_wake_word *w, char *out, size_t cap)
     out[0] = 0;
     state_file(p, sizeof p, "timezone");
     if ((f = fopen(p, "r"))) { if (fscanf(f, "%95s", zone) != 1) zone[0] = 0; fclose(f); }
-    for (size_t i = 0; zone[0] && !zl && i < sizeof zones / sizeof *zones; i++) if (!strncmp(zone, zones[i][0], strlen(zones[i][0]))) zl = zones[i][1];
+    for (size_t i = 0; zone[0] && !zl && i < sizeof zones / sizeof *zones; i++)
+        if (!strncmp(zone, zones[i][0], strlen(zones[i][0])) && (!aligner || align_lang(zones[i][1]))) zl = zones[i][1];
     /* a language picked: the zone's variety of it where the zone has one (English in London: en-GB's dictionary) */
     if (ln && zl && !strncmp(zl, l, ln) && zl[ln] == '-') { snprintf(out, cap, "%s", zl); return; }
-    for (size_t i = 0; ln && i < sizeof langs / sizeof *langs; i++) if (!strcmp(l, langs[i][0])) { snprintf(out, cap, "%s", langs[i][1]); return; }
+    for (size_t i = 0; ln && i < sizeof langs / sizeof *langs; i++)
+        if (!strcmp(l, langs[i][0]) && (!aligner || align_lang(langs[i][1]))) { snprintf(out, cap, "%s", langs[i][1]); return; }
     if (zl) { snprintf(out, cap, "%s", zl); return; }
     const char *dash = strchr(w->id, '-');
     if (dash && !wake_is_mww(w->manifest)) snprintf(out, cap, "%s", dash + 1);     /* a microWakeWord id is a name, no locale */
@@ -1768,7 +1780,7 @@ void core_speech_language(char *out, size_t cap)
 {
     struct core_wake_word none; char loc[16];
     memset(&none, 0, sizeof none);                  /* no word: the setting or the zone only */
-    speech_locale(&none, loc, sizeof loc);
+    speech_locale(&none, 0, loc, sizeof loc);
     snprintf(out, cap, "%.*s", (int)strcspn(loc, "-"), loc);
 }
 
@@ -1785,7 +1797,7 @@ static void align_resolve(int slot)                 /* capture thread */
         if (l <= 0) return;
         dir[l] = 0; if ((slash = strrchr(dir, '/'))) *slash = 0;
     }
-    speech_locale(w, loc, sizeof loc);
+    speech_locale(w, 1, loc, sizeof loc);
     if (wake_is_mww(w->manifest)) {                 /* a microWakeWord model by its name: "Okay Nabu" -> okay_nabu */
         size_t k = 0;
         for (const char *c = w->name; *c && k < sizeof word - 1; c++) word[k++] = isalnum((unsigned char)*c) ? (char)tolower((unsigned char)*c) : '_';

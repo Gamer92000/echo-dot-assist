@@ -40,8 +40,8 @@ static const char *const call_mics[2] = { "call", "assistant" };         /* call
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
 /* the aligner's languages first (tools/wakealign/build.sh; main.c speech_locale), then those it has no model for yet,
- * which it takes the wake word's own for, as before: the screen's date speaks them all (src/ui/lang.c).  Stored by
- * name, so the list may grow */
+ * which it leaves out (the zone's, else the word's own, as before they were listed; issue #176): the screen's date
+ * speaks them all (src/ui/lang.c).  Stored by name, so the list may grow */
 static const char *const speech_langs[] = { "auto", "de", "en", "fr", "es", "ja", "it", "pt", "nl", "sv", "da", "nb", "fi", "pl", "ro" };
 #define SPEECH_LANGS ((int)(sizeof speech_langs / sizeof *speech_langs))
 static _Atomic int speech_lang;                         /* read without the lock: the aligner's and the screen's threads */

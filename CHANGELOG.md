@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — The wake word's end found by its sounds again in Brazil
+
+- **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to
+  "Language you speak", an Echo in a Brazilian time zone on Automatic took Portuguese, which the Echo has no sounds
+  for, and Amazon's Brazilian "Alexa" none either: it went by the level only. Languages without sounds now count as
+  not said, whether picked on the page or from the time zone, so the Echo does as before they were listed: in Brazil
+  English sounds, as across the Americas. The date on the Echo Show's screen stays in the zone's language. Thanks to
+  giggio (issue #176).
+
 ## 2026-11-17 — Drop In sounds as Alexa's did
 
 - **Drop In sounds as Alexa's did: the microphone of Amazon's own calls (Echo Dot 3 and Echo Dot 2).** A call sent the
