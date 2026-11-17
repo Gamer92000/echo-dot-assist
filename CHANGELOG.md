@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — The wake word's threshold in Home Assistant
+
+- **microWakeWord: the wake word's threshold in Home Assistant.** With microWakeWord, the new "Wake word cutoff"
+  slider under the Echo's configuration sets how sure the model must be before the Echo wakes, from 0.50 to 0.99:
+  higher means fewer false wakes and more missed wake words. It is the same threshold as "tune" on the settings page,
+  for the wake word picked in "Wake word", and stays over restarts. Setting it keeps Home Assistant connected. Tried
+  on an Echo Dot 2.
+
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 
 - **Light ring live: the "Fire" effect no longer stutters on an Echo that has been running for a week or more (Echo

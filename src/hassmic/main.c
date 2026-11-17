@@ -632,6 +632,15 @@ void core_wake_models_changed(void)
     pthread_mutex_unlock(&core_lock);
 }
 
+float core_wake_cutoff(float set)
+{
+    struct mww_info i;
+    if (!core_local_wake || wake_engine != WAKE_MWW || !n_wake_words) return -1;
+    const char *id = wake_words[wake_act[0]].id;
+    if (set >= 0 && !mww_set_cutoff(id, set)) atomic_store(&wake_switch, 1);
+    return mww_info(id, &i) ? -1 : i.cutoff;
+}
+
 static void wake_save(void)
 {
     FILE *f = fopen(wake_word_path(), "w");

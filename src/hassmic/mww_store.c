@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -367,6 +368,19 @@ int mww_edit(const char *id, const char *text, char *err, size_t errsz)
     fprintf(stderr, "microwakeword: model %s now \"%s\", cutoff %.2f, window %d\n", id, i.name, i.cutoff, i.window);
     core_wake_models_changed();
     return 0;
+}
+
+int mww_set_cutoff(const char *id, float c)
+{
+    struct mww_info i; char path[340];
+    c = c < MWW_CUTOFF_MIN ? MWW_CUTOFF_MIN : c > MWW_CUTOFF_MAX ? MWW_CUTOFF_MAX : c;
+    c = roundf(c * 100) / 100;                  /* what the manifest keeps (%.2f), so Home Assistant reads back what it set */
+    pthread_mutex_lock(&lk);
+    int r = mww_info(id, &i);
+    if (!r) { i.cutoff = c; mww_paths(id, path, NULL, sizeof path); r = write_manifest(path, &i); }
+    pthread_mutex_unlock(&lk);
+    if (!r) fprintf(stderr, "microwakeword: model %s now cutoff %.2f (Home Assistant)\n", id, c);
+    return r ? -1 : 0;
 }
 
 int mww_delete(const char *id, char *err, size_t errsz)
