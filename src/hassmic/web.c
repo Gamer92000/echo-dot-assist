@@ -62,6 +62,7 @@
 #include "sounds.h"
 #include "soundpack.h"
 #include "update.h"
+#include "wakeclip.h"
 #include "wifi.h"
 #include "ws.h"
 #include "statefile.h"
@@ -1120,6 +1121,68 @@ static void log_redact(char *t, size_t n)
     }
 }
 
+/* /api/wakeclips (wakeclip.h): GET the list; GET /api/wakeclips/<id> one clip's samples (16 kHz mono s16le), sealed:
+ * what the room said is never sent in the clear over this plain HTTP.  XOR with a key stream, block i (64 bytes) =
+ * BLAKE2b-512 keyed with EK over the request's counter, "\n" and i as 4 bytes little-endian, EK = BLAKE2b-256 keyed
+ * with K over "hassmic clip 1": the label keeps it apart from what the page seals (unseal), the 4 bytes let a clip run
+ * past unseal's 256 blocks.  The counter is the request's, taken once (signed_ok), so no stream serves twice; the
+ * answer's MAC covers the sealed bytes.  web/crypto.js stream() is the other half.  POST /api/wakeclips/label "<id>
+ * wake|not_wake|none", /api/wakeclips/delete "<id>|all".  Signed. */
+static int clip_seal(const struct req *r, uint8_t *buf, size_t n)
+{
+    uint8_t pub[32], k[32], ek[32], ks[64]; crypto_blake2b_ctx ctx; int bad;
+    if (unhex(pub, r->pub, 32)) return -1;
+    pthread_mutex_lock(&lk); bad = session_key(k, pub); pthread_mutex_unlock(&lk);
+    if (bad) return -1;
+    crypto_blake2b_keyed(ek, 32, k, 32, (const uint8_t *)"hassmic clip 1", 14);
+    for (size_t i = 0; i * 64 < n; i++) {
+        uint8_t blk[4] = { (uint8_t)i, (uint8_t)(i >> 8), (uint8_t)(i >> 16), (uint8_t)(i >> 24) };
+        crypto_blake2b_keyed_init(&ctx, 64, ek, 32);
+        crypto_blake2b_update(&ctx, (const uint8_t *)r->ctr, strlen(r->ctr)); crypto_blake2b_update(&ctx, (const uint8_t *)"\n", 1);
+        crypto_blake2b_update(&ctx, blk, 4);
+        crypto_blake2b_final(&ctx, ks);
+        for (size_t j = 0; j < 64 && i * 64 + j < n; j++) buf[i * 64 + j] ^= ks[j];
+    }
+    crypto_wipe(k, sizeof k); crypto_wipe(ek, sizeof ek); crypto_wipe(ks, sizeof ks);
+    return 0;
+}
+
+static void wakeclip_api(int fd, struct req *r)
+{
+    int write = !strcmp(r->method, "POST"); unsigned id; char what[16] = "";
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!write && !strcmp(r->path, "/api/wakeclips")) {
+        size_t cap = 32768; char *o = malloc(cap);
+        if (!o) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        size_t n = wakeclip_json(o, cap, now_ms());
+        respond_s(fd, r, 200, "application/json", NULL, o, n); free(o);
+        return;
+    }
+    if (!write && sscanf(r->path, "/api/wakeclips/%u", &id) == 1) {
+        size_t n = 0; int16_t *pcm = wakeclip_audio(id, &n);
+        if (!pcm) { respond_sjson(fd, r, 404, "{\"error\":\"no such clip\"}"); return; }
+        /* little-endian as the page reads it: so is every Echo and PC this runs on */
+        if (clip_seal(r, (uint8_t *)pcm, n * 2)) { free(pcm); respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+        respond_s(fd, r, 200, "application/octet-stream", NULL, pcm, n * 2);
+        free(pcm);
+        return;
+    }
+    if (write && !strcmp(r->path, "/api/wakeclips/label") && r->body && sscanf(r->body, "%u %15s", &id, what) == 2) {
+        int label = !strcmp(what, "wake") ? WAKECLIP_WAKE : !strcmp(what, "not_wake") ? WAKECLIP_NOT_WAKE : !strcmp(what, "none") ? WAKECLIP_UNLABELLED : -1;
+        if (label < 0 || wakeclip_label(id, label)) respond_sjson(fd, r, 404, "{\"error\":\"no such clip or label\"}");
+        else respond_sjson(fd, r, 200, "{\"labelled\":true}");
+        return;
+    }
+    if (write && !strcmp(r->path, "/api/wakeclips/delete") && r->body) {
+        int all = !strncmp(r->body, "all", 3);
+        if (!all && sscanf(r->body, "%u", &id) != 1) { respond_sjson(fd, r, 400, "{\"error\":\"say which\"}"); return; }
+        if (wakeclip_delete(all ? 0 : id) || (!all && !id)) respond_sjson(fd, r, 404, "{\"error\":\"no such clip\"}");
+        else { fprintf(stderr, "web: wake word clip%s deleted\n", all ? "s" : ""); respond_sjson(fd, r, 200, "{\"deleted\":true}"); }
+        return;
+    }
+    respond_sjson(fd, r, 404, "{\"error\":\"not found\"}");
+}
+
 static void log_api(int fd, struct req *r)
 {
     char path[300]; int part; FILE *f; long size, from; char *t; size_t n;
@@ -1280,6 +1343,7 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/sound/", 11)) sound_api(fd, &r);
     else if (!strncmp(r.path, "/api/sound-pack", 15)) sound_pack_api(fd, &r);
     else if (!strcmp(r.method, "GET") && !strncmp(r.path, "/api/log/", 9)) log_api(fd, &r);
+    else if (!strncmp(r.path, "/api/wakeclips", 14)) wakeclip_api(fd, &r);
     else respond_json(fd, 404, "{\"error\":\"not found\"}");
     free(r.body);
 }

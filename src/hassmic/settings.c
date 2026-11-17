@@ -21,6 +21,7 @@
 #include "sounds.h"
 #include "spkgain.h"
 #include "update.h"
+#include "wakeclip.h"
 #include "wifimotion.h"
 #include "statefile.h"
 #include "buttons.h"
@@ -46,6 +47,11 @@ static const char *const speech_langs[] = { "auto", "de", "en", "fr", "es", "ja"
 #define SPEECH_LANGS ((int)(sizeof speech_langs / sizeof *speech_langs))
 static _Atomic int speech_lang;                         /* read without the lock: the aligner's and the screen's threads */
 static int wake_adapt = 1;
+/* wakeclip.c's time after the word: 0.3 s is enough for training, 1 s shows whether someone went on talking (a false
+ * wake is followed by nothing), 3 s at most: past that a clip would hold the request, which "Last heard" says better */
+static const char *const clip_afters[] = { "0.3s", "1s", "2s", "3s" };
+static const int clip_after_ms[] = { 300, 1000, 2000, 3000 };
+static int clip_after = 1;
 
 const struct bt_lang bt_langs[] = {
     { "en", "English", "Connected to %s", "Disconnected from %s", "Connected to a Bluetooth device", "Disconnected from a Bluetooth device" },
@@ -106,7 +112,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, WAKE_CLIPS, WAKE_CLIPS_AFTER, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -123,6 +129,10 @@ static const struct setting table[NSET] = {
     [SPEECH_LANG] = { "speech_language", "Language you speak", "Wake word", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* the aligner's speaker adaptation (wakealign.h, main.c align_thread): learnt from this home's requests */
     [WAKE_ADAPT]  = { "wake_word_adaptation", "Learn how the wake word is said here", "Wake word", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* wakeclip.h: the last wake words and near misses as heard, in RAM, for the page only.  Never in Home Assistant (it
+     * should not be able to switch on recording) nor an export (copied to other Echos, it would record there unasked) */
+    [WAKE_CLIPS]  = { "wake_clips", "Keep wake word clips", "Wake word", NULL, S_BOOL, 0, 1, 0, 0 },
+    [WAKE_CLIPS_AFTER] = { "wake_clips_after", "Clips go on after the word for", "Wake word", NULL, S_CHOICE, 0, 0, 1, 0 },
     [MIC_LEVEL]   = { "mic_level", "Mic level", "Voice", "dBFS", S_INT, MICGAIN_LEVEL_MIN, MICGAIN_LEVEL_MAX, 1, 0 },
     [DENOISE]     = { "noise_reduction", "Noise reduction", "Voice", NULL, S_CHOICE, 0, 0, 1, 0 },
     [WAKE_SOUND]  = { "wake_sound", "Wake sound", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -270,6 +280,7 @@ static int present(enum id i)
     switch (i) {
     case BT_ANNOUNCE: case BT_LANG: case BT_PROXY: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
     case WHISPER: return core_whisper_model();
+    case WAKE_CLIPS: case WAKE_CLIPS_AFTER: return core_local_wake;  /* -w remote: no ring, Home Assistant hears the word */
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
     case LED_AUTO: return core_led_has_auto();
@@ -342,6 +353,7 @@ int settings_choices(const struct setting *s, const char *const **names)
     case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
+    case WAKE_CLIPS_AFTER: *names = clip_afters; return (int)(sizeof clip_afters / sizeof *clip_afters);
     default: *names = NULL; return 0;
     }
 }
@@ -364,6 +376,8 @@ int settings_get(const struct setting *s)
     case WAKE_ENGINE: return core_wake_engine(-1);
     case SPEECH_LANG: return speech_lang;
     case WAKE_ADAPT: return wake_adapt;
+    case WAKE_CLIPS: return wakeclip_enabled();
+    case WAKE_CLIPS_AFTER: return clip_after;
     case MIC_LEVEL: return mic_level;
     case DENOISE: return core_mic_denoise(-1);
     case WAKE_SOUND: return core_wake_sound(-1);
@@ -446,6 +460,8 @@ static void put(enum id i, int v)
     case WAKE_ENGINE: core_wake_engine(v); break;
     case SPEECH_LANG: speech_lang = v; screen_language_changed(); break;
     case WAKE_ADAPT: wake_adapt = v; break;
+    case WAKE_CLIPS: wakeclip_set(v, clip_after_ms[clip_after]); break;          /* off: every clip dropped */
+    case WAKE_CLIPS_AFTER: clip_after = v; wakeclip_set(wakeclip_enabled(), clip_after_ms[v]); break;
     case MIC_LEVEL: mic_level = v; core_mic_level(v); break;
     case DENOISE: core_mic_denoise(v); break;
     case WAKE_SOUND: core_wake_sound(v); break;

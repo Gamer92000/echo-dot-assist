@@ -138,9 +138,25 @@ const hmcrypto = (() => {
     return out;
   }
 
+  // What an Echo seals for this page (a wake word clip; web.c clip_seal): the same XOR with blocks of BLAKE2b-512 keyed
+  // with EK over the request's counter and "\n", here followed by the block's number as 4 bytes little-endian (a clip
+  // runs to thousands of blocks), EK keyed with K over the label ("hassmic clip 1"), so no stream is ever seal()'s.
+  // Its own inverse: it opens what the Echo sealed
+  function stream(k, label, ctr, data) {
+    const te = new TextEncoder(), ek = blake2b(32, k, te.encode(label)), c = te.encode(`${ctr}\n`);
+    const out = new Uint8Array(data.length), msg = new Uint8Array(c.length + 4);
+    msg.set(c);
+    for (let i = 0; i * 64 < data.length; i++) {
+      msg[c.length] = i & 255; msg[c.length + 1] = (i >>> 8) & 255; msg[c.length + 2] = (i >>> 16) & 255; msg[c.length + 3] = (i >>> 24) & 255;
+      const ks = blake2b(64, ek, msg);
+      for (let j = 0; j < 64 && i * 64 + j < data.length; j++) out[i * 64 + j] = data[i * 64 + j] ^ ks[j];
+    }
+    return out;
+  }
+
   const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   const unhex = (s) => new Uint8Array(s.match(/../g).map((x) => parseInt(x, 16)));
-  return { x25519, x25519Public, blake2b, seal, hex, unhex };
+  return { x25519, x25519Public, blake2b, seal, stream, hex, unhex };
 })();
 
 if (typeof module !== 'undefined') module.exports = hmcrypto;

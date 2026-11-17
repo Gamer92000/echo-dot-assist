@@ -235,6 +235,29 @@ goes to the assistant. It costs arbitration between Echos, the "stop" keyword (a
 in, a moment later), the extra sensitivity while playing, everything while Home Assistant is down, and likely some reliability. Switching to or from it restarts the
 satellite for a few seconds. `-w remote` in [`ARGS`](#hassmicconf) does the same, and then the page cannot change it.
 
+### Wake word clips
+
+What woke the Echo, and what nearly did. "Keep wake word clips" on the Wake word page (off by default) keeps the last
+ten wake words and the last ten near misses (Amazon's engine reports when it nearly took the word) as short clips:
+
+- **Listen** to each one on the page: a false wake is usually plain once heard (the television, a name in a
+  conversation, the Echo's own reply). Near misses tell you whether it is missing you, for instance over music.
+- Each clip runs from **1 s before the word** to 0.3, 1 (default), 2 or 3 s after it ("Clips go on after the word
+  for"): 0.3 s is enough for training, 1 s shows whether someone went on talking.
+- Beside it: how loud the word and the room were (dBFS), whether music, a reply, a timer or one of the Echo's sounds
+  played, and what followed (a request, nothing said, another Echo answered). A wake word with nothing said after
+  it, or heard while the Echo played, is marked **false?**.
+- **Mark** each as "Wake word" or "Not it", then **Save all**: a `.tar` with the WAVs (16 kHz mono) in the folders
+  `wake_word/`, `not_wake_word/` and `unmarked/`, and `clips.json` with what the Echo knew of each. Real samples from
+  your room, for training a wake word of your own.
+
+The clips are the audio the wake word engine heard (after the echo canceller, before the request's gain and noise
+reduction). They stay in the Echo's memory only, about 2 MB at most: never on its storage, never in Home Assistant or
+the log; a restart, an update or switching it off deletes them, and so does "Delete all". The page gets them
+encrypted with its login's key. None are kept while the Echo is muted or in a Drop In. The setting is not in exports,
+so "make like this Echo" never switches recording on elsewhere. Not with Home Assistant's wake word, which hears the
+word itself.
+
 ## Several Echos
 
 The Echos compare by how clearly the word stood out of the room's noise. An Echo in a conversation, or ringing, keeps

@@ -4,7 +4,7 @@
 // X-HM-Mac too, over "RESP\nCTR\nBODY": what the page carries from one Echo to another (settings, models) is what it sent.
 'use strict';
 
-const { x25519, x25519Public, blake2b, seal, hex, unhex } = hmcrypto;
+const { x25519, x25519Public, blake2b, seal, stream, hex, unhex } = hmcrypto;
 const enc = new TextEncoder(), dec = new TextDecoder();
 // v cut to max bytes of UTF-8, whole characters: the Echo counts bytes where maxlength counts UTF-16 units (an umlaut
 // is one there, two here)
@@ -124,6 +124,8 @@ const ICONS = {
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  play: '<path d="M8 5v14l11-7z"/>',
+  stop: '<rect x="7" y="7" width="10" height="10" rx="1"/>',
   refresh: '<path d="M20 12a8 8 0 0 1-14.2 5"/><path d="M4 12a8 8 0 0 1 14.2-5"/><path d="M18.5 3v4h-4M5.5 21v-4h4"/>',
   ear: '<path d="M6.5 9a5.5 5.5 0 0 1 11 0c0 3.2-3.5 4.3-3.5 7.5a3 3 0 0 1-5.6 1.5"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.2-1 1.8-1.6 2.4"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13M9 7V4h6v3"/>',
@@ -289,6 +291,8 @@ const HELP = {
       return h('p', { class: 'f-model' }, a.kiosk_heard_s == null ? 'No claim from another Kiosk Satellite device heard yet.'
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
     } },
+  wake_clips: { help: 'Keeps the last ten wake words and the last ten near misses (times the engine nearly took the wake word) as short clips you can listen to below: what woke the Echo when nobody meant it, and whether it missed you. Mark each as the wake word or not and save them to train a wake word of your own. The clips are kept in the Echo\'s memory only, never on its storage, in Home Assistant or in the log: a restart, an update or switching this off deletes them. They come to this page encrypted. None are kept while the Echo is muted or in a Drop In. Off by default.' },
+  wake_clips_after: { help: 'How much of what followed the wake word each clip keeps. 0.3 s is enough to train a wake word, 1 s tells whether someone went on talking (a false wake is followed by nothing), 3 s keeps the start of the request. Each clip also starts 1 s before the word. Applies to new clips.' },
   wake_word_adaptation: { help: 'The Echo learns from your requests how the wake word sounds here, in your voices, your room and through its microphone. It then finds where the word ends a little more often (in tests 163 of 220 instead of 158, from the sixth request on). What it learns stays on the Echo; it forgets the oldest as new requests come. On by default.' },
   speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Those sounds come for German, English, French, Spanish and Japanese so far; for the other languages the Echo finds the word\'s end as it did before they were listed: by your time zone where it has sounds for that zone\'s language (in Brazil: English), else by the wake word\'s own (English for "Alexa"). The Echo Show also writes the date on its screen in this language. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Romania, Moldova: Romanian; ...), else from the wake word\'s own language. Home Assistant tells the Echo only the zone\'s offset and summer time, which many countries share, so the country comes from Home Assistant\'s home location (its Home zone); near a border, or without a location, from your Wi-Fi router; with neither, only a zone set on the Echo before counts. What Automatic found shows under this row.',
     status: () => {
@@ -485,6 +489,8 @@ const SUB = {
   online_updates: 'Where new versions come from',
   arbitration: 'Only the Echo that heard you best answers',
   wake_word_adaptation: 'Learns how the wake word sounds in your home',
+  wake_clips: 'Listen to what woke the Echo, or nearly did',
+  wake_clips_after: 'How much of what came after the word',
   speech_language: 'Helps find where the wake word ends; the date on the screen',
   wake_engine: 'What listens for the wake word',
   arbitration_mode: 'How the Echos agree on who answers',
@@ -521,6 +527,7 @@ const CHOICE_NAMES = {
   music_on_screen: { off: 'Off', face: 'In place of the face', home: 'In place of the home app too' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
+  wake_clips_after: { '0.3s': '0.3 s', '1s': '1 s', '2s': '2 s', '3s': '3 s' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
     sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski', ro: 'Română' },
 };
@@ -685,6 +692,7 @@ async function load() {
   $('app').classList.remove('hidden');            // before render(): a hidden page has no widths to place cards by, nothing to scroll to
   render();
   if (mwwBox) getMww().catch(() => {});                                  // the engine and its models, as Home Assistant may have picked
+  if (clipBox && curPage === 'wake') getClips().catch(() => {});         // new clips, every 15 s while the page shows them
   if (load.started && unseen()) refreshDevices().catch(() => {});        // a new Echo in the beacons: show it now, not next round
   else if (load.started && !devRun && othersShown()) refreshMine().catch(() => {});   // a setting changed here or from HA: copy offers the new value
   if (!load.started) {
@@ -1220,7 +1228,7 @@ function settingCards(list, id) {
 const PAGE_BUILD = {
   overview: (el) => buildOverview(el),
   voice: (el, list) => { el.append(flow(settingCards(list.filter((s) => !soundSwitch(s.name)), 'voice'))); el.append(h('div', { class: 'ringd' }, soundsCard(), packsCard())); },   // laid out as lights' ring designs
-  wake: (el, list) => { el.append(flow(settingCards(list, 'wake'))); buildWake(el); },
+  wake: (el, list) => { el.append(flow(settingCards(list.filter((s) => !CLIP_SETTINGS.includes(s.name)), 'wake'))); buildWake(el); buildClips(el, list.filter((s) => CLIP_SETTINGS.includes(s.name))); },
   sound: (el, list) => {
     const vol = h('div', {}), cards = [];
     if (list.some((s) => s.name === 'separate_volumes')) { buildVolumes(vol); cards.push(vol.firstChild); }
@@ -1307,6 +1315,7 @@ function route() {
     else if (!devRun) refreshMine().catch(() => {});       // what was changed on the page just left
   }
   if (here && m[2]) reveal(part(m[2]));
+  if (changed && id === 'wake' && echo) getClips().catch(() => {});
   renderAttention();
 }
 window.addEventListener('hashchange', route);
@@ -1417,6 +1426,7 @@ const FINDABLE = [
   ['Copy models', 'models', 'model-copy', 'wake word design theme pack'],
   ['Models on file', 'models', 'model-file', 'backup tar save load'],
   ['Light ring animations', 'lights', 'ring-acts', 'designs led theme pack'],
+  ['Wake word clips', 'wake', 'wake-clips', 'false wake near miss recording listen training samples'],
   ['Sounds', 'voice', 'sounds', 'wake sound chime earcon ringtone your own upload replace'],
   ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
   ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
@@ -1942,6 +1952,156 @@ function renderWake() {
     h('div', { class: 'card-body mww-add' }, h('p', { class: 'help' }, 'Add from ESPHome\'s collection on GitHub (your browser downloads them for the Echo):'), official),
     h('div', { class: 'card-foot' }, mwwBusy ? h('div', { class: 'busy grow' }, h('span', { class: 'spin' }), mwwBusy) : h('span', { class: 'help grow' }, `${ms.length} of 16 models`),
       h('button', { disabled: !!mwwBusy || ms.length >= 16, onclick: () => file.click() }, icon('up'), 'Add from files…'), file));
+}
+
+// ---------------------------------------------------------------- wake word clips (wakeclip.h)
+// The last ten wake words and near misses as the engine heard them, kept in the Echo's RAM only: listened to here,
+// marked as the wake word or not, saved as WAVs (a folder per mark) to train a model of one's own.  The list carries
+// each clip's waveform; the audio itself comes only when played or saved, sealed (web.c clip_seal): plain HTTP
+let clipBox = null, clips = null, clipBusy = '', clipPlay = null, clipCtx = null;
+const CLIP_SETTINGS = ['wake_clips', 'wake_clips_after'];
+const clipPcms = new Map();                      // id -> Int16Array: a done clip never changes
+
+function buildClips(el, rows) {
+  clipBox = h('div', { class: 'card', id: 'wake-clips' });
+  clipBox.rows = rows; clipBox.rowEls = h('div', {}, rows.map(settingRow));     // made once: a re-render never closes an open select
+  if (rows.length) el.append(clipBox);           // none with -w remote: Home Assistant hears the word, there is no ring
+  renderClips();
+}
+
+async function getClips() {
+  if (!clipBox || !clipBox.rows.length) return;
+  clips = (await echo.call('GET', '/api/wakeclips')).json();
+  for (const id of clipPcms.keys()) if (!clips.clips.some((c) => c.id === id)) clipPcms.delete(id);
+  renderClips();
+}
+
+async function clipPcm(c) {
+  if (clipPcms.has(c.id)) return clipPcms.get(c.id);
+  let ctr = '';
+  const r = await echo.call('GET', `/api/wakeclips/${c.id}`, (x) => { ctr = x; return ''; });
+  const b = stream(echo.k, 'hassmic clip 1', ctr, r.bytes), pcm = new Int16Array(b.buffer, 0, b.length >> 1);
+  clipPcms.set(c.id, pcm);
+  return pcm;
+}
+
+function clipStop() {
+  if (clipPlay) { try { clipPlay.src.stop(); } catch (e) { /* ended */ } }
+  clipPlay = null; renderClips();
+}
+
+async function clipToggle(c) {
+  const was = clipPlay && clipPlay.id;
+  clipStop();
+  if (was === c.id) return;
+  try {
+    const pcm = await clipPcm(c);
+    clipCtx = clipCtx || new AudioContext();
+    const buf = clipCtx.createBuffer(1, pcm.length, clips.rate), ch = buf.getChannelData(0);
+    for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+    const src = clipCtx.createBufferSource();
+    src.buffer = buf; src.connect(clipCtx.destination);
+    src.onended = () => { if (clipPlay && clipPlay.src === src) { clipPlay = null; renderClips(); } };
+    clipPlay = { id: c.id, src }; src.start(); renderClips();
+  } catch (e) { toast(`Playing: ${errText(e)}`); }
+}
+
+function clipWav(pcm, rate) {
+  const n = pcm.length, v = new DataView(new ArrayBuffer(44 + n * 2));
+  const tag = (o, t) => { for (let i = 0; i < 4; i++) v.setUint8(o + i, t.charCodeAt(i)); };
+  tag(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); tag(8, 'WAVE'); tag(12, 'fmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); tag(36, 'data'); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + 2 * i, pcm[i], true);
+  return new Uint8Array(v.buffer);
+}
+
+const clipFolder = (c) => c.label === 'wake' ? 'wake_word' : c.label === 'not_wake' ? 'not_wake_word' : 'unmarked';
+const clipName = (c) => `${c.wall ? new Date(c.wall * 1000).toISOString().replace(/[:.]/g, '-').slice(0, 19) : `clip`}-${c.id}-${c.kind}`;
+
+function clipSave(files, name, tar) {
+  const url = URL.createObjectURL(new Blob(tar ? hmtar.write(files) : files[0].parts, { type: tar ? 'application/x-tar' : 'audio/wav' }));
+  const link = h('a', { href: url, download: name });
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+async function clipDo(what, fn) {
+  clipBusy = what; renderClips();
+  try { await fn(); } catch (e) { toast(errText(e)); }
+  clipBusy = ''; await getClips().catch(() => {});
+}
+
+// every clip in a tar: a folder per mark, and what the Echo knew of each in clips.json (the training's labels)
+const clipSaveAll = () => clipDo('Reading…', async () => {
+  const done = clips.clips.filter((c) => c.done), files = [];
+  for (const c of done) files.push({ path: `${clipFolder(c)}/${clipName(c)}.wav`, parts: [clipWav(await clipPcm(c), clips.rate)] });
+  const meta = done.map(({ env, ...c }) => ({ ...c, file: `${clipFolder(c)}/${clipName(c)}.wav` }));
+  files.push({ path: 'clips.json', parts: [enc.encode(JSON.stringify({ echo: echo.hello.name, rate: clips.rate, pre_ms: clips.pre_ms, clips: meta }, null, 1))] });
+  clipSave(files, `wake-clips-${echo.hello.node}-${new Date().toISOString().slice(0, 10)}.tar`, true);
+  toast(`Saved ${plural(done.length, 'clip')}`);
+});
+
+function clipCanvas(c) {
+  const w = 288, ht = 40, cv = h('canvas', { class: 'clip-wave', width: w * 2, height: ht * 2, 'aria-hidden': 'true' });
+  const g = cv.getContext('2d'), css = getComputedStyle(document.documentElement), col = (n) => css.getPropertyValue(n).trim();
+  g.scale(2, 2);
+  const a = c.word_at / c.len * w, b = (c.word_at + c.word_len) / c.len * w;
+  g.fillStyle = col('--accent-soft'); g.fillRect(a, 0, Math.max(1, b - a), ht);
+  const env = c.env || '', n = env.length / 2, bw = w / Math.max(1, n);
+  g.fillStyle = col(c.kind === 'wake' ? '--accent' : '--faint');
+  for (let i = 0; i < n; i++) {
+    const v = parseInt(env.slice(2 * i, 2 * i + 2), 16) / 255, y = Math.max(1, v * (ht - 2));
+    g.fillRect(i * bw + 0.5, (ht - y) / 2, Math.max(1, bw - 1), y);
+  }
+  return cv;
+}
+
+const CLIP_OUT = { request: 'a request followed', no_speech: 'nothing said after it', answered_elsewhere: 'another Echo answered' };
+// a wake word likely false: nothing said after it, or the Echo's own sound playing as it heard it
+const clipSuspect = (c) => c.kind === 'wake' && c.word !== 'STOP' && (c.outcome === 'no_speech' || c.music || c.reply || c.ringing || c.sound);
+
+function clipRow(c) {
+  const ago = (ms) => ms < 60000 ? `${Math.round(ms / 1000)} s ago` : ms < 3600000 ? `${Math.round(ms / 60000)} min ago` : `${(ms / 3600000).toFixed(1)} h ago`;
+  const when = c.wall ? new Date(c.wall * 1000).toLocaleTimeString() : ago(clips.now_ms - c.mono_ms);
+  const playing = clipPlay && clipPlay.id === c.id, busy = !!clipBusy;
+  const tags = [c.music && 'music played', c.reply && 'a reply played', c.ringing && 'a timer rang', c.sound && 'a sound played', CLIP_OUT[c.outcome],
+    c.peak >= 32767 && 'clipped'].filter(Boolean);
+  const label = (to) => clipDo('Saving…', () => echo.call('POST', '/api/wakeclips/label', `${c.id} ${c.label === to ? 'none' : to}`));
+  return h('div', { class: 'row clip-row' + (playing ? ' on' : '') },
+    h('div', { class: 'clip-main' },
+      h('div', { class: 'row-label' }, h('span', { class: 'badge ' + (c.kind === 'wake' ? 'acc' : '') }, c.kind === 'wake' ? (c.word === 'STOP' ? 'Stop' : 'Wake word') : 'Near miss'),
+        ' ', when, clipSuspect(c) ? h('span', { class: 'badge warn' }, 'false?') : null),
+      c.done ? clipCanvas(c) : h('p', { class: 'help' }, 'Recording what follows…'),
+      h('p', { class: 'help' }, [c.word.toLowerCase(), c.done ? `word ${c.word_db.toFixed(0)} dBFS, room ${c.floor_db.toFixed(0)} dBFS` : null, ...tags].filter(Boolean).join(' · '))),
+    h('div', { class: 'ctl btns' },
+      h('button', { class: 'small', disabled: !c.done, title: playing ? 'Stop' : 'Listen', onclick: () => clipToggle(c) }, icon(playing ? 'stop' : 'play'), playing ? 'Stop' : 'Listen'),
+      h('button', { class: 'small' + (c.label === 'wake' ? ' on' : ''), disabled: busy, title: 'This was the wake word', 'aria-pressed': c.label === 'wake' ? 'true' : 'false', onclick: () => label('wake') }, icon('check'), 'Wake word'),
+      h('button', { class: 'small' + (c.label === 'not_wake' ? ' on' : ''), disabled: busy, title: 'This was not the wake word', 'aria-pressed': c.label === 'not_wake' ? 'true' : 'false', onclick: () => label('not_wake') }, icon('x'), 'Not it'),
+      h('button', { class: 'small', disabled: !c.done || busy, title: 'Save as WAV', onclick: () => clipDo('Reading…', async () => clipSave([{ path: `${clipName(c)}.wav`, parts: [clipWav(await clipPcm(c), clips.rate)] }], `${clipName(c)}.wav`, false)) }, icon('down')),
+      h('button', { class: 'small danger', disabled: busy, title: 'Delete', onclick: () => clipDo('Deleting…', () => echo.call('POST', '/api/wakeclips/delete', String(c.id)).then(() => { if (playing) clipStop(); })) }, icon('trash'))));
+}
+
+function renderClips() {
+  if (!clipBox || !clipBox.rows.length) return;
+  const on = settingValue('wake_clips'), list = (clips && clips.on && on) ? clips.clips : [];
+  if (on && (!clips || !clips.on) && Date.now() - (clipBox.asked || 0) > 3000) { clipBox.asked = Date.now(); getClips().catch(() => {}); }   // just switched on
+  const head = cardHead('Wake word clips', ['What woke the Echo, and what nearly did: the last ten wake words and ten near misses, as the wake word engine heard them. ',
+    'Listen to find what wakes it falsely, mark each one, and save them to train a wake word of your own.'], 'wave', null,
+    'The clips stay in the Echo\'s memory only: a restart, an update or switching this off deletes them, and they never go to Home Assistant or the log. They come to this page encrypted. None are kept while the Echo is muted or in a Drop In. A clip starts a second before the word, so you hear the room as it was; how long it goes on after the word is yours to choose: 0.3 s is enough for training, a second tells whether someone went on talking.');
+  const rows = clipBox.rowEls;
+  const wakes = list.filter((c) => c.kind === 'wake'), misses = list.filter((c) => c.kind !== 'wake'), sus = list.filter(clipSuspect).length,
+    marked = list.filter((c) => c.label).length;
+  const body = !on ? empty('ear', 'Off. Switch it on above to keep the next wake words and near misses here.')
+    : !list.length ? empty('ear', 'No clips yet. Say the wake word, or wait for the next time the Echo wakes, or nearly wakes, by itself.')
+    : h('div', { class: 'clients' }, list.map(clipRow));
+  clipBox.replaceChildren(head, rows, body, on && list.length ? h('div', { class: 'card-foot' },
+    clipBusy ? h('div', { class: 'busy grow' }, h('span', { class: 'spin' }), clipBusy)
+      : h('span', { class: 'help grow' }, `${plural(wakes.length, 'wake word')}${sus ? ` (${sus} perhaps false)` : ''}, ${plural(misses.length, 'near miss', 'near misses')}, ${marked} marked`),
+    h('button', { disabled: !!clipBusy, onclick: clipSaveAll }, icon('down'), 'Save all…'),
+    h('button', { class: 'danger', disabled: !!clipBusy, onclick: async () => {
+      if (await ask({ title: 'Delete every clip?', ok: 'Delete', danger: true, body: 'They are gone from the Echo. Save them first if you want to keep them.' }))
+        clipDo('Deleting…', async () => { clipStop(); await echo.call('POST', '/api/wakeclips/delete', 'all'); });
+    } }, icon('trash'), 'Delete all')) : null);
 }
 
 // ---------------------------------------------------------------- Echos: the network, arbitration, settings sync

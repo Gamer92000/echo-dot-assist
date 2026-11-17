@@ -3338,8 +3338,26 @@ Run in this order. Each step says what it proves.
       miss.  Tests: fake_ha_esphome_buttons.py (no error ring on no text, the ring on another error; the entity
       listed only when on; detected + no_speech, detected + answered_elsewhere, near_miss; no event after the button
       or a follow-up).  Open (device): near misses per day on a Dot with TV and music (how noisy the event is); the
-      false-wake count for the microWakeWord comparison above can come from these events.  Not done: the issue's
-      "keep wake clips" (audio around each wake for download).
+      false-wake count for the microWakeWord comparison above can come from these events.  The issue's "keep wake
+      clips": done 2026-11-17, below.
+- [x] Wake word clips (2026-11-17, issue #48's "keep wake clips"; ideas from Kiosk Satellite's wake word diagnostics,
+      EchoMuse's sample capture, TECHO5's takes).  `wakeclip.c`: setting `wake_clips` (Wake word page, off, not
+      exported, no HA entity: HA must not switch recording on) and `wake_clips_after` (0.3/1/2/3 s).  Ten wake words and
+      ten near misses (the oldest of the same kind goes), each [word begin - 1 s, word end + after], the word cut to its
+      last 2 s.  Marked in `on_wake` (after the keyword filter and Drop In check; "stop" too) and `on_near_miss`, which
+      now gets Pryon's begin/end (`wake_miss_cb` took slot and keyword only; the near miss's indices are in the same
+      `wake_fed` space as the accept's).  Copied by the capture thread from the ring block by block
+      (`wakeclip_feed` after `ring_put`): the part after the word never depends on the 4 s ring.  Not while muted or
+      in a Drop In.  Each clip: what played (`music_on`, `tts_on`, `alarm_on`, `earcon_sounding`), the word's and the
+      room's dBFS, peak, and the outcome of the newest non-"stop" wake word within 30 s (`wake_told` no_speech /
+      answered_elsewhere, `core_transcript` "request").  RAM only, ~2 MB at most (20 x 4.3 s x 32 kB/s).
+      Page: `GET /api/wakeclips` (list with a 96-point waveform, `env`: unsealing every clip to draw it took ~0.2 s a
+      clip in node), `GET /api/wakeclips/<id>` sealed (`clip_seal`: label "hassmic clip 1", 4-byte block counter; seal's
+      one byte would wrap at 16 kB), label, delete.  Save all: tar, a folder per mark, `clips.json`.
+      Tests: `make unit-wakeclip` (ASan/UBSan), `tests/fake_web_clips.py` (bytes against the capture file, sealed,
+      unsigned and unapproved refused, muted, labels, delete, restart, off), `web_crypto_test.py` (stream vs Python).
+      Open (device): a near miss's begin/end from Pryon on a Dot (taken from its result as for accepts, not yet seen in
+      a log); RAM and CPU of the copy on a Dot 2; whether the accept's gzip JSON holds a score worth listing.
 - [x] Wake word or button without Home Assistant (2026-11-01; during an HA restart or a lost link the Echo cannot be
       told from a deaf one, and boot.log has nothing to say why).  `trigger` did nothing when
       `!connected || !satellite_running`: no sound, no ring, no line.  Now, when not muted, set up (`oobe` 0), IDLE, no

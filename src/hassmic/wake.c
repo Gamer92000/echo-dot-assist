@@ -40,7 +40,7 @@ void wake_feed(const int16_t *samples, size_t count)
 }
 
 void wake_on_miss(wake_miss_cb cb) { miss_cb = cb; }
-void wake_near_miss(int slot, const char *keyword) { if (miss_cb) miss_cb(slot, keyword); }
+void wake_near_miss(int slot, const char *keyword, uint64_t begin, uint64_t end) { if (miss_cb) miss_cb(slot, keyword, begin, end); }
 
 uint64_t wake_fed(void) { return fed; }
 void wake_reset(void) { for (int i = 0; i < WAKE_SLOTS; i++) if (cur[i]) cur[i]->reset(i); }
