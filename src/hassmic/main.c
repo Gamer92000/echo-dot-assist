@@ -884,11 +884,13 @@ void core_bt_device(const char *name, int on)
 }
 
 /* PC tests: HASSMIC_FAKE_PHONE names a file holding "connect <name>" or "disconnect <name>", the phone a2dp.c would tell
- * of; taken once (the file is removed), at volume_led_thread's pace */
+ * of; taken once (the file is removed), at volume_led_thread's pace.  Without it (every Echo) nothing but a pointer test */
 static void fake_phone(void)
 {
-    const char *path = getenv("HASSMIC_FAKE_PHONE"); char line[128];
-    FILE *f = path ? fopen(path, "r") : NULL;
+    static const char *path; static int init;
+    if (!init) { init = 1; path = getenv("HASSMIC_FAKE_PHONE"); }
+    if (!path) return;
+    char line[128]; FILE *f = fopen(path, "r");
     if (!f) return;
     int ok = fgets(line, sizeof line, f) != NULL;
     fclose(f); unlink(path);

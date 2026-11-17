@@ -5,8 +5,8 @@ What changed for people using the Echo, newest first. Details and measurements a
 ## 2026-11-17 — Bluetooth: the chime without the voice
 
 - **Keep the chime when a phone connects, drop the spoken words.** "Bluetooth announcements" used to switch off the
-  chime as well as "Connected to …". Now it is only the words; the chimes are the sounds "A phone connects to play"
-  and "The phone leaves" (settings page, Sounds), each with a switch of its own, so any combination works. If you had
+  chime as well as "Connected to …". Now it is only the words; the chimes are the sounds "Bluetooth connected" and
+  "Bluetooth disconnected" (settings page, Sounds), each with a switch of its own, so any combination works. If you had
   the announcements off to have silence, the chimes now play: switch those two sounds off to keep it as quiet as
   before.
 
