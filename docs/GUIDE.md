@@ -200,6 +200,12 @@ other Echos. The models are ESPHome's own files (TensorFlow Lite, not ONNX); the
 interpreter, which gives the same results as TensorFlow Lite. Switching back, or deleting the last model, restores
 everything.
 
+The threshold of the wake word in use is in Home Assistant too: "Wake word cutoff", a configuration slider from 0.50
+to 0.99 in steps of 0.01. **Higher is stricter**: fewer false wakes, more missed wake words. It is the threshold of the
+model picked in "Wake word" (none for "Wake word 2"), kept in that model's manifest as the page keeps it, so it stays
+over restarts and a change on the page shows there as well. A new value counts within seconds; Home Assistant stays
+connected. Only while microWakeWord runs.
+
 ### Two wake words
 
 Home Assistant's "Wake word 2" select, beside "Wake word", picks a second word that the Echo listens for at the same

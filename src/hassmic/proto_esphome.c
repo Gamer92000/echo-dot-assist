@@ -158,6 +158,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        /* the light ring live (ringlive.h): four actions, the design select, then a light per LED (RING_LEDS_MAX keys:
         * a new key goes after KEY_LIVE_LED + RING_LEDS_MAX) */
        KEY_LIVE_FRAME, KEY_LIVE_ANIM, KEY_LIVE_DESIGN_SVC, KEY_LIVE_STOP, KEY_LIVE_DESIGN, KEY_LIVE_LED };
+enum { KEY_WAKE_CUTOFF = KEY_LIVE_LED + RING_LEDS_MAX };     /* microWakeWord's cutoff, after the live ring's lights */
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -412,6 +413,7 @@ static void send_setting(int key)       /* lock held */
     case KEY_SOUND_DETECTION: pb_uint(&b, 2, core_sound(-1)); send_state(SWITCH_STATE, &b); break;
     case KEY_WIFI_MOTION_ON: if (wifimotion_present()) { pb_uint(&b, 2, wifimotion_enable(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_WIFI_MOTION_SENS: if (wifimotion_present()) { pb_float(&b, 2, wifimotion_sensitivity(-1)); send_state(NUMBER_STATE, &b); } break;
+    case KEY_WAKE_CUTOFF: { float c = core_wake_cutoff(-1); if (c >= 0) { pb_float(&b, 2, c); send_state(NUMBER_STATE, &b); } } break;
     case KEY_WHISPERED:                 /* unknown until a request has been scored */
         { int w = core_whispered(); if (w != -2) { pb_uint(&b, 2, w == 1); pb_uint(&b, 3, w < 0); send_state(BINARY_SENSOR_STATE, &b); } }
         break;
@@ -668,6 +670,7 @@ static int listed(int key)
     case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
+    case KEY_WAKE_CUTOFF: return core_wake_cutoff(-1) >= 0;    /* microWakeWord only; switching the engine relists */
     case KEY_LED_AUTO: return have_auto;
     case KEY_SCR_AUTO: case KEY_SCR_LEVEL: case KEY_SCR_ADJUST: return settings_find("screen_brightness_auto") != NULL;
     case KEY_LUX: return have_light && settings_on("light_sensor");
@@ -764,6 +767,12 @@ static void send_setting_entities(void)
           pb_float(&b, 6, WIFIMOTION_SENS_MIN); pb_float(&b, 7, WIFIMOTION_SENS_MAX); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2);
           send_msg(LIST_NUMBER, &b); }
     }
+    /* microWakeWord's cutoff for the (first) active model: higher is stricter.  As on the settings page, kept in the
+     * model's manifest; a configuration entity, slider 0.50-0.99 */
+    if (listed(KEY_WAKE_CUTOFF)) { PB(b, 192); pb_str(&b, 1, "wake_word_cutoff"); pb_fixed32(&b, 2, KEY_WAKE_CUTOFF);
+        pb_str(&b, 3, "Wake word cutoff"); pb_str(&b, 5, "mdi:tune-vertical");
+        pb_float(&b, 6, 0.50f); pb_float(&b, 7, 0.99f); pb_float(&b, 8, 0.01f); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2);
+        send_msg(LIST_NUMBER, &b); }
     /* Timers: "binary_sensor.<node>_timer_ringing" still on a minute after it came on = nobody heard it, for an
      * automation that announces it elsewhere.  The names (or the length of a timer without one) are a diagnostic beside
      * it, set before the ring goes on so a trigger on it can read them */
@@ -877,6 +886,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_WIFI_MOTION_ON && wifimotion_present()) {
         wifimotion_enable(on); settings_save(); send_setting(key); return;       /* the sensor follows through wifi_changed */
     }
+    else if (type == NUMBER_COMMAND && key == KEY_WAKE_CUTOFF && listed(key)) { core_wake_cutoff(num); send_setting(key); return; }
     else if (type == NUMBER_COMMAND && key == KEY_WIFI_MOTION_SENS && wifimotion_present()) {
         wifimotion_sensitivity((int)lroundf(num)); settings_save(); send_setting(key); return;
     }
@@ -1731,7 +1741,7 @@ static void on_va_set_config(const unsigned char *p, const unsigned char *end)
         else if (k < CORE_WAKE_ACTIVE_MAX) pick[k++] = i;
         else fprintf(stderr, "wake word: Home Assistant picked more than %d, \"%s\" ignored\n", CORE_WAKE_ACTIVE_MAX, id);
     }
-    if (k) core_wake_set(pick, k);
+    if (k && !core_wake_set(pick, k)) send_setting(KEY_WAKE_CUTOFF);    /* the first one's cutoff */
 }
 
 /* returns 0 to close the connection */
@@ -1745,6 +1755,7 @@ static void send_all_settings(void)
         send_setting(KEY_SS_UNPAIRED); send_setting(KEY_ADB_WIFI);
         send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS); send_setting(KEY_BT_OUT_DELAY);
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
+        send_setting(KEY_WAKE_CUTOFF);
         send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_setting(KEY_NEXT_TIMER_NAME); send_setting(KEY_NEXT_TIMER_LENGTH); send_setting(KEY_NEXT_TIMER);

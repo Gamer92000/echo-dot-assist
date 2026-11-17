@@ -81,6 +81,9 @@ int  mww_check_dir(const char *dir, char *err, size_t errsz);
 int  mww_add(const char *id, const char *json, size_t jn, const void *model, size_t mn, char *err, size_t errsz);
 /* "name=..", "cutoff=0.85", "window=5" lines: what changes */
 int  mww_edit(const char *id, const char *text, char *err, size_t errsz);
+/* the cutoff alone (Home Assistant's "Wake word cutoff"), rounded to 0.01 and held to MWW_CUTOFF_MIN..MAX.  No
+ * core_wake_models_changed: the list stays, so no reconnect, and the caller may hold core_lock.  0, or -1 */
+int  mww_set_cutoff(const char *id, float cutoff);
 int  mww_delete(const char *id, char *err, size_t errsz);
 /* staged folder DIR (artifacts.c) becomes model ID */
 int  mww_install_dir(const char *dir, const char *id, char *err, size_t errsz);

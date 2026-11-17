@@ -2130,6 +2130,20 @@ Run in this order. Each step says what it proves.
       Echo, an Echo with Pryon and one with microWakeWord in one arbitration network; the remote path with a real
       openWakeWord on the Dot 2.  Not done: ESPHome's "stop" model
       as a second model while a timer rings or a reply plays (as Voice PE does); openWakeWord/ONNX.
+- [~] microWakeWord's threshold as an ESPHome number (2026-11-16): "Wake word cutoff" (`wake_word_cutoff`, 0.50-0.99
+      in 0.01, configuration, slider), the `probability_cutoff` of the first active model.  `KEY_WAKE_CUTOFF` takes
+      the key after the live ring's lights (`KEY_LIVE_LED + RING_LEDS_MAX`), so every other entity keeps its key;
+      listed only with microWakeWord (an engine switch rebuilds the list anyway).  Set from Home Assistant it goes through `mww_set_cutoff`, not `mww_edit`: on_setting
+      holds `core_lock`, which `mww_edit`'s `core_wake_models_changed` takes again (not recursive: the Echo would
+      hang), and a changed model list would also make HA reconnect.  `mww_set_cutoff` rounds to 0.01, clamps,
+      rewrites the manifest as the page does, and `core_wake_cutoff` has the capture thread load the model again.
+      `fake_web_mww.py` (+6: not listed with Amazon's engine; listed with bounds, step and category; the state is the
+      page's; set from HA rounded, in the manifest, on the page, the model loaded again, no reconnect; 1.5 held to
+      0.99; after another pick the new model's threshold).  `fake_ha_esphome_features.py` unchanged and passing.
+      Cross-built for biscuit (NDK r21e): against the same tree without the change only `core_wake_cutoff` and
+      `mww_set_cutoff` are new symbols, and only main.c, mww_store.c and proto_esphome.c compile differently.
+      On an Echo Dot 2 (biscuit): listed with the model's 0.97, set from HA to 0.85, read back the same, and
+      the Echo kept waking on the wake word.  Open: no number for "Wake word 2".
 - [~] Two wake words at once (GitHub issue 18, 2026-10-11).  Home Assistant's ESPHome integration always makes two
       wake word selects and two pipeline selects (select.py, index 0 and 1; only `max_active_wake_words < 1` hides
       them), sends the ids of both in one VoiceAssistantSetConfiguration, in the order its selects were last set (a

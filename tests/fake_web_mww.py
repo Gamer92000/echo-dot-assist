@@ -101,6 +101,8 @@ async def main():
         # Home Assistant before the switch: Amazon's list (the PC's stand-in "Alexa")
         ha, avail, active = await ha_config()
         check(all(not i.startswith("hey_jarvis") for i, _ in avail), f"Amazon's engine: Home Assistant lists its wake words: {avail}")
+        ents, _ = await ha.list_entities_services()
+        check(not [e for e in ents if e.object_id == "wake_word_cutoff"], "Amazon's engine: no wake word cutoff")
         started = asyncio.Event(); phrases = []
         async def handle_start(conv_id, flags, settings, phrase): phrases.append(phrase); started.set(); return 0
         async def nothing(*a, **k): pass
@@ -145,9 +147,31 @@ async def main():
         await ha.set_voice_assistant_configuration(["alexa"]); await asyncio.sleep(0.6)
         check(mww(b)["active"] == "alexa", "picked in Home Assistant: active on the page")
 
+        # Home Assistant's "Wake word cutoff": the first active model's, a configuration slider.  Set there it is kept in
+        # the manifest and the model loads again, without sending Home Assistant away (the list is the same)
+        ents, _ = await ha.list_entities_services()
+        num = [e for e in ents if e.object_id == "wake_word_cutoff"]
+        check(num and (round(num[0].min_value, 2), round(num[0].max_value, 2), round(num[0].step, 2), int(num[0].entity_category)) == (0.5, 0.99, 0.01, 1),
+              f"microWakeWord: a wake word cutoff, 0.50-0.99 in 0.01, a configuration entity: {num}")
+        key = num[0].key if num else -1; cut = []
+        ha.subscribe_states(lambda st: cut.append(round(st.state, 2)) if st.key == key else None); await asyncio.sleep(0.5)
+        check(cut[-1:] == [0.8], f"its state: the active model's cutoff as the page set it: {cut}")
+        n0 = len(open(log).read())
+        ha.number_command(key, 0.853); await asyncio.sleep(0.8)
+        await logged(log, "microwakeword: \"Computer Alexa\" loaded (cutoff 0.85", n0)
+        tail = open(log).read()[n0:]
+        man = json.load(open(os.path.join(state, "mww", "alexa", "manifest.json")))
+        check(cut[-1:] == [0.85] and man["micro"]["probability_cutoff"] == 0.85 and "loaded (cutoff 0.85" in tail and "links closed" not in tail
+              and [x["cutoff"] for x in mww(b)["models"] if x["id"] == "alexa"] == [0.85],
+              f"set in Home Assistant: rounded, kept in the manifest, on the page, loaded again, no reconnect: {cut}")
+        ha.number_command(key, 1.5); await asyncio.sleep(0.5)
+        check(cut[-1:] == [0.99], f"above the range: held to 0.99: {cut}")
+        ha.number_command(key, 0.8); await asyncio.sleep(0.5)
+
         # a second wake word (Home Assistant's "Wake word 2"): "Alexa" beside "Hey Jarvis", heard in its own slot, and the
         # run names it, so Home Assistant runs "Assistant 2"
         await ha.set_voice_assistant_configuration(["hey_jarvis"]); await asyncio.sleep(0.6)
+        check(cut[-1:] == [0.97], f"another model picked: the cutoff shown is its own: {cut}")
         n0 = len(open(log).read())
         await ha.set_voice_assistant_configuration(["hey_jarvis", "alexa"]); await asyncio.sleep(0.6)
         m = mww(b)

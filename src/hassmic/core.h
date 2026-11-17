@@ -150,6 +150,9 @@ enum { WAKE_AMAZON, WAKE_MWW, WAKE_HA };       /* WAKE_HA: Home Assistant listen
 int  core_wake_engine(int set);
 const char *core_wake_refused(void);             /* lock held: why the last core_wake_engine(set) did not take */
 void core_remote_wake(void);                     /* lock held: Home Assistant heard the wake word (WAKE_HA) */
+/* Lock held: the first active microWakeWord model's cutoff (its manifest, mww.h), -1 with another engine.  set >= 0
+ * writes it (mww_set_cutoff) and has the capture thread load the model again: Home Assistant's "Wake word cutoff" */
+float core_wake_cutoff(float set);
 void core_wake_models_changed(void);         /* not the lock: a model was added, changed or deleted (mww_store.c) */
 int  core_eq(int band);                          /* speaker equalizer, 0 bass / 1 mid / 2 treble: -6..+6 dB */
 void core_set_eq(int band, int db);              /* the mixer keeps it across reboots */
