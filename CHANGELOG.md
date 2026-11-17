@@ -45,6 +45,9 @@ What changed for people using the Echo, newest first. Details and measurements a
   Echo's memory only: they are never written to its storage, sent to Home Assistant or logged, and a restart, an
   update or switching it off deletes them. They come to the page encrypted. "Wake word" page, card "Wake word clips".
   Asked for in issue #48.
+- **"Learn how the wake word is said here" now learns from real requests only.** It used to learn from every wake
+  word, also those nobody meant: the television's "Alexa" with nothing said after it taught it the television's
+  voice as one of yours. Now it learns from a wake word only once a request followed it.
 
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 

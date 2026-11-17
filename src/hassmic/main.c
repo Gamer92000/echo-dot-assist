@@ -1878,10 +1878,35 @@ static void align_said(char *s, size_t n, long e)   /* e: in the window, -1 none
     else snprintf(s, n, "%+lld ms", ((long long)job.from + e - (long long)job.end) * 1000 / CAP_RATE);
 }
 
+/* The household's adaptation learns from real requests only.  It used to take every wake word the aligner found an end
+ * for, a television's "Alexa" with nothing said after it too, and learnt the television's voice into the household's.
+ * Now a window's statistics are gathered on their own (adapt_pend) and merged once its wake word turned out real: a
+ * request followed it (core_transcript sets adapt_ok to that wake word's end); a wake word with nothing said or
+ * answered by another Echo is never learnt from.  Merged at the next wake word's alignment (align_thread, which owns
+ * adapts[]): the transform then comes in one request later than before */
+static struct wakealign_adapt *adapt_pend;          /* align_thread: the last window's statistics, waiting */
+static int adapt_pend_slot = -1;
+static uint64_t adapt_pend_end;
+static atomic_ullong adapt_ok, align_run_end;       /* the end of the wake word a request followed; of the last aligned */
+
+static void adapt_commit(void)                      /* align_thread */
+{
+    if (adapt_pend_slot < 0) return;
+    struct wakealign_adapt *ad = adapts[adapt_pend_slot].ad;
+    if (atomic_load(&adapt_ok) == adapt_pend_end && ad && ad->space == adapt_pend->space) {
+        wakealign_adapt_merge(ad, adapt_pend);
+        int had = ad->have; wakealign_estimate(ad);
+        if (ad->have && !had) fprintf(stderr, "wake: speaker adaptation in use (%d requests)\n", ad->requests);
+        if (mono_ms() - adapts[adapt_pend_slot].saved_ms > 600000 || ad->requests == WAKEALIGN_ADAPT_MIN) adapt_save(adapt_pend_slot);
+    } else fprintf(stderr, "wake: speaker adaptation: the last wake word had no request after it, not learnt from\n");
+    adapt_pend_slot = -1;
+}
+
 static void *align_thread(void *arg)
 {
     (void)arg;
     long long t0 = mono_ms();
+    adapt_commit();                                 /* the last wake word's, now that its request is known */
     int slot = job.adapt ? adapt_for(wakealign_space(job.wa)) : -1;
     struct wakealign_adapt *ad = slot >= 0 ? adapts[slot].ad : NULL;
     int adapted = 0; long e = -1, by_adapt = -1;
@@ -1903,11 +1928,10 @@ static void *align_thread(void *arg)
     if (ms > 0) usleep((useconds_t)ms * 1000);
     align_ms = mono_ms() - t0;
     atomic_store(&align_done, job.end);             /* the answer is out: the capture thread may go on */
-    if (ad && align_at >= 0) {
-        wakealign_end_adapt(job.wa, job.win, job.n, adapted ? ad : NULL, ad);
-        int had = ad->have; wakealign_estimate(ad);
-        if (ad->have && !had) fprintf(stderr, "wake: speaker adaptation in use (%d requests)\n", ad->requests);
-        if (mono_ms() - adapts[slot].saved_ms > 600000 || ad->requests == WAKEALIGN_ADAPT_MIN) adapt_save(slot);
+    if (ad && align_at >= 0 && (adapt_pend || (adapt_pend = malloc(sizeof *adapt_pend)))) {
+        memset(adapt_pend, 0, sizeof *adapt_pend); adapt_pend->space = ad->space;
+        wakealign_end_adapt(job.wa, job.win, job.n, adapted ? ad : NULL, adapt_pend);
+        adapt_pend_slot = slot; adapt_pend_end = job.end;
     }
     atomic_store(&align_busy, 0);
     return NULL;
@@ -1927,6 +1951,7 @@ static void align_ahead(void)                       /* capture thread, before it
     for (uint64_t i = from; i < stop; i++) job.win[i - from] = ring[i % RING_SAMPLES];
     job.wa = wake_align[slot]; job.n = (size_t)(stop - from); job.from = from; job.end = end; job.stop = stop;
     job.adapt = settings_on("wake_word_adaptation");
+    atomic_store(&align_run_end, end);
     pthread_t t;
     atomic_store(&align_busy, 1);
     if (pthread_create(&t, NULL, align_thread, NULL)) { atomic_store(&align_busy, 0); align_skipped = end; return; }
@@ -2512,7 +2537,10 @@ int core_transcript(const char *text)
                                            "închide", "închide apelul", "închide Drop In", "termină apelul", "încheie apelul" };
                                                                      /* the blueprint's languages */
     char w[64], k[64], kw[64];
-    if (run_wake && text && text[0]) wakeclip_outcome("request", mono_ms());     /* the clip of its wake word, if one is kept */
+    if (run_wake && text && text[0]) {
+        wakeclip_outcome("request", mono_ms());     /* the clip of its wake word, if one is kept */
+        atomic_store(&adapt_ok, atomic_load(&align_run_end));      /* the adaptation may learn from that wake word */
+    }
     size_t n = fold(text, w, sizeof w);
     wake_phrase_bare(kw, sizeof kw);                                /* "Echo", not "Echo (de-DE)" */
     size_t m = fold(kw, k, sizeof k);                               /* "Alexa, stop" with the wake word sent too */

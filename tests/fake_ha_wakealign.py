@@ -38,8 +38,9 @@ def wake_after_word(e):
     e.wake()
 
 
-async def request(e, ha, want):
+async def request(e, ha, want, said=None):
     """one wake word, until the log has want (a regex) and Home Assistant 0.25 s of the request after the silence;
+    said: what speech-to-text heard (a request followed: the speaker adaptation may learn from it), else nothing;
     (the log's new lines, seconds from the start of the run until that audio) or None"""
     va = ha.va; mark = len(e.log())
     va.started.clear(); va.mic.clear(); va.stopped.clear()
@@ -48,6 +49,7 @@ async def request(e, ha, want):
     t0 = asyncio.get_running_loop().time()
     ok = await until(lambda: re.search(want, e.log()[mark:]) and len(va.mic) >= LEAD_IN + 8000, 6)
     secs = asyncio.get_running_loop().time() - t0
+    if said: ha.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": said}); await sync(ha.cli)
     ha.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
     await sync(ha.cli); await asyncio.sleep(0.3)
     return (e.log()[mark:], secs) if ok else (e.log()[mark:], None)
@@ -100,11 +102,14 @@ async def main(e):
           f"no end near Pryon's: its answer in the log: {re.findall(r'wake: the aligner.*', lines)}")
     check("tail left out (no pause" in lines, f"and the level finds no pause: {re.findall(r'wake: .*tail left out.*', lines)}")
     # the speaker adaptation: one statistics file for German (every German word's), from each request with an end near
-    # Pryon's (the one above among them); in use and saved from the 5th
+    # Pryon's and something said after it; in use and saved from the 5th.  Wake words with nothing said after them (a
+    # television's "Alexa") are never learnt from: the requests above had no transcript
     zone(e, "Europe/Berlin")
+    check("speaker adaptation in use" not in e.log() and "had no request after it, not learnt from" in e.log(),
+          "wake words with nothing said after them: not learnt from")
     for _ in range(8):
         if "speaker adaptation in use" in e.log(): break
-        await request(e, ha, r"the word ends|by the level")
+        await request(e, ha, r"the word ends|by the level", said="wie spät ist es")
     use = re.search(r"speaker adaptation in use \((\d+) requests\)", e.log()); saved = glob.glob(os.path.join(e.state, "wakealign-*.adapt"))
     check(use and int(use[1]) >= 5 and len(saved) == 1 and os.path.getsize(saved[0]) > 500000,
           f"speaker adaptation in use from the 5th request it learnt from ({use and use[0]}), saved: {[os.path.basename(f) for f in saved]}")

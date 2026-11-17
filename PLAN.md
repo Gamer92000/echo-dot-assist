@@ -3358,6 +3358,16 @@ Run in this order. Each step says what it proves.
       unsigned and unapproved refused, muted, labels, delete, restart, off), `web_crypto_test.py` (stream vs Python).
       Open (device): a near miss's begin/end from Pryon on a Dot (taken from its result as for accepts, not yet seen in
       a log); RAM and CPU of the copy on a Dot 2; whether the accept's gzip JSON holds a score worth listing.
+- [x] Speaker adaptation from real requests only (2026-11-17).  `align_thread` added every window the aligner found
+      an end for, false wakes too (a television's "Alexa", nothing said after it): their voice went into the
+      household's fMLLR statistics.  Now the window's statistics are gathered into `adapt_pend` and merged
+      (`wakealign_adapt_merge`: forget once per request, then add: the same as adding directly, `wakealign_test
+      merge`, in `make unit-wakealign`) at the next alignment only if `core_transcript` saw a request for that wake
+      word (`adapt_ok` = its end); else dropped, logged.  The transform comes in one request later.
+      `tests/fake_ha_wakealign.py`: wake words without a transcript are not learnt from, with one from the 5th.
+      Tried and dropped the same day: a household filter learning from the clips' marks (kNN on log-mel prints) --
+      on synthetic voices it never blocked the household but caught only 16-64 % of a television, not worth it
+      without real clips to measure on.
 - [x] Wake word or button without Home Assistant (2026-11-01; during an HA restart or a lost link the Echo cannot be
       told from a deaf one, and boot.log has nothing to say why).  `trigger` did nothing when
       `!connected || !satellite_running`: no sound, no ring, no line.  Now, when not muted, set up (`oobe` 0), IDLE, no

@@ -354,6 +354,20 @@ static void accumulate(const struct wakealign *w, const float *feat, const float
     ad->requests++;
 }
 
+void wakealign_adapt_merge(struct wakealign_adapt *ad, const struct wakealign_adapt *one)
+{
+    const int D = WAKEALIGN_ADIM;
+    double f = 1;
+    for (int r = 0; r < one->requests; r++) f *= WAKEALIGN_FORGET;
+    for (int i = 0; i < D; i++)
+        for (int j = 0; j <= D; j++) {
+            ad->k[i][j] = ad->k[i][j] * f + one->k[i][j];
+            for (int l = j; l <= D; l++) ad->g[i][j][l] = ad->g[i][j][l] * f + one->g[i][j][l];
+        }
+    ad->beta = ad->beta * f + one->beta;
+    ad->requests += one->requests;
+}
+
 static int invert(const double *a, double *inv, int n)   /* Gauss-Jordan with partial pivoting; 0: singular */
 {
     double m[(WAKEALIGN_ADIM + 1) * (WAKEALIGN_ADIM + 1)];
