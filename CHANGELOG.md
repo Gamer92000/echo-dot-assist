@@ -11,8 +11,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   other player. Lyrion is found on the network by itself; where it is not (another subnet, a Docker container), give
   its address in the same card. Lyrion's volume and the Echo's are one, both ways; the action button pauses and
   resumes, "<wake word>, stop" pauses, and two or three presses skip. FLAC, MP3 and WAV play as they are, everything
-  else Lyrion converts. Music Assistant (Sendspin) is not affected; whichever starts last plays. Tried with Lyrion 9.2.0
-  on the PC build; not yet on an Echo.
+  else Lyrion converts. Music Assistant (Sendspin) is not affected; whichever starts last plays. Tried on an Echo Dot 2
+  with Lyrion 9.1.1 (internet radio), and with Lyrion 9.2.0 on the PC build (the library's formats, groups).
 
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 

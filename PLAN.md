@@ -4100,9 +4100,12 @@ Run in this order. Each step says what it proves.
       same audg (Squeezebox2 `volume_map`) tells them apart (`make unit-lyrion`: all of 1..100 back as Lyrion had them).
       (4) The link's first audg is Lyrion's stored volume: the Echo's goes to Lyrion instead, else every connect changed
       the Echo's volume.  `tests/fake_lms.py` (a stand-in Lyrion that sends what 9.2.0 sent, in its order).
-      Open: on an Echo (the mixer at 44.1 kHz, as the Bluetooth sink already opens it; the latency of 70 ms in a group
-      with real Squeezebox players, by ear); internet radio that Lyrion sends to be fetched directly (autostart 2/3, ICY
-      metadata to META) only against the stand-in; a password on Lyrion's web port (JSON-RPC refused, logged; the
+      **Echo Dot 2 (biscuit), Lyrion 9.1.1, 2026-11-17** (the owner's): found by discovery at once ("Moja hudba"
+      9.1.1), linked with the Wi-Fi MAC as id, the Echo's volume 70 sent over Lyrion's stored 50; internet radio that
+      Lyrion has the player fetch directly (autostart 3, MP3 256 kbit/s from the station's own server): played, the
+      mixer opened at 44.1 kHz.  Owner: works.
+      Open: on an Echo, the library's FLAC, a group with real Squeezebox players (the latency of 70 ms, by ear), the
+      buttons; ICY metadata to META only against the stand-in; a password on Lyrion's web port (JSON-RPC refused, logged; the
       player plays on); IPv6-only Lyrion (the player's link is IPv4).
 
 ## Cannoli local port — 2026-11-13
