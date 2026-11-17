@@ -758,9 +758,18 @@ static int wake_cut;
 static int wake_fails;                              /* lock held: wake word runs Home Assistant failed during this reply */
 static int follow_up;                               /* lock held: the pipeline now starting is a follow-up to a question */
 static void whisper_run(void);
+/* Home Assistant's wake word: a run that fails is asked for again after a wait, 1 s doubling to 30 s, back to none once
+ * one ends well or ran half a minute.  Without it a wake word engine that was down ended every run at once and the Echo
+ * asked again at once: 5289 runs in 170 s, up to 510 a second, until Home Assistant's core gave up (2026-11-16) */
+#define RETRY_FIRST_MS 1000
+#define RETRY_MAX_MS 30000
+static int run_failed;                              /* lock held: the run that ends now failed (core_error) */
+static int retry_ms;                                /* lock held: the wait before the next run, 0: none */
+static long long run_began;                         /* lock held: mono_ms of the last pipeline_start */
+static atomic_llong retry_at;                       /* mono_ms the next run is due, 0: none waits */
 static void pipeline_start(uint64_t from)    /* from: where the wake word that starts it ended, 0: not a wake word */
 {
-    run_over = 0; wake_wait = 0;
+    run_over = 0; wake_wait = 0; run_began = mono_ms();
     quiet_abort = 0;
     mic_fresh = 1;
     replay_from = from;
@@ -1101,8 +1110,12 @@ static void mute_update(int was, int sound)   /* lock held: ring, sound + Home A
     int now = core_muted();
     if (now == was) return;
     if (sound) sound_request(now ? SND_MICS_OFF : SND_MICS_ON);
-    if (now) { if (state == LISTENING) core_pipeline_finish(); led("-s", "mics-off_on"); }
-    else { led("-u", "mics-off_on"); led("-s", "mics-off_end"); }
+    /* Home Assistant's wake word: muted, the stream that waits for it ends, and starts again with the mics */
+    if (now) { if (state == LISTENING || (!core_local_wake && state == IDLE && atomic_load(&streaming))) core_pipeline_finish(); led("-s", "mics-off_on"); }
+    else {
+        led("-u", "mics-off_on"); led("-s", "mics-off_end");
+        if (!core_local_wake && state == IDLE && satellite_running && connected && !atomic_load(&streaming)) pipeline_start(0);
+    }
     if (connected && proto->mute_changed) proto->mute_changed(now);
 }
 
@@ -1165,7 +1178,8 @@ void core_restart_after(void) { barge_in = 1; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
-    wake_fails = 0;
+    int failed = run_failed;
+    run_failed = 0; wake_fails = 0;
     if (atomic_exchange(&streaming, 0) && connected) {
         /* a run that only listened for the wake word is aborted, not ended: a stale error from it must not reach the next */
         if (wake_wait && proto->cancel) proto->cancel();
@@ -1177,6 +1191,18 @@ void core_pipeline_finish(void)
     if (mono_ms() - last_wake_ms > 3000) wake_reset();      /* a reset puts the engine back to sleep: "<wake word>, stop" would lose its "stop" */
     if (!connected) barge_in = 0;
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
+        /* Home Assistant's wake word: muted, none; failed, later; and the RUN_END Home Assistant sends after its ERROR
+         * finishes the run a second time, within the wait: that one starts nothing either */
+        if (!barge_in && (failed || core_muted() || atomic_load(&retry_at))) {
+            if (failed && !core_muted()) {
+                long long now = mono_ms();
+                retry_ms = !retry_ms || now - run_began > RETRY_MAX_MS ? RETRY_FIRST_MS : retry_ms * 2 > RETRY_MAX_MS ? RETRY_MAX_MS : retry_ms * 2;
+                atomic_store(&retry_at, now + retry_ms);
+                fprintf(stderr, "pipeline: the run failed, the next in %d ms\n", retry_ms);
+            }
+            return;
+        }
+        if (!failed) retry_ms = 0;
         if (barge_in) sound_request(SND_WAKE);
         uint64_t from = barge_in ? barge_from : 0;      /* what was said after the wake word while the reply was cut */
         follow_up = barge_in && !core_local_wake;
@@ -1192,7 +1218,7 @@ void core_link(int up, int ready)
     connected = up; satellite_running = up && ready; link_paused = 0;
     if (satellite_running) adopted();
     if (!satellite_running) core_pipeline_finish();
-    else if (!was && !core_local_wake && state == IDLE) pipeline_start(0);
+    else if (!was && !core_local_wake && state == IDLE && !core_muted()) pipeline_start(0);
 }
 
 /* Wyoming's pause-satellite: what Home Assistant's mute switch sends, and the link stays open.  Linked and not running
@@ -1206,7 +1232,8 @@ void core_link_pause(void)
 void core_error(void)
 {
     if (quiet_abort) { quiet_abort = 0; return; }      /* Home Assistant's complaint about a pipeline "stop" ended: not news */
-    if (state != SPEAKING) { led("-s", "anim_start_error_short"); core_pipeline_finish(); }
+    /* Home Assistant's wake word: the error ring once for failures in a row, and none in do not disturb */
+    if (state != SPEAKING) { if (core_local_wake || (!retry_ms && !dnd)) led("-s", "anim_start_error_short"); run_failed = 1; core_pipeline_finish(); }
 }
 
 /* Nothing said after the wake word (or the button, or a follow-up question): the wake word was meant for another
@@ -3390,6 +3417,12 @@ static void *volume_led_thread(void *arg)
         }
         at = atomic_load(&identify_until);
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
+        at = atomic_load(&retry_at);                    /* Home Assistant's wake word: the run after a failure is due */
+        if (at && mono_ms() >= at && atomic_compare_exchange_strong(&retry_at, &at, 0)) {
+            pthread_mutex_lock(&core_lock);
+            if (!core_local_wake && state == IDLE && satellite_running && connected && !core_muted() && !atomic_load(&streaming)) pipeline_start(0);
+            pthread_mutex_unlock(&core_lock);
+        }
         ring_tick();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
         if (tick % 5 == 2) live_names_check();

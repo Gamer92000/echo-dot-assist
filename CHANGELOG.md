@@ -2,6 +2,16 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-17 — Home Assistant's wake word: a wait after a failed run
+
+- **Home Assistant's wake word: after a failed run the Echo waits before asking again.** With the wake word engine
+  "Home Assistant" every run waits in Home Assistant for the wake word. When that failed at once (the openWakeWord app
+  restarting, Home Assistant starting), the Echo asked again at once: an Echo Dot 2 asked 5289 times in 170 s, up to 510
+  a second, each with the error ring, until Home Assistant's supervisor restarted its core. Now it waits 1 s, then 2,
+  4, … up to 30 s, and asks at once again after a run that went well. The error ring shows once for failures in a row,
+  and not with do not disturb on. With the microphones off no run waits in Home Assistant; switched on, one does again.
+  The Echo's own wake word engines are unchanged.
+
 ## 2026-11-17 — Fire smooth again on an Echo running for weeks
 
 - **Light ring live: the "Fire" effect no longer stutters on an Echo that has been running for a week or more (Echo
