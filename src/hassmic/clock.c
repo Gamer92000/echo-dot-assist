@@ -14,12 +14,15 @@
  * Time zone: Home Assistant's comes with its time, as the rule of its zone (tz.c turns it into a zone name).  It goes to
  * root the same way (state/timezone, one line), and main.sh sets persist.sys.timezone, plus Android's alarm service
  * where there is one (it tells the Java side).  The logs stay in UTC whatever the zone.
- * Which of the zones with that rule is the Wi-Fi's country's (apcountry.c, tz.c); what came of it, and how, stays in
- * state/zone, hassmic's own ("<zone> country|kept|guess|rule"; root takes state/timezone away at once, issue #176's
- * review: the language never saw it on an Echo).  The language spoken here (main.c speech_locale, the Echo Show's
- * date) takes the zone only when it is known: the country's, or one set before and kept, never a guess (CET without a
- * country is Europe/Amsterdam: a Dutch date in Germany), nor hassmic's own guess kept by root since.  The country is
- * read again with each answer of Home Assistant's (every link, every 6 h; a new network's new address closes the links).
+ * Which of the zones with that rule: the one of the country Home Assistant's home is in (its zone.home's location,
+ * geo.c), near a border or without a location the Wi-Fi's country (apcountry.c), tz.c's choice among them; what came of
+ * it, and how, stays in state/zone, hassmic's own ("<zone> home|wifi|kept|guess|rule <its country> <the home's> <the
+ * Wi-Fi's>", "-" for none; root takes
+ * state/timezone away at once, issue #176's review: the language never saw it on an Echo).  The language spoken here (main.c speech_locale, the Echo Show's
+ * date) takes the zone only when it is known: a country's, or one set before and kept, never a guess (CET without a
+ * country is Europe/Amsterdam: a Dutch date in Germany), nor hassmic's own guess kept by root since.  Worked out again
+ * with each answer of Home Assistant's (every link, every 6 h; a new network's new address closes the links) and when
+ * its home location changes.
  *
  * Log lines: hassmic's stderr is boot.log (main.sh), so every fprintf(stderr) there, and what the programs it runs print
  * (lipc tools, Amazon's idme tool), gets a time in front: "2026-10-06 15:18:02.417Z" (UTC; the settings page shows it
@@ -36,9 +39,12 @@
 #include "clock.h"
 #include "tz.h"
 #include "apcountry.h"
+#include "geo.h"
 #include "screen.h"
 #include "statefile.h"
+#include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -86,57 +92,88 @@ void clock_from_ha(uint32_t epoch)
 static const char *const TZDATA[] = { "/data/misc/zoneinfo/current/tzdata", "/data/misc/zoneinfo/tzdata",
                                       "/system/usr/share/zoneinfo/tzdata" };
 
-static const char *const zone_hows[] = { "country", "kept", "guess", "rule" };   /* TZ_*, then a rule itself */
-#define ZONE_RULE 3
+/* how the zone was found, as state/zone says it: the country of Home Assistant's home location, the Wi-Fi's country,
+ * the zone set kept, a guess among those of the rule, the rule itself (no zone has it) */
+enum { ZONE_HOME, ZONE_WIFI, ZONE_KEPT, ZONE_GUESS, ZONE_RULE };
+static const char *const zone_hows[] = { "home", "wifi", "kept", "guess", "rule" };
+static int zone_known(int how) { return how == ZONE_HOME || how == ZONE_WIFI || how == ZONE_KEPT; }
 
-/* state/zone: the zone and how it was found (zone_hows), 1 if read */
-static int zone_read(char *zone, size_t cap, int *how)
+/* state/zone: "<zone> <how> <its country> <the home's> <the Wi-Fi's>" (a country "-" none), 1 if read; the countries
+ * into cc[0..2] when given */
+static void cc_take(char *to, const char *v) { if (strlen(v) == 2 && isupper((unsigned char)v[0]) && isupper((unsigned char)v[1])) memcpy(to, v, 3); else to[0] = 0; }
+static int zone_read(char *zone, size_t cap, int *how, char cc[][3])
 {
-    char p[300], z[100], h[16]; FILE *f; int ok = 0;
+    char p[300], z[100], h[16], c[3][8] = { "-", "-", "-" }; FILE *f; int ok = 0;
     snprintf(p, sizeof p, "%s/zone", state_dir());
-    if ((f = fopen(p, "r"))) { ok = fscanf(f, "%99s %15s", z, h) == 2; fclose(f); }
+    if ((f = fopen(p, "r"))) { ok = fscanf(f, "%99s %15s %7s %7s %7s", z, h, c[0], c[1], c[2]) >= 2; fclose(f); }
+    if (ok && !strcmp(h, "country")) snprintf(h, sizeof h, "wifi");    /* bfcbfac's word, never released */
     for (int i = 0; ok && i < (int)(sizeof zone_hows / sizeof *zone_hows); i++)
-        if (!strcmp(h, zone_hows[i])) { snprintf(zone, cap, "%s", z); *how = i; return 1; }
+        if (!strcmp(h, zone_hows[i])) {
+            snprintf(zone, cap, "%s", z); *how = i;
+            for (int k = 0; cc && k < 3; k++) cc_take(cc[k], c[k]);
+            return 1;
+        }
     return 0;
 }
 
 int clock_zone(char *out, size_t cap)
 {
     int how;
-    if (!zone_read(out, cap, &how) || (how != TZ_COUNTRY && how != TZ_KEPT)) { if (cap) out[0] = 0; return 0; }
+    if (!zone_read(out, cap, &how, NULL) || !zone_known(how)) { if (cap) out[0] = 0; return 0; }
+    return 1;
+}
+
+int clock_zone_info(char *zone, size_t cap, const char **how, char cc[3][3])
+{
+    int h;
+    if (!zone_read(zone, cap, &h, cc)) { if (cap) zone[0] = 0; cc[0][0] = cc[1][0] = cc[2][0] = 0; *how = ""; return 0; }
+    *how = zone_hows[h];
     return 1;
 }
 
 /* What came of Home Assistant's rule, kept in state/zone (only when it changed: /data is flash).  A zone kept from what
  * was set is hassmic's own guess still when that is what it set before (persist.sys.timezone survives where the Echo
- * keeps its properties) */
-static void zone_note(const char *zone, int how, const char *cc)
+ * keeps its properties); a zone known before stays known when the country is missing once (a link before Home
+ * Assistant's location came, an access point without the element) and the lookup calls it the guess's own */
+static void zone_note(const char *zone, int how, const char *cc, const char *home, const char *wifi, const char *why)
 {
-    char old[100] = "", p[300], line[128]; int was = -1, known_was, known;
-    zone_read(old, sizeof old, &was);
-    if (how == TZ_KEPT && was == TZ_GUESS && !strcmp(old, zone)) how = TZ_GUESS;
-    /* and the other way: a zone known before (the country's, say Europe/Amsterdam for NL) stays known when the country
-     * is missing once (a mesh node without the element, a read cut short) and the lookup calls it the guess's own */
-    if (how == TZ_GUESS && (was == TZ_COUNTRY || was == TZ_KEPT) && !strcmp(old, zone)) how = was;
-    if (was == how && !strcmp(old, zone)) return;
-    snprintf(p, sizeof p, "%s/zone", state_dir()); snprintf(line, sizeof line, "%s %s\n", zone, zone_hows[how]);
+    char old[100] = "", occ[3][3] = { "", "", "" }, p[300], line[160]; int was = -1;
+    zone_read(old, sizeof old, &was, occ);
+    int same = !strcmp(old, zone);
+    if (how == ZONE_KEPT && was == ZONE_GUESS && same) how = ZONE_GUESS;
+    if (how == ZONE_GUESS && zone_known(was) && same) { how = was; cc = occ[0]; }
+    if (how == ZONE_KEPT && zone_known(was) && same && occ[0][0]) cc = occ[0];  /* the country it was found by, for the page */
+    if (was == how && same && !strcmp(occ[0], cc) && !strcmp(occ[1], home) && !strcmp(occ[2], wifi)) return;
+    snprintf(p, sizeof p, "%s/zone", state_dir());
+    snprintf(line, sizeof line, "%s %s %s %s %s\n", zone, zone_hows[how], cc[0] ? cc : "-", home[0] ? home : "-", wifi[0] ? wifi : "-");
+    if (was == how && same && !strcmp(occ[0], cc)) {    /* only what the countries say changed: no line in the log */
+        if (statefile_write(p, 0644, line, strlen(line))) fprintf(stderr, "time zone: cannot write %s\n", p);
+        return;
+    }
     if (statefile_write(p, 0644, line, strlen(line))) { fprintf(stderr, "time zone: cannot write %s\n", p); return; }
-    known_was = was == TZ_COUNTRY || was == TZ_KEPT; known = how == TZ_COUNTRY || how == TZ_KEPT;
-    char why[64];
-    if (cc[0]) snprintf(why, sizeof why, "the Wi-Fi's country %s has no zone of that rule", cc);
-    else snprintf(why, sizeof why, "no country from the Wi-Fi");
-    if (how == TZ_COUNTRY) fprintf(stderr, "time zone: %s, of the Wi-Fi's country %s\n", zone, cc);
-    else if (how == TZ_KEPT) fprintf(stderr, "time zone: %s, the one set or known before (%s)\n", zone, why);
-    else if (how == TZ_GUESS) fprintf(stderr, "time zone: %s, a guess among those of that rule (%s): not taken for the language\n", zone, why);
-    if (known != known_was || (known && strcmp(old, zone))) screen_language_changed();
+    if (how == ZONE_HOME) fprintf(stderr, "time zone: %s, of the country of Home Assistant's home location, %s\n", zone, cc);
+    else if (how == ZONE_WIFI) fprintf(stderr, "time zone: %s, of the Wi-Fi's country %s (%s)\n", zone, cc, why);
+    else if (how == ZONE_KEPT) fprintf(stderr, "time zone: %s, the one set or known before (%s)\n", zone, why);
+    else if (how == ZONE_GUESS) fprintf(stderr, "time zone: %s, a guess among those of that rule (%s): not taken for the language\n", zone, why);
+    if (zone_known(how) != zone_known(was) || (zone_known(how) && !same)) screen_language_changed();
 }
 
-/* zone_thread: the rule worked through (the Wi-Fi's country, the lookup, the files) */
+/* Home Assistant's home location (zone.home's latitude and longitude, proto_esphome.c), under zone_lock.  Never
+ * written anywhere nor logged: only the country found from it goes into state/zone */
+static pthread_mutex_t zone_lock = PTHREAD_MUTEX_INITIALIZER;
+static double home_lat, home_lon;
+static int home_set, home_heard;                        /* home_heard: Home Assistant answered for zone.home in this run */
+static long long home_wait_until, home_settle_until;    /* monotonic ms: see zone_thread */
+static char zone_rule[128];                             /* the last rule Home Assistant gave, for a location after it */
+
+static long long mono_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+
+/* zone_thread: the rule worked through (the countries, the lookup, the files) */
 static void zone_from_ha(const char *posix)
 {
     static char told[100];
-    char cur[100] = "", zone[100] = "", p[300], line[104], cc[3] = "";
-    int how = ZONE_RULE;
+    char cur[100] = "", zone[100] = "", p[300], line[104], wifi[3] = "", home[3] = "", near[GEO_NEAR_MAX][3], why[96];
+    int how = ZONE_RULE, tzhow = TZ_GUESS, nnear = 0, have_home; double lat, lon;
     size_t n = strlen(posix);
     if (!n) return;                                     /* an older Home Assistant (aioesphomeapi) says none */
     /* a property value (92 bytes with its end), nothing root's shell would read as more than a word, and a rule, not a
@@ -157,12 +194,39 @@ static void zone_from_ha(const char *posix)
     /* no zone set (the Dot 2 starts every boot without persist.sys.timezone): the one known here before stands for it,
      * so a country missing once keeps it rather than a guess */
     char known[100] = "", *set = cur; int kh;
-    if (!cur[0] && zone_read(known, sizeof known, &kh) && (kh == TZ_COUNTRY || kh == TZ_KEPT)) set = known;
-    apcountry_get(cc);                                  /* ~1 ms: a netlink dump (Dot 2) */
-    int found = t ? tz_lookup(t, posix, set, cc, zone, sizeof zone, &how) : 0;
-    for (size_t i = 0; !t && !found && i < sizeof TZDATA / sizeof *TZDATA; i++) found = tz_lookup(TZDATA[i], posix, set, cc, zone, sizeof zone, &how);
+    if (!cur[0] && zone_read(known, sizeof known, &kh, NULL) && zone_known(kh)) set = known;
+    pthread_mutex_lock(&zone_lock); have_home = home_set; lat = home_lat; lon = home_lon; pthread_mutex_unlock(&zone_lock);
+    /* coordinates only in here: never into a file or the log */
+    if (have_home) geo_country(lat, lon, home, near, &nnear);
+    apcountry_get(wifi);                                /* ~1 ms: a netlink dump (Dot 2) */
+    /* the home's country; within GEO_BORDER_KM of another, the Wi-Fi's where it is that one (the borders are drawn to
+     * ~500 m, Home Assistant's location may be the town's); without a location, the Wi-Fi's.  The other one second,
+     * for a rule the first has no zone of */
+    const char *cand[2] = { NULL, NULL }; int src[2] = { ZONE_HOME, ZONE_WIFI };
+    int wifi_near = 0;
+    for (int i = 0; i < nnear; i++) if (!strcmp(near[i], wifi)) wifi_near = 1;
+    if (home[0] && wifi[0] && strcmp(home, wifi) && wifi_near) { cand[0] = wifi; src[0] = ZONE_WIFI; cand[1] = home; src[1] = ZONE_HOME; }
+    else if (home[0]) { cand[0] = home; cand[1] = wifi[0] && strcmp(home, wifi) ? wifi : NULL; }
+    else if (wifi[0]) { cand[0] = wifi; src[0] = ZONE_WIFI; }
+    int found = 0;
+    for (int c = 0; c < 3 && how == ZONE_RULE; c++) {   /* each candidate, then none */
+        const char *cc = c < 2 ? cand[c] : "";
+        if (c < 2 && !cc) continue;
+        int f = t ? tz_lookup(t, posix, set, cc, zone, sizeof zone, &tzhow) : 0;
+        for (size_t i = 0; !t && !f && i < sizeof TZDATA / sizeof *TZDATA; i++) f = tz_lookup(TZDATA[i], posix, set, cc, zone, sizeof zone, &tzhow);
+        if (!f) break;                                  /* no zone has the rule: no country changes that */
+        found = 1;
+        if (tzhow == TZ_COUNTRY && c < 2) how = src[c];
+        else if (c == 2) how = tzhow == TZ_KEPT ? ZONE_KEPT : ZONE_GUESS;
+    }
+    const char *cc = how == ZONE_HOME ? home : how == ZONE_WIFI ? wifi : "";
+    if (how == ZONE_WIFI && home[0] && wifi_near) snprintf(why, sizeof why, "the home is within %g km of %s, Home Assistant's home's country %s", GEO_BORDER_KM, wifi, home);
+    else if (how == ZONE_WIFI && home[0]) snprintf(why, sizeof why, "no zone of that rule in %s, Home Assistant's home's country", home);
+    else if (how == ZONE_WIFI) snprintf(why, sizeof why, "no home location from Home Assistant");
+    else if (home[0] || wifi[0]) snprintf(why, sizeof why, "no zone of that rule in %s%s%s", home[0] ? home : "", home[0] && wifi[0] && strcmp(home, wifi) ? " or " : "", wifi[0] && strcmp(home, wifi) ? wifi : "");
+    else snprintf(why, sizeof why, "no home location from Home Assistant, no country from the Wi-Fi");
     if (!found) { snprintf(zone, sizeof zone, "%s", posix); how = ZONE_RULE; }
-    zone_note(zone, how, cc);
+    zone_note(zone, how, cc, home, wifi, why);
     if (!strcmp(zone, cur)) return;
     snprintf(p, sizeof p, "%s/timezone", state_dir()); snprintf(line, sizeof line, "%s\n", zone);
     if (statefile_write(p, 0666, line, strlen(line))) { fprintf(stderr, "time zone: cannot write %s\n", p); return; }
@@ -172,19 +236,24 @@ static void zone_from_ha(const char *posix)
 }
 
 /* Home Assistant's answer comes in with core_lock held (proto_esphome.c), and the work is not for under it: the
- * netlink dump waits on the kernel's rtnl lock, which a driver may hold a while, and the lookup reads every one of the
- * ~600 zones' rules.  So a thread of its own takes the newest rule given (older ones still waiting are dropped: the
- * same rule, or one gone stale), one at a time, in order */
-static pthread_mutex_t zone_lock = PTHREAD_MUTEX_INITIALIZER;
+ * netlink dump waits on the kernel's rtnl lock, which a driver may hold a while, the lookup reads every one of the
+ * ~600 zones' rules, and the borders are inflated.  So a thread of its own takes the newest rule given (older ones
+ * still waiting are dropped: the same rule, or one gone stale), one at a time, in order */
 static char zone_pending[128];
 static int zone_busy;
 
 static void *zone_thread(void *arg)
 {
     char posix[128];
-    (void)arg;
+    int inline_ = arg != NULL;                          /* run by the caller (no thread): never wait under its lock */
     pthread_mutex_lock(&zone_lock);
     while (zone_pending[0]) {
+        /* at a link's start Home Assistant's time comes before its answer for zone.home: up to 2 s for that (else the
+         * zone is worked out without it, written, and again with it: two writes, and root setting the zone twice); a
+         * home that moved comes as latitude and longitude one after the other: 300 ms for both, before every run */
+        for (long long now = mono_ms(); !inline_ && ((!home_heard && now < home_wait_until) || now < home_settle_until); now = mono_ms()) {
+            pthread_mutex_unlock(&zone_lock); usleep(50000); pthread_mutex_lock(&zone_lock);
+        }
         snprintf(posix, sizeof posix, "%s", zone_pending); zone_pending[0] = 0;
         pthread_mutex_unlock(&zone_lock);
         zone_from_ha(posix);
@@ -195,19 +264,47 @@ static void *zone_thread(void *arg)
     return NULL;
 }
 
+static void zone_queue(const char *posix)               /* zone_lock held: posix (shorter than zone_pending) to the thread */
+{
+    pthread_t t; pthread_attr_t a;
+    snprintf(zone_pending, sizeof zone_pending, "%s", posix);
+    if (zone_busy) return;
+    zone_busy = 1;
+    pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &a, zone_thread, NULL)) {    /* no thread: here then, as before */
+        pthread_mutex_unlock(&zone_lock); zone_thread(&zone_busy); pthread_mutex_lock(&zone_lock);
+    }
+    pthread_attr_destroy(&a);
+}
+
 void clock_zone_from_ha(const char *posix)
 {
-    pthread_t t; pthread_attr_t a; int start;
     if (!posix[0]) return;                              /* an older Home Assistant (aioesphomeapi) says none */
     pthread_mutex_lock(&zone_lock);
-    snprintf(zone_pending, sizeof zone_pending, "%.*s", (int)sizeof zone_pending - 1, posix);
-    if (strlen(posix) >= sizeof zone_pending) snprintf(zone_pending, sizeof zone_pending, "?");   /* too long: refused there */
-    start = !zone_busy; zone_busy = 1;
+    snprintf(zone_rule, sizeof zone_rule, "%s", strlen(posix) < sizeof zone_rule ? posix : "?");   /* too long: refused there */
+    zone_queue(zone_rule);
     pthread_mutex_unlock(&zone_lock);
-    if (!start) return;
-    pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
-    if (pthread_create(&t, &a, zone_thread, NULL)) zone_thread(NULL);     /* no thread: here then, as before */
-    pthread_attr_destroy(&a);
+}
+
+void clock_home_expect(void)
+{
+    pthread_mutex_lock(&zone_lock);
+    if (!home_heard) home_wait_until = mono_ms() + 2000;
+    pthread_mutex_unlock(&zone_lock);
+}
+
+void clock_home(double lat, double lon)
+{
+    /* 0, 0 is Home Assistant's location when none was set (core_config: latitude = 0): no location */
+    int set = isfinite(lat) && isfinite(lon) && (lat != 0 || lon != 0) && fabs(lat) <= 90 && fabs(lon) <= 180;
+    pthread_mutex_lock(&zone_lock);
+    /* moved by more than ~100 m, or set or unset: the zone again, if Home Assistant gave its rule */
+    int changed = set != home_set || (set && (fabs(lat - home_lat) > 0.001 || fabs(lon - home_lon) > 0.001));
+    home_set = set; if (set) { home_lat = lat; home_lon = lon; }
+    if (changed && home_heard) home_settle_until = mono_ms() + 300;
+    home_heard = 1;
+    if (changed && zone_rule[0]) zone_queue(zone_rule);
+    pthread_mutex_unlock(&zone_lock);
 }
 
 /* ---------------------------------------------------------------- the log */

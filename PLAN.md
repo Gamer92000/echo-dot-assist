@@ -3645,13 +3645,18 @@ Run in this order. Each step says what it proves.
       America/Boa_Vista for Venezuela, Bolivia, Guyana; WET: Europe/Lisbon for the Canaries): a Dutch date in Germany.
       And `speech_locale` read `state/timezone`, which root's `tz_set` takes away within 10 s: on an Echo the zone
       reached the language only in that window (Dot 2, 2026-11-18: no `state/timezone`, `persist.sys.timezone`
-      Europe/Amsterdam, `persist.puffin.locale` de-DE).  Now: the Wi-Fi's country (`apcountry.c`, nl80211 GET_SCAN
-      dump as the daemon's user: the Dot 2's AP "DE" in 0.6 ms) picks the zone of that country in zone.tab, and
-      `state/zone` keeps how it was found; the language takes only a country's or a kept zone, never a guess (nor the
-      guess's own zone set by an older hassmic).  `tests/unit/tz_ref.py` (every zone.tab country and rule),
-      `apcountry_test.c` (ASan/UBSan), `fake_ha_esphome_timers.py` (HA's Berlin rule + DE: Europe/Berlin, country).
-      Open: the other models' drivers (gen4m donut, the Shows, cannoli) not tried for IEs in cfg80211's scan results;
-      without them there is no country and nothing changes.  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
+      Europe/Amsterdam, `persist.puffin.locale` de-DE).  Now: the country of Home Assistant's home location
+      (`zone.home` latitude/longitude, readable by any device; `geo.c` on Natural Earth's 1:10m borders cut to 363 kB by
+      `tools/geo/build.py`: land borders and enclaves ~500 m, remote coasts ~10 km; self-check against the full
+      borders: 1500/1500 random European points, of 1500 points 0.5-6 km from a land border 1481 right, 19 with the
+      right one named within 3 km, 0 wrong; ~10 ms on a Dot 2), within 3 km of a border or without a location the Wi-Fi's country
+      (`apcountry.c`, nl80211 GET_SCAN dump as the daemon's user: the Dot 2's AP "DE" in 0.6 ms), picks the zone of
+      that country in zone.tab, and `state/zone` keeps how it was found; the language takes only a country's or a kept
+      zone, never a guess (nor the guess's own zone set by an older hassmic).  `tests/unit/tz_ref.py` (every zone.tab
+      country and rule), `geo_ref.py` (geo.c = geo.py, 66 places), `apcountry_test.c` (ASan/UBSan),
+      `fake_ha_esphome_timers.py` (Cologne + Wi-Fi NL: Europe/Berlin; Herzogenrath: NL's; none: kept; the page).
+      Open: the other models' Wi-Fi drivers not tried for IEs in cfg80211's scan results (only matters near borders
+      or without a location).  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
       `ui_date`: day and month names per language (bionic's strftime is C locale only), English for none or one not
       known, Japanese left out (no kanji in Roboto).  `bt_langs` has ro.  `core_transcript` compares folded (`fold`:
       U+00C0..U+017F and ș ț without marks, lower case, no hyphens): "Închide" was never lower-cased, and the old

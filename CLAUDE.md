@@ -522,13 +522,19 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
   for all children). Host: `HASSMIC_CLOCK_SYNCED=0` plays an unset clock.
   Time zone: GetTimeResponse field 2 (a POSIX TZ string, aioesphomeapi's `timezone.py`; HA keeps the name) ->
-  `clock_zone_from_ha` (with `core_lock` held: hands the rule to a thread of its own, `zone_thread`) -> `tz.c` `tz_lookup`: a zone of bionic's one-file `tzdata` whose TZif footer is that rule (the
-  Wi-Fi's country's first in zone.tab, `apcountry.c`: the associated BSS's 802.11d Country element by an unprivileged
-  nl80211 GET_SCAN dump, `HASSMIC_FAKE_COUNTRY` a file for tests; else the zone set kept when it has it, else zone.tab's
-  names in area order: a guess; no zone set: the last known one stands for it), else the string itself.  How it was found stays in hassmic's own `state/zone`
-  (`<zone> country|kept|guess|rule`, `zone_note`; a kept zone that is hassmic's earlier guess stays a guess), which
-  `clock_zone` gives `speech_locale` only when known (country, kept): the language never from a guess (CET:
-  Europe/Amsterdam) nor from `state/timezone`, which root takes away at once.  The zone -> `state/timezone` ->
+  `clock_zone_from_ha` (with `core_lock` held: hands the rule to a thread of its own, `zone_thread`) -> `tz.c` `tz_lookup`: a zone of bionic's one-file `tzdata` whose TZif footer is that rule (a
+  country's first by area, then zone.tab order: the country of Home Assistant's home, `zone.home`'s latitude/longitude
+  subscribed on keyed links (`proto_esphome.c` `home_subscribe`, no permission needed; `clock_home`; 0,0 = never set)
+  through `geo.c` (`geo/borders.bin`, Natural Earth's borders cut down by `tools/geo/build.py`, built in, ~10 ms on a
+  Dot 2; within 3 km of a border the other country is named), or the Wi-Fi's country where it is that neighbour or
+  there is no location (`apcountry.c`: the associated BSS's 802.11d Country element by an unprivileged nl80211
+  GET_SCAN dump, `HASSMIC_FAKE_COUNTRY` a file for tests); else the zone set kept when it has it, else zone.tab's
+  names in area order: a guess; no zone set: the last known one stands for it), else the string itself.  How it was
+  found stays in hassmic's own `state/zone` (`<zone> home|wifi|kept|guess|rule <its country> <the home's> <the Wi-Fi's>`, `-` none, `zone_note`; a kept zone
+  that is hassmic's earlier guess stays a guess, a known one stays known when the country is missing once), which
+  `clock_zone` gives `speech_locale` only when known (home, wifi, kept): the language never from a guess (CET:
+  Europe/Amsterdam) nor from `state/timezone`, which root takes away at once; `/api/state` `zone` and the page's
+  "Language you speak" row say what Automatic stands on.  Coordinates never stored or logged.  The zone -> `state/timezone` ->
   `main.sh` `tz_set` (a name or a rule, never a path): `persist.sys.timezone`, plus `service call alarm 3` for
   names where the framework runs.  `HASSMIC_TZDATA`, `HASSMIC_TIMEZONE` (the zone set) for tests;
   `tests/unit/tz_ref.py` builds a tzdata from Python's.

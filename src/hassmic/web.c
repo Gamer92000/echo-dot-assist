@@ -44,6 +44,7 @@
  */
 #include "web.h"
 #include "core.h"
+#include "clock.h"
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
@@ -589,6 +590,11 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     n = isnan(cpu) ? app(o, n, cap, "null") : app(o, n, cap, "%.0f", cpu);
     { static const char *const models[] = { "none", "firmware", "newer" };
       n = app(o, n, cap, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
+    /* what "Language you speak" on Automatic stands on: the zone, how it was found (clock.c), the language it gives */
+    { char z[100], zj[200], cc[3][3], l[16]; const char *how; clock_zone_info(z, sizeof z, &how, cc); core_speech_language(l, sizeof l);
+      jesc(zj, sizeof zj, z);            /* the countries: two capitals each or "" (clock.c cc_take) */
+      n = app(o, n, cap, "},\"zone\":{\"zone\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"home\":\"%s\",\"wifi\":\"%s\",\"language\":\"%s\"",
+              zj, how, cc[0], cc[1], cc[2], l); }
     /* the timer sounds this Echo has (the stock ones where its firmware keeps them), and the length of its own */
     { static const enum sound snd[] = { SND_TIMER, SND_ALARM, SND_CUSTOM }; static const char *const nm[] = { "timer", "alarm", "custom" };
       n = app(o, n, cap, "},\"timer_sound\":{\"custom_ms\":%u,\"present\":[\"beep\"", sound_own_ms(SND_CUSTOM));

@@ -53,7 +53,7 @@ async def request(e, ha, want):
     return (e.log()[mark:], secs) if ok else (e.log()[mark:], None)
 
 
-def zone(e, z): open(os.path.join(e.state, "zone"), "w").write(z + " country\n")    # as clock.c keeps it: by the Wi-Fi's country
+def zone(e, z): open(os.path.join(e.state, "zone"), "w").write(z + " home - - -\n")  # as clock.c keeps it: by the home's country
 
 
 async def main(e):

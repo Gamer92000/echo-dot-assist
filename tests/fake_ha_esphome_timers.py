@@ -17,6 +17,7 @@ PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 17101, 17102, 17103, 17104, 17105
 
 async def main(e):
     proc, state, env, play, mdns, page, conf = e.proc, e.state, e.env, e.play, e.mdns, e.page, e.conf
+    echo_log = e.log                    # (an "except ... as e" below unbinds e)
     ha = await home_assistant(e)
     va = ha.va; started, stopped, mic = va.started, va.stopped, va.mic
     handle_start, handle_stop, handle_audio, handle_finished = va.handle_start, va.handle_stop, va.handle_audio, va.handle_finished
@@ -239,7 +240,7 @@ async def main(e):
         except err: ok = True
         check(ok, f"with a key: {what} connection refused ({err.__name__})")
 
-    open(os.path.join(state, "country"), "w").write("DE\n")           # the Wi-Fi's (apcountry.c's HASSMIC_FAKE_COUNTRY)
+    open(os.path.join(state, "country"), "w").write("NL\n")           # the Wi-Fi's (apcountry.c's HASSMIC_FAKE_COUNTRY)
     enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode(), timezone="Europe/Berlin")
     await asyncio.wait_for(enc.connect(login=True), 5)
     info = await enc.device_info()
@@ -253,8 +254,14 @@ async def main(e):
     # the time: asked of Home Assistant over the keyed link only (aioesphomeapi answers it), handed to root
     clock = os.path.join(state, "clock")
     check(not os.path.exists(clock), "no time taken from the plaintext connection before the key")
+    # Home Assistant's home location, as HA answers a device's subscription to zone.home's attributes: Cologne; one packet with the states' subscription,
+    # as Home Assistant's manager sends it (the time is asked on that, zone.home's answer comes after it)
+    home = {"latitude": "50.9375", "longitude": "6.9603"}; subs = []
+    def on_sub(entity, attribute):
+        subs.append((entity, attribute))
+        if entity == "zone.home" and attribute in home: enc.send_home_assistant_state(entity, attribute, home[attribute])
     est = []
-    enc.subscribe_states(est.append)
+    enc.subscribe_home_assistant_states_and_services(on_state=est.append, on_service_call=lambda c: None, on_state_sub=on_sub, on_state_request=lambda e, a: None)
     for _ in range(30):
         if os.path.exists(clock): break
         await asyncio.sleep(0.1)
@@ -267,22 +274,39 @@ async def main(e):
     boot = time.clock_gettime(time.CLOCK_BOOTTIME)
     check(abs(t - time.time()) <= 2 and re.fullmatch(r"\d+\.\d\d", at) and 0 <= boot - float(at) < 5,
           f"keyed link: Home Assistant's time in state/clock for root, with the boot clock as /proc/uptime words it: {t} {at}")
-    # and its zone, sent as its rule: the zone of that rule in the Wi-Fi's country (DE, written before the link) of a
-    # bionic tzdata built from Python's, for root; and kept as known, for the language (tz_ref.py checks the names)
+    # and its zone, sent as its rule: the zone of that rule in the country of Home Assistant's home (Cologne: DE; the
+    # Wi-Fi's NL is 50 km away, not near: the location wins) of a bionic tzdata built from Python's, for root, and in
+    # state/zone as known, for the language; the page says it (tz_ref.py and geo_ref.py check the names and places)
+    await until(lambda: len(subs) >= 2, 3)
+    check(sorted(a for e_, a in subs if e_ == "zone.home") == ["latitude", "longitude"], f"keyed link: zone.home's latitude and longitude subscribed: {subs}")
     def read(f):
         try: return open(os.path.join(state, f)).read()
         except OSError: return ""
-    await until(lambda: read("zone") and read("timezone"), 3)          # clock.c's zone thread writes both
-    check(read("timezone") == "Europe/Berlin\n" and read("zone") == "Europe/Berlin country\n",
-          f"keyed link: Home Assistant's rule as the zone of the Wi-Fi's country, in state/timezone for root and state/zone: {read('timezone')!r} {read('zone')!r}")
-    # the next link with no country from the Wi-Fi (an AP without the element, a read cut short) and no zone set: the
-    # zone known before stands, kept, never the guess (Europe/Amsterdam for that rule)
+    await until(lambda: read("zone") == "Europe/Berlin home DE DE NL\n" and read("timezone"), 3)     # clock.c's zone thread writes both
+    check(read("timezone") == "Europe/Berlin\n" and read("zone") == "Europe/Berlin home DE DE NL\n",
+          f"keyed link: Home Assistant's rule as the zone of its home's country, in state/timezone for root and state/zone: {read('timezone')!r} {read('zone')!r}")
+    z = page.state()["zone"]
+    check(z == {"zone": "Europe/Berlin", "how": "home", "country": "DE", "home": "DE", "wifi": "NL", "language": "de"}, f"the page: what Automatic stands on: {z}")
+    check("of the country of Home Assistant's home location, DE" in echo_log() and not any(c in echo_log() for c in ("50.93", "6.96")),
+          "the log names the country, never the home's coordinates")
+    # the first zone written was already the home's (the zone waited for zone.home's answer after the time's): one line
+    check(echo_log().count("time zone: Europe/") == 1 and "Amsterdam" not in echo_log(), f"one zone worked out at the start, not first without the home: {re.findall(r'time zone: Europe/.*', echo_log())}")
+    # moved to Herzogenrath, on the Dutch border: the Wi-Fi's NL is near, and decides
+    def move(lat, lon):
+        home.update(latitude=lat, longitude=lon)
+        for a in ("latitude", "longitude"): enc.send_home_assistant_state("zone.home", a, home[a])
+    move("50.8706", "6.0947")
+    await until(lambda: read("zone") == "Europe/Amsterdam wifi NL DE NL\n", 3)
+    check(read("zone") == "Europe/Amsterdam wifi NL DE NL\n", f"on a border, the Wi-Fi's country there decides: {read('zone')!r}")
+    # no location (0, 0: Home Assistant's when none was set) and no country: the zone known before stays known, though
+    # it is the one a guess gives for that rule
     open(os.path.join(state, "country"), "w").write("")
-    again = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode(), timezone="Europe/Berlin")
-    await asyncio.wait_for(again.connect(login=True), 5); again.subscribe_states(lambda s: None)
-    await until(lambda: read("zone") != "Europe/Berlin country\n", 3)
-    check(read("zone") == "Europe/Berlin kept\n", f"no country on the next link: the zone known before kept: {read('zone')!r}")
-    await again.disconnect()
+    move("0.0", "0.0"); await asyncio.sleep(1)
+    check(read("zone").startswith("Europe/Amsterdam wifi NL "), f"no location, no country: the zone known before stays: {read('zone')!r}")
+    # the location back, no Wi-Fi country: the home's
+    move("50.9375", "6.9603")
+    await until(lambda: read("zone") == "Europe/Berlin home DE DE -\n", 3)
+    check(read("zone") == "Europe/Berlin home DE DE -\n", f"the location back: its country's zone: {read('zone')!r}")
     started.clear(); mic.clear()
     enc.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio, handle_announcement_finished=handle_finished)
     await sync(enc); proc.send_signal(signal.SIGUSR1)
@@ -371,5 +395,5 @@ async def main(e):
     check(all(k in ps for k in ("screen_brightness_auto", "screen_brightness", "screen_brightness_adjust")), "on the settings page")
 
 TZDATA = tempfile.mktemp(suffix=".tzdata"); build_tzdata(TZDATA)          # bionic's, from Python's tzdata
-try: run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1", "HASSMIC_TZDATA": TZDATA})
+try: run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1", "HASSMIC_TZDATA": TZDATA}, log=True)
 finally: os.unlink(TZDATA)

@@ -178,6 +178,8 @@ static int stt_run;                     /* lock held: the run asked for starts a
 static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
 static int announcing, media_playing;   /* lock held */
 static void announce_done(void);
+static void home_subscribe(int c);                   /* zone.home: Home Assistant's home location (below) */
+static void home_state(const char *attr, const char *v);
 static atomic_int media_busy;
 static struct media_job *media_cur;    /* lock held: the job holding media_busy, for cancel() */
 
@@ -1836,7 +1838,11 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         else if (cmd == UPDATE_CMD_INSTALL) fprintf(stderr, "update: install refused, the request did not come over the keyed connection\n");
     } break;
     case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
-    case SUBSCRIBE_HA_STATES: if (c >= 0) clients[c].ha_states = 1; break;
+    case SUBSCRIBE_HA_STATES:
+        if (c < 0) break;
+        clients[c].ha_states = 1;
+        if (clients[c].keyed) home_subscribe(c);
+        break;
     case HA_STATE: {
         /* a state we asked for (arb_request): only from Home Assistant itself, the client holding the device key */
         char ent[128] = "", st[300] = "", attr[64] = "";
@@ -1845,7 +1851,9 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (f.field == 2) pbf_str(&f, st, sizeof st);
             else if (f.field == 3) pbf_str(&f, attr, sizeof attr);
         }
-        if (attr[0] || !arb_running() || c < 0 || !clients[c].keyed) break;
+        if (c < 0 || !clients[c].keyed) break;
+        if (!strcmp(ent, "zone.home") && attr[0]) { home_state(attr, st); break; }
+        if (attr[0] || !arb_running()) break;
         arb_ha_state(ent, st);
     } break;
     case EXECUTE_SERVICE: {
@@ -2086,6 +2094,28 @@ static int arb_scan(const char *tag_id)
     pb_str(&b, 1, "esphome.tag_scanned"); pb_map(&b, 2, "tag_id", tag_id); pb_uint(&b, 5, 1);
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions && clients[i].keyed) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
     return n ? 0 : -1;
+}
+
+/* Home Assistant's home location, for the time zone's name (clock.c clock_home, geo.c): zone.home's latitude and
+ * longitude, subscribed on each keyed link (no permission needed, as arb_request's), every change sent.  Lock held */
+static double home_at[2] = { NAN, NAN };
+static void home_subscribe(int c)
+{
+    static const char *const attrs[2] = { "latitude", "longitude" };
+    home_at[0] = home_at[1] = NAN;
+    clock_home_expect();
+    for (int i = 0; i < 2; i++) {
+        PB(b, 96); pb_str(&b, 1, "zone.home"); pb_str(&b, 2, attrs[i]);
+        send_to(clients[c].fd, HA_STATE_SUB, &b);
+    }
+}
+static void home_state(const char *attr, const char *v)
+{
+    char *e; double d = strtod(v, &e);
+    int i = !strcmp(attr, "latitude") ? 0 : !strcmp(attr, "longitude") ? 1 : -1;
+    if (i < 0) return;
+    home_at[i] = e != v && !*e ? d : NAN;               /* HA sends str(float); anything else: none */
+    if (!isnan(home_at[0]) && !isnan(home_at[1])) clock_home(home_at[0], home_at[1]);
 }
 
 /* lock held: ask Home Assistant once for an entity's state (needs no permission: HA answers any device) */

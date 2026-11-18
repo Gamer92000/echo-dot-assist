@@ -2,6 +2,8 @@
 firmware/
 re/
 *.bin
+# ... except ours: the countries' borders (geo/README.md, Natural Earth's, public domain)
+!geo/borders.bin
 device-logs/
 # local tooling and build output
 toolchain/
