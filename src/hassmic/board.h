@@ -10,15 +10,14 @@ struct board {
     int kiosk;                      /* device.conf has KIOSK_PACKAGE: the Kiosk Satellite settings exist */
     int backlight;                  /* a screen whose backlight Android's settings set (screen_brightness*): the Echo Shows;
                                        root's main.sh backlight applies the screen brightness settings */
+    int adaptive_colour;            /* Fire OS's "Adaptive Color" (binder service ambientdisplayinfo, the picture quality HAL):
+                                       athena; root's main.sh backlight applies the setting (device.conf ADAPTIVE_COLOUR) */
     /* identity towards Home Assistant and Music Assistant */
     const char *model;              /* ESPHome device info "model", Wyoming description */
     const char *project;            /* ESPHome "project_name" */
     const char *product;            /* Sendspin "product_name" */
     const char *default_name;       /* the model as people call it ("Echo Dot 3"); the name adds the MAC's end (main.c) */
     const char *codename;           /* devices/<codename>: names this model's bundle in a release (online updates) */
-
-    /* Optional platform capabilities; zero keeps the existing Echo behavior. */
-    int fire_tv;                   /* stock Fire TV manages networking; status indicators are bars */
 
     /* inputs */
     const char *keypad;             /* input device with action and volume keys (-b overrides) */
@@ -49,12 +48,17 @@ struct board {
     const struct board_sound { const char *name, *zip, *entry; } *earcon_zip;
     const char *thermal_type;       /* thermal zone reported as SoC temperature */
     const char *light_sensor[3];    /* files the stock light sensor HAL reads lux from, first that opens; {NULL}: none.  "tcs3400:<dir>": raw channels of
-                                       a TCS3400 under <dir>/input*, main.c lux_tcs3400 */
+                                       a TCS3400 under <dir>/input*, main.c lux_tcs3400.  "tsl2540:<i2c dir>": a TSL2540's
+                                       iio:device* there, calibrated from idme, main.c lux_tsl2540 */
     int volume_steps;               /* volume_step-NN animations of ledcontroller */
     /* LEDs the light really shows, where that is fewer than stock's animations draw (12): 1 = one RGB LED that shows the
      * first of each frame (the Echo Input's LP5562): nothing turned towards the talker, no LED's own layer (ring.c).
      * 0: a ring of them all */
     int ring_leds;
+    /* The LED driver's frame file, where hassmic may write the ring itself (ringlive.c: the light ring live; root's main.sh
+     * gives the daemon that one file, device.conf LED_FRAME).  Only on models measured (scripts/led-probe.sh): its text
+     * 12 x RRGGBB, ledcontroller writing it only on a change.  NULL: no live ring */
+    const char *ring_frame;
     /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
      * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c: separate volumes turn each kind down
      * by it, even volume steps put the mixer on its points).  Required, never NULL: every model has its own, measured on
@@ -66,6 +70,11 @@ struct board {
      * yet, 350 ms, what the Echo Show 8 needed for its 120 ms wake blip (2026-10-14); -1: measured, nothing lost, and
      * the HAL's cold open short enough for earsup.c without it (open + 85 ms under D_MAX, 400 ms; logcat) */
     int cold_lead_ms;
+    /* audio_mixer.c: the mixer's micHfp carries the front end's call path ("Voice" in AFE.cfg: echo canceller, residual
+     * echo suppressor, noise reduction, AGC) while a Voip stream is open, measured on this model; a call then sends it
+     * (call.c, setting call_mic).  0: not measured, the assistant's micAsr as before.  Measured: donut (a talker,
+     * 2026-11-13), biscuit (a talker and the echo, 2026-11-17); PLAN.md "Calls with Amazon's call microphone" */
+    int call_mic;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's

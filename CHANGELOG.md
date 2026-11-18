@@ -2,8 +2,335 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-18 — The language you speak, from the right time zone
+
+- **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to
+  "Language you speak", an Echo in a Brazilian time zone on Automatic took Portuguese, which the Echo has no sounds
+  for, and Amazon's Brazilian "Alexa" none either: it went by the level only. Languages without sounds now count as
+  not said, whether picked on the page or from the time zone, so the Echo does as before they were listed: in Brazil
+  English sounds. The date on the Echo Show's screen stays in the zone's language. An Echo Show in Mexico, Central
+  America or Saskatchewan no longer writes its date in Portuguese. Thanks to giggio (issue #176).
+- **"Language you speak" on Automatic now follows the country you are in.** Home Assistant tells the Echo only its
+  zone's offset and summer time, which Germany shares with France, the Netherlands and others; the Echo picked the
+  first such zone (Europe/Amsterdam for all of them), and on an Echo the time zone did not reach the language at all.
+  The Echo now reads Home Assistant's home location (its Home zone) and looks up the country it is in,
+  with the borders built into the Echo (from Natural Earth): German sounds for the wake word in Germany, the Echo
+  Show's date in German. Only the country is kept, never the coordinates. Within about 3 km of a border, or where Home
+  Assistant has no location, the country your Wi-Fi router says decides (most routers send it). With neither, a zone
+  set on the Echo before counts, a mere guess never does: then the wake word's own language and an English date, as
+  with no zone at all. The settings page shows under "Language you speak" what Automatic found and from what.
+
+## 2026-11-17 — Drop In sounds as Alexa's did
+
+- **Drop In sounds as Alexa's did: the microphone of Amazon's own calls (Echo Dot 3 and Echo Dot 2).** A call sent the
+  stream made for speech to text, turned up by the Echo: dull, with much of the room in it. It now sends what Amazon's
+  front end makes for calls: its own noise reduction, an even level and its echo canceller for calls (measured on a
+  Dot 3: the voice 23 dB over the room, against 17 dB before and 13 dB for the bare microphone; on a Dot 2 the Echo's
+  own sound 15 dB further down than in the bare microphone). It is a little duller (little over 4 kHz) and much
+  steadier. New setting "Call microphone" (Features, under Drop In): Amazon's call processing (default) or the
+  assistant's stream as before. Should the call microphone stop delivering during a call, the assistant's takes over
+  within a quarter of a second, and for the rest of the call if it does not come back. The Echo 2 and the Echo Dot 5
+  have the same call processing but keep the assistant's stream until it has been tried on them; the Echo Shows and
+  the Echo Input keep it too: their audio has no call stream. Thanks to arpena.
+
+## 2026-11-17 — Fire smooth again on an Echo running for weeks
+
+- **Light ring live: the "Fire" effect no longer stutters on an Echo that has been running for a week or more (Echo
+  Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5).** Fire's flicker was worked out from the time since the Echo started in a
+  number too coarse for it: after about a week it moved in steps, and after about 25 days only four times a second. It
+  is smooth again however long the Echo has been up; the other effects were not affected. Thanks to malammar (issue
+  #192).
+
+## 2026-11-17 — Fewer lookups of Amazon's hosts on the Echo Shows and the Echo Input
+
+- **Android's own captive portal test switched off: it looked Amazon's hosts up every few minutes (tried on an Echo
+  Show 5, 1st generation; the same change, not tried yet, on the Echo Show 5 2nd generation, both Echo Show 8 and the
+  Echo Input).** Android on these Echos keeps testing whether the Wi-Fi reaches the internet by fetching a page from
+  Amazon's captive portal hosts (mmechocaptiveportal.com and fireoscaptiveportal.com on the Shows). The firewall has
+  always stopped the fetch itself, but every attempt still looked the names up first, so the queries left the Echo
+  again and again (seen by an owner monitoring the network). Android's test is now switched off (its setting "captive
+  portal mode"; Amazon's value is put back when the Echo goes back to Alexa). On the Echo Show 8 2nd generation Fire
+  OS may set Amazon's value again at every start, which would undo it there; not known yet. It is set when the
+  satellite starts after the update (or at its next start, should Android not answer then) and takes effect the next
+  time the Echo joins the Wi-Fi: from the Echo's next restart on (a restart of the satellite alone does not join the
+  Wi-Fi again). Android then counts the Wi-Fi as working without testing it. Amazon's own network test may still look
+  the names up once in the first minute after a restart, before the satellite stops it. On the Echo Show 5, after a
+  restart: no lookup of those names in 40 minutes, where Android had made one every few minutes. Thanks to
+  Edowndotdown (issue #189).
+
+## 2026-11-17 — Wi-Fi motion after Wi-Fi off and on
+
+- **Wi-Fi motion: the Wi-Fi driver is hooked again after Wi-Fi went off and on.** On the Echo Dot 3, Echo Dot 5, Echo
+  Input, Echo Show 5 (both generations) and Echo Show 8 (both generations) the sensor reads the Wi-Fi driver through a
+  kernel module of ours. On an Echo Show 5, Android was seen reloading that driver when Wi-Fi was switched off and on
+  (Amazon's watchdog did that every few minutes until the change listed under 2026-11-11): the module's hook went with
+  the old driver, no frame was counted any more (37 hours on that Echo), and the sensor never changed again. The module
+  now hooks the driver again each time it comes back, and should no frame reach it for a minute, the sensor shows
+  unknown and the log says why instead of staying silent. Takes effect after a restart of the Echo (the old module
+  cannot be unloaded). Only the log and the sensor's side were tried, on the PC; the module hooking a reloaded driver
+  has not run on an Echo yet. Thanks to borky.
+
+## 2026-11-16 — The light ring live
+
+- **The light ring live from Home Assistant (Echo Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5).** New setting "Live from Home Assistant" (settings page,
+  Lights, off by default): the Echo draws its ring itself. "Light ring" then shows exactly the colour you pick, fades
+  between colours and has twelve more effects: Breathe, Color loop, Comet, Wave, Sparkle, Fire, and six that move with
+  the music the Echo plays (Music beat, spectrum, VU meter, orbit, drums, aurora): the Echo hears the beat, the kick,
+  snare and hi-hat, left and right itself, and the ring keeps time with what you hear.
+  Twelve new lights, one per
+  LED, lie over it; actions play a whole picture or an animation of your own frames, which the Echo runs smoothly by
+  itself; and your designs play at once, without Apply, from the new select "Light ring design" in Home Assistant or
+  "Show on the Echo" on the Lights page (the designer shows a draft that way too). The Echo's own lights (listening,
+  replies, timers, mute) always come first, and the ring never gets brighter than Amazon's own lights at the
+  brightness it runs at.
+
+- **Echo Dot 5: Home Assistant's light comes back after Amazon's ring program restarts.** It stayed dark until the
+  light was changed again.
+
+## 2026-11-15 — Cannoli: Wi-Fi motion
+
+- **Wi-Fi motion (experimental) on the Echo Dot 5**, as on the other Echos: switch it on on the settings page, and
+  Home Assistant gets a motion sensor from how strongly the Echo hears your router.
+- **The Echo Dot 5's first boot step comes with updates**, not only with a reflashed firmware (and its USB cable),
+  once the Echo has firmware built from this version.  If the updated step fails, hangs or does not set up the system
+  folder, the Echo does the one it was flashed with as well and starts as usual.
+- **An Echo Dot 5 that an update cut off from the network steps back to an earlier version**: when nobody on the
+  network (Home Assistant, the settings page, Music Assistant) reaches it on two boots in a row, the next start runs
+  an earlier version that worked (in the end the one it was flashed with), and the version taken out is not
+  installed again.  Pull the plug a few times instead of opening the Echo.  Boots without a network or before set-up
+  do not count once a version has been reached (three in a row at most); Home Assistant down for two restarts in a
+  row does, and so do two power cuts in a row before a new version was ever reached.
+
+## 2026-11-15 — Cannoli: the light ring in Home Assistant
+
+- **Echo Dot 5: "Light ring" in Home Assistant**, with its effects, the fill and LED by LED, and the listening ring
+  turned towards whoever speaks, as on the other Dots. Its ring holds only a few hundred animations, so the light's
+  colours are not made beforehand: the Echo draws each one when it changes into an animation the ring already has.
+
+## 2026-11-15 — Cannoli: light sensor, speaker gain, the mute button at once
+
+- **Amazon's PowerDaemon is stopped with the other cloud daemons on Cannoli.** Its night mode needs the Alexa client,
+  which the satellite replaces; without it the daemon crashed and was restarted every 25 seconds, for good.
+- **The microphone button reaches Home Assistant at once on Cannoli**, not up to a second later: the satellite looked
+  for the button's input device under a name it does not have.
+- **The settings page's diagnostics show Cannoli's chip temperature**: they looked for a sensor this model does not
+  have.
+- **Cannoli's light sensor works**: Illuminance in Home Assistant (with the Light sensor feature on), in lux as
+  Amazon's own software computes it, with each unit's factory calibration.
+- **Speaker gain on Cannoli**: up to +6 dB over stock on the settings page, for an Echo Dot 5 too quiet at full volume.
+- **Cannoli keeps its Wi-Fi awake** instead of in power save: answers on the network came up to 115 ms late in power
+  save, 14 ms at most awake, and messages to every Echo at once (wake word arbitration) wait longest of all.
+
+## 2026-11-15 — Setup from a phone gets an address
+
+- **Wi-Fi from the phone's setup (Improv) works on an Echo that has had no network since it booted.** The Echo
+  joined the network but never got an address, and the setup failed after 30 s with "no address". Its DHCP client
+  either had never been started (the switch took that for a model without one) or had started with no network and,
+  asked to try again, kept waiting for a link it never looked at again. It is now restarted for every switch, as at
+  boot. Seen on Cannoli after a reset; the settings page's network switch had the same weakness.
+- **After a failed try, the phone's next one starts clean.** The Echo kept the failure on show for the next
+  connection, and Home Assistant's app, which can read it as it connects, said "unable to connect" before
+  sending anything.
+
+## 2026-11-15 — Cannoli's light ring
+
+- **The stock ring animations are back on Cannoli, and the boot swirl ends.** The swirl is the kernel's `boot-anim`
+  LED trigger, which stock's LED HAL takes off — the HAL answers only when the SCP co-processor runs, and the
+  2022 launch BL2 of a factory-fresh unit never brings the 8349 SCP up. Flashing 8349's `brhgptlk` (raw MTD,
+  from TWRP, all four copies readback-verified) starts the SCP and the HAL with it; the launch BL2 is kept for
+  rollback. Until then, and on units that keep the launch BL2, the satellite's start takes the trigger off and
+  the ring stays dark instead of lying about booting. `ledctrl` calls in `alexa-off.sh` are bounded now: with
+  ledcontroller not up they waited on its socket for good, and with them the satellite's start — hassmic never
+  came up on a boot where ledcontroller had failed.
+
+## 2026-11-13 — local Cannoli port
+
+- Add an experimental Echo Dot 5 target for NS6575/8349, using its mixer and Pryon.
+  Rooted stock A boots with TWRP B retained; Wi-Fi, encrypted Home Assistant
+  adoption, Music Assistant pairing and enforcing microphone capture are verified.
+  The matching UBI firmware builder lives in a repository of its own,
+  cannoli-os-builder (devices/cannoli/README.md).
+- Reject the ext4 system installer for Cannoli and retain its compiled stock LED
+  animations while the ACS custom-animation format is being investigated.
+- Keep Cannoli's immutable init configuration during signed-update promotion;
+  refuse incompatible boot changes and include its overlay preparation script.
+- Start Cannoli from storage/mixer readiness instead of the Alexa flag that
+  lockdown clears. Honor stock-online mode during early boot and preserve DHCP.
+
+## 2026-11-13
+
+- **Whisper detection works again with several Echos.** Since the Echo waits for the other Echos before it answers a
+  wake word (October), the whisper detector began listening up to 1.7 seconds after the wake word and missed most of
+  the request: on an Echo Dot 3 among five Echos, one whispered request in seven was taken for whispered. It now hears
+  what Home Assistant hears, from the wake word's end on, and counts above 500 of 1000 as whispered (Amazon's own
+  cut-off; the model names 922): the same seven recordings all came out whispered, eight spoken ones not. "Last
+  request whispered" also goes unknown when a request starts, so a request that is not scored (the wake word alone)
+  no longer shows the one before's answer, and the answer no longer comes late, after the reply, now and then.
+- **Duplex for a realtime agent (`-D`, Wyoming).** With `-D` in `ARGS` the microphone keeps streaming while a reply
+  plays, and a wake word during the reply is left to the client: for a client that cuts replies itself, such as
+  hermes-talk's Echo surface (`hermes talk echo`), which talks with a realtime voice model straight from the Echo.
+  Amazon's echo canceller keeps the reply out of the microphone, and the microphone gain holds while the reply plays
+  so it does not turn the canceller's leftover up into something the client hears as speech. The action button still
+  cuts a reply. `-D` is ignored with the ESPHome connection. Without `-D` nothing changes. Thanks to patrickhaahr.
+
+- **Bluetooth proxy: each request to a connected device took about 25 ms instead of 100 in a test on an Echo Dot 2
+  (issue #167).** Devices that Home Assistant drives through the Echo, such as IKEA's Idasen desk, ask for something
+  and wait for the answer several times a second. Once a device is connected, the Echo now asks for the short link
+  ESPHome's proxy asks for (a device that asks for a link of its own gets that one). Measured on an Echo Dot 2 with a
+  PC standing in for the device, running a loop like the desk's (write, wait 100 ms, read): 300 ms a round before, 150
+  ms now; in a short, rough test Wi-Fi was no slower. While Home Assistant talks to a connected device the Echo also
+  stops looking for other Bluetooth devices, until a second after the last request (about 30 seconds at a time, then 3
+  seconds of looking); in three runs that took a little more off the loop. Not tried with a desk yet. Thanks to
+  lebheisenberg for the report.
+
+## 2026-11-12
+
+- **Echo Shows: a clock where the screen used to go dark.** On the settings page's **Screen** page, the new **When
+  idle** card has **Clock when idle**: when the screen would turn off (5 minutes after the last thing happened, 1 minute
+  with the mic off or in Do not disturb), it shows the time across the whole screen with the date under it instead.
+  Until then the face shows as always. A touch on the clock, a request, a timer, the volume or music starting bring
+  the face back, and the wait starts again. **Screen sleeps after** sets that wait in minutes (0: never, the face
+  stays). With an app or the music page in front the screen goes dark as before. Off and 5 minutes by default.
+
+- **A tighter wall between hassmic and root (issue #130).** If something ever took hassmic over, it could have had
+  root overwrite one of root's own files, set system properties (open adb, start any service) or connect to an open
+  adb itself, and from there run as root. Root now treats everything hassmic leaves for it as hostile, the firewall
+  lets nothing on the Echo but root reach adb, and hassmic runs in an SELinux domain of its own that may set no system
+  property. That domain comes with `scripts/install-system.sh` run once more; an update alone keeps the old way.
+  Opening adb over Wi-Fi through the ESPHome connection is refused too: only the settings page opens it, with the
+  action button. Thanks to kevinsaucier for the report.
+
+## 2026-11-11
+
+- **Music Assistant pairs with the Echo by itself.** With Home Assistant 2026.11 and Music Assistant 2.10.9 or later
+  there is no token to copy any more: once the Echo is adopted in Home Assistant, Music Assistant pairs with it within
+  a minute and it is ready to play. The Echo tells Home Assistant its Sendspin id, and hands Home Assistant its pairing
+  token when asked, over the encrypted connection only (as ESPHome devices do). The "Sendspin pairing token" entity
+  stays, for older versions, and now shows the token only over that encrypted connection too: before Home Assistant
+  has set the Echo's key it has no state (it used to go to any client on the network then). For this the Echo speaks
+  version 1.15 of the ESPHome API (1.10 before); nothing else changes in Home Assistant.
+
+- **Kiosk Satellite's DLNA renderer can be reached from your network (issue #109), optional and off by default.**
+  The app can play media sent from phones and media servers, but the Echo's firewall kept them from finding or
+  controlling it. New setting "Kiosk Satellite DLNA renderer" (settings page, System, shown once the app is installed):
+  switch it on here and the renderer on in the app. The firewall then admits, from private addresses only, the port the
+  app's "Server port" names, wherever the renderer moved to or you set it, while the app listens there, and the
+  network's searches for renderers on port 1900 while only the app listens there. Everything closes again when the
+  renderer stops, the setting goes off or the app is removed. Thanks to rmaffeo, who measured what the renderer needs.
+
+- **The Echo Show can show the music page while a track plays, in place of the face or of the home app.** New setting
+  "Music on the screen while it plays" (Screen page, `music_on_screen`, off by default): the Playing tab with the big
+  cover, the seek bar and the buttons shows as long as music from Music Assistant plays, until it stops (not at a pause,
+  nor in the few seconds between two tracks). "In place of the face" leaves an app in front (Kiosk Satellite, a
+  dashboard) alone; "In place of the home app too" also comes over the app chosen as Home, which comes back when the
+  music stops. A request, a call or a ringing timer bring the face as before, and the music page comes back when they
+  are over. It goes by itself only while it still shows the Playing tab, so browsing the library when the queue ends
+  keeps you there. The drawer's Face or Home, the face button on the music page, or going back to the app, hold that
+  until the music has stopped. Contributed by M0ebiu5 (#163).
+
+- **A note of your own on each Echo, and your other Echos one click away on the settings page (issue #153).** Several
+  Echos of one model differed only by the six characters at the end of their names. Click "Add a note" under the
+  name at the top of the menu (or the Note row on the System page) and write where it stands, say "Kitchen, by the
+  window". The note shows under the name there, in the browser tab's title, on your other Echos' pages and on the
+  login page, so you know which Echo's button to press. Anyone on your network can read it, as the name. It stays
+  with that Echo: not in the settings file, and a factory reset removes it. The name at the top now opens a list of
+  your other Echos with their notes: pick one and its settings page opens on the same page you are on. Suggested by
+  baudneo.
+- **More languages for the Echo's own words, Romanian among them.** "Language you speak" (settings page, Wake word)
+  now also lists Italian, Portuguese, Dutch, Swedish, Danish, Norwegian, Finnish, Polish and Romanian; automatic picks
+  them from your time zone too (Romania and Moldova: Romanian). The Echo Show writes the date on its screen (the clock,
+  the drawer) in that language: "Miercuri, 11 noiembrie". Finding where the wake word ends works as before for these
+  (there are no sound models for them yet: the wake word's own). Bluetooth announcements can be in Romanian ("Conectat
+  la …"). "Oprește" stops like "stop", and "închide" / "închide apelul" ends a Drop In like "hang up"; these words are
+  now recognised with or without their accents and capitals in every language ("Închide", "inchide", "Arrête"). The
+  Drop In blueprint has Romanian sentences ("conectează-mă cu bucătăria") and replies: re-import it to get them. In
+  English the clock's date now reads like the drawer's: "Wednesday, 1 November" (was "Wednesday 01 November").
+- **Echo Show 5: Wi-Fi no longer drops every few minutes.** Amazon's Wi-Fi diagnostics, still running inside Android,
+  test the connection against Amazon's servers; the satellite's firewall blocks them, so the test always failed and
+  the diagnostics then disconnected and reconnected the Wi-Fi (a few seconds each time, every link to Home Assistant
+  and Music Assistant dropped, music stopped and restarted), and their watchdog turned the Wi-Fi off and on when the
+  test never passed. The satellite now switches both off. The other Echo Shows and the Echo Input have the same
+  diagnostics and get the same change, not tried on them yet.
+
+## 2026-11-10
+
+- **"Stop" can end a timer ringing on another Echo (issue #161), optional and off by default.** A ringing Echo
+  always wins the wake word round, but only if it heard the wake word itself. From the next room, or over its own
+  ring, it may not: then another Echo got the "stop", paused its own music or handed the word to Home Assistant, and
+  the timer rang on. New setting "A stop another Echo heard ends the ring" (Voice page, Timers card,
+  `timer_stop_from_others`): switched on, that Echo's ring stops on "<wake word>, stop" said to any Echo of its
+  arbitration network, as it does when you say it to the ringing Echo itself. The Echo that heard you then leaves its
+  music alone and starts no request. It reaches the whole house: a "stop" in the bedroom ends the kitchen's timer. A
+  "stop" that has something to end where it was heard (a ring, a reply, a call there) ends only that, and "Any request
+  stops a ringing timer" stays with the Echo that heard you. The Echos tell each other over their own network, without
+  Home Assistant; the Echo that hears you needs this version too. The log of the one that heard says
+  `stop: nothing here, <name> rings: told to stop`, the ringing one's `alarm: off (stop heard by <name>)`. Not in
+  Kiosk Satellite's arbitration mode. Suggested by redeye86.
+- **Music also drops on the other Echos that heard you (issue #165).** With two Echos in one room playing the same
+  music, only the one answering turned its music down; the other played on at full volume over your command and the
+  reply. Now every Echo that heard the wake word turns its music down by its own "Music ducking" until the answering
+  Echo is done. An Echo in another room that did not hear you plays on. The Echos tell each other over their own
+  network, with no Home Assistant automation and no change to the volume itself: Music Assistant and the light ring
+  see nothing of it. New setting "Duck for other Echos" (Sound page, `duck_for_others`, on by default); it needs
+  wake word arbitration on. Both Echos need this version. A follow-up question keeps them down for your answer too;
+  music Home Assistant plays on the answering Echo afterwards (a radio you asked for) does not. If the "done" message
+  is lost, the music comes back after about 7 seconds. The answering Echo's own music now also drops from the wake word on rather than once the Echos have
+  agreed which one answers (up to a second later). Suggested by nima-1102.
+- **A freshly installed Echo went without the wake word aligners until its first update.** The files that find where
+  the wake word ends (since 2026-10-29) came with every update, but the installer (`scripts/setup.sh`,
+  `scripts/install-system.sh`, `scripts/install-boot.sh`) left them out. Such an Echo found the word's end by the
+  loudness alone, the rule the aligners replaced: on an Echo Dot 3 it took up to 0.36 s after Amazon's end of the word
+  for the word's tail and left it out of the request. The installer brings them now. An Echo installed since
+  2026-10-29 that has had no update since gets them with its next one, at once with `scripts/ota-push.sh`, or by
+  installing again; its log says `wake: ... aligned by ...` with them, only `wake: ... ms of the word's tail left out`
+  without. Where the system partition is nearly full, an update no longer takes them off one time and puts them back
+  the next: those already there stay. Found by derFinlay, who also wrote the first fix (#160).
+- **Echo Show 8 2nd gen: Adaptive colour can be switched off or on from the settings page.** Under **Screen**, the
+  **Brightness and colour** card has the stock display setting that warms the screen's colours with the room's
+  light, often turning a dashboard yellow at night. It is off by default; an explicit choice is kept across restarts.
+  Setup presets keep the choice even before the display service starts. The switch shows the device's confirmed
+  state and appears only while the display service is available. Returning
+  to stock Alexa restores the original setting (issue #162).
+
 ## 2026-11-09
 
+- **A stop from Home Assistant before the sound starts no longer leaves the Echo silent.** When the media player's
+  stop came while the Echo was still waiting for what to play (a `media_stop` right after `tts.speak` or a
+  `play_media`, or during a reply Home Assistant was still preparing), and that then failed to load or was an MP3,
+  the Echo played no reply, announcement or media again until hassmic restarted. Now the stop cancels only what was
+  on its way, at once: what is sent right after it plays.
+- **Debug access: revoking the browser that asked for it withdraws the request.** While Debug access waited for the
+  action button, revoking that browser's login on the settings page left the request waiting: the page still said so,
+  and the next press of the button opened adb over Wi-Fi for 30 minutes. Now the request goes with the login, and
+  that press does what the button does otherwise.
+- **Settings page: "Try again" after a login that was not approved works.** When the action button was not pressed
+  within the minute, or another browser asked at the same time, every new try from the same browser was refused at
+  once, with nothing on the ring for the button to approve, until another browser asked or the Echo restarted. Now
+  the next try waits for the button as the first one did. A browser whose login was revoked is asked for the button
+  again too, instead of showing "Logged in" over a page that loads nothing.
+- **The unlock and boot-root are now done by hand, as the XDA thread says, on every model.** The unlock tools
+  (kamakiri, amonet, saiyaku) and boot-root are R0rt1z2's, and with kamakiri-donut v1.1.0 he asks that they are only
+  ever run by hand, following his XDA thread, never from an installer or a script. The guided setup respects that: it
+  no longer asks for, unpacks, runs or installs them, and the model pages no longer copy their steps. At the unlock
+  step it shows the model's XDA thread; follow it in a terminal window of your own until TWRP is running, come back,
+  press Enter, and the setup checks that the Echo is on adb. It then puts the firmware on as before (Echo Dots, Echo 2,
+  Echo Input), and at the root step sends you to the thread again for boot-root: install it from TWRP as the thread
+  says, press Enter once Fire OS has started, and the setup checks for root over adb and goes on with the install.
+  The Echo Shows' root is this project's own boot image, as before. Stuck? Ask in the thread, with what the Echo did
+  and the tool's output or log. This replaces the setup's own words around amonet's unlock from earlier today (issue
+  #154). It also ends issue #156: the setup insisted on `kamakiri-donut-v1.0.0.zip`, which the thread no longer offers,
+  and refused v1.1.0; it now asks for no unlock file at all. kamakiri-donut v1.1.0 writes the same files to the Echo as
+  v1.0.0, so the warning about issue #112 stays as it was.
+- **Nothing of the XDA threads' files is used any more.** The setup took two programs out of `boot-root.zip`; it now
+  fetches them from where they were made: magiskpolicy (which adds this project's rules to the Echo's security policy)
+  from Magisk's own release, v30.7, the very same file; on the Echo Show 5 (both generations) and the Echo Show 8 1st
+  gen also adbd, now Google's own from its Android 7.1.1 emulator image (only 1.3 MB of it is downloaded). You no
+  longer download `boot-root.zip` for the setup: get it from the thread when the root step sends you there. The new
+  adbd on the Echo Shows has not been tried on a device yet.
+- **Windows: the setup no longer runs firebreak.** firebreak unlocked an Echo Dot 2 from Windows by running amonet,
+  so it goes for the same reason. On Windows every model, the Echo Dot 2 included, now needs an Echo that is unlocked
+  already (TWRP or Fire OS on adb); the setup does everything after that, and [the Windows guide](docs/WINDOWS.md) says
+  how.
 - **The Bluetooth proxy can be switched off (issue #152).** "Bluetooth proxy" (settings page, Features; on by default,
   so nothing changes) stops Home Assistant from getting Bluetooth devices through this Echo: the Echo no longer says it
   is a proxy, stops scanning and takes no connections. Disabling its Bluetooth entries in Home Assistant never did

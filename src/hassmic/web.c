@@ -19,7 +19,8 @@
  *   the target's web key, the browser's key, the nonce and its own name with a key every member derives from K
  *   (arb_web_key); the target checks that with its own copy, uses the nonce up, and approves the browser.  Outside the
  *   network it is the button again.  adb still takes the button of that very Echo.
- *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login.
+ *   adb over Wi-Fi (a root shell for the network) takes a press of its own: POST /api/adb "on" waits like a login;
+ *   "off", or the asking browser's login revoked, withdraws it before the press.
  *   Artifacts (artifacts.c): listed, read and written in pieces over signed requests, so a page logged in to two Echos
  *   copies models from one to the other; root installs them.
  *   microWakeWord's models (mww_store.c): listed, added (uploaded whole, checked by loading them), renamed, tuned,
@@ -43,6 +44,7 @@
  */
 #include "web.h"
 #include "core.h"
+#include "clock.h"
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
@@ -54,6 +56,7 @@
 #include "hash.h"
 #include "mww.h"
 #include "ringdesign.h"
+#include "ringlive.h"
 #include "netio.h"
 #include "settings.h"
 #include "sounds.h"
@@ -75,6 +78,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
@@ -88,6 +92,7 @@ extern const int web_nassets;
 #define MAX_CLIENTS 32               /* a browser has a key per Echo page it opened, and each Echo may know all of them */
 #define MAX_BODY    16384
 static int LOGIN_MS = 60000;        /* a login waits this long for the button (HASSMIC_LOGIN_MS for the tests) */
+#define REFUSED_MS 3000             /* a refused login is told for this long: the page asks every second while it waits */
 
 static const struct web_hooks *hooks;
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER;  /* everything below; never held while taking core_lock */
@@ -100,11 +105,24 @@ static uint8_t sk[32], pk[32];
 #define CTR_WINDOW 64
 static struct client { uint8_t pub[32]; unsigned long long ctr, floor, seen[CTR_WINDOW]; int nseen; char label[64]; } clients[MAX_CLIENTS];
 static int nclients;
-/* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused */
+/* what waits for the button: a login, or adb for an approved browser.  state: 0 none, 1 waits, 2 approved, 3 refused;
+ * at: when it began, end: when it was refused */
 enum { W_LOGIN = 1, W_ADB };
-static struct { uint8_t pub[32]; char label[64]; long long at; int state, kind; } login;
+static struct { uint8_t pub[32]; char label[64]; long long at, end; int state, kind; } login;
 static atomic_int nconn;
 static char start_id[17];           /* new at every start: the page knows a restart from an answer of the old process */
+/* A note of the owner's ("Kitchen, by the window"), shown under the name (issue #153): the name is the model and the
+ * MAC's end, and several Echos of one model told apart only by six hex digits.  In state/note, one line; in the
+ * unsigned hello, as the name is, since the login page is where it helps most (which Echo's button to press): a
+ * location, readable to anyone on the LAN who asks.  Not in exports: it is this Echo's, as the name.  Own lock: hello
+ * runs on every connection thread without lk */
+#define NOTE_MAX 80                 /* bytes; the page cuts at a character's end */
+static pthread_mutex_t note_lk = PTHREAD_MUTEX_INITIALIZER;     /* note[] only: never held over the flash */
+static pthread_mutex_t note_save_lk = PTHREAD_MUTEX_INITIALIZER; /* one save at a time: file and note[] in one order */
+static char note[NOTE_MAX + 1];
+/* /api/hello: the rest <= ~820 bytes (name, node 160 each, note 168), members <= 16 x ~104 (arb.c NPEER, NLEN); a
+ * hello cut short is no JSON, and the login page cannot start */
+#define HELLO_MAX 4096
 #define NONCE_MS 120000
 static struct { uint8_t pub[32], nonce[16]; long long at; } nonces[8];      /* handed out for a login through another Echo */
 static unsigned nonce_next;
@@ -210,10 +228,18 @@ static int voucher(uint8_t out[16], const uint8_t target[32], const uint8_t brow
 static void login_expire(long long now)     /* lk held */
 {
     if (login.state == 1 && now - login.at > LOGIN_MS) {
-        login.state = 3; fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : "login");
+        login.state = 3; login.end = now; fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : "login");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
     }
+}
+
+/* An adb request that waits goes once adb is closed or the browser that asked is let go: left waiting, the next press
+ * opened adb for 30 min against the owner's last word, and the page kept saying it waited (lk held) */
+static void adb_withdraw(const char *why)
+{
+    login.state = 3; login.end = now_ms(); fprintf(stderr, "web: adb request withdrawn (%s)\n", why);
+    if (hooks->attention) hooks->attention(0);
 }
 
 int web_approve(void)
@@ -221,7 +247,11 @@ int web_approve(void)
     int r = 0;
     pthread_mutex_lock(&lk);
     login_expire(now_ms());
-    if (login.state == 1 && login.kind == W_ADB) {
+    /* the browser that asked pushed out of clients[] meanwhile: logins through other Echos take no press */
+    if (login.state == 1 && login.kind == W_ADB && !client_of(login.pub)) {
+        adb_withdraw("its browser is no longer let in");
+        if (hooks->approved) hooks->approved(0);        /* the press goes on to the assistant, as after one that ran out */
+    } else if (login.state == 1 && login.kind == W_ADB) {
         login.state = 2; r = 2;
         fprintf(stderr, "web: adb over Wi-Fi approved with the button\n");
         if (hooks->attention) hooks->attention(0);
@@ -242,7 +272,12 @@ int web_approve(void)
 static const char *adb_ask(const uint8_t pub[32], int on)
 {
     const char *r; long long now = now_ms();
-    if (!on) { adbwifi_ask(0); return "closed"; }
+    if (!on) {
+        pthread_mutex_lock(&lk);
+        if (login.state == 1 && login.kind == W_ADB) adb_withdraw("closed");
+        pthread_mutex_unlock(&lk);
+        adbwifi_ask(0); return "closed";
+    }
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (login.state == 1 && login.kind == W_ADB && !memcmp(login.pub, pub, 32)) r = "waiting";
@@ -257,16 +292,23 @@ static const char *adb_ask(const uint8_t pub[32], int on)
     return r;
 }
 
-/* "approved", "waiting", "refused" */
+/* "approved", "waiting", "refused".  Approved is what clients[] says: the old record said it to a key revoked or pushed
+ * out since, and the page showed "Logged in" over 401s.  A login that ran out or collided is told once, then the next
+ * ask from that key starts anew: the record stayed until another key asked, and the page keeps one key, so its "Try
+ * again" was refused at once, with nothing on the ring for the button.  Told only within REFUSED_MS of the refusal: a
+ * page still asking (web/app.js, every second) hears of it, one opened again later would have been told "Not
+ * approved" at its first click */
 static const char *login_ask(const uint8_t pub[32], const char *label)
 {
     const char *r; long long now = now_ms();
     pthread_mutex_lock(&lk);
     login_expire(now);
     if (client_of(pub)) r = "approved";
-    else if (login.state && login.kind == W_LOGIN && !memcmp(login.pub, pub, 32)) r = login.state == 1 ? "waiting" : login.state == 2 ? "approved" : "refused";
-    else if (login.state == 1) {                /* two at once: neither */
-        login.state = 3; r = "refused";
+    else if (login.kind == W_LOGIN && !memcmp(login.pub, pub, 32) && (login.state == 1 || (login.state == 3 && now - login.end <= REFUSED_MS))) {
+        r = login.state == 1 ? "waiting" : "refused";
+        if (login.state == 3) login.state = 0;
+    } else if (login.state == 1) {              /* two at once: neither */
+        login.state = 3; login.end = now; r = "refused";
         fprintf(stderr, "web: two logins at once, both refused\n");
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
@@ -376,7 +418,7 @@ static int read_request(int fd, struct req *r)
     /* a piece of an artifact, a microWakeWord model, a light ring design and a sound of one's own are the big bodies:
      * everything else is a few lines */
     long max = !strncmp(r->path, "/api/artifact/chunk/", 20) ? ART_CHUNK_MAX : !strncmp(r->path, "/api/mww/add/", 13) ? MWW_MODEL_MAX + 16384
-             : !strncmp(r->path, "/api/ring/design/", 17) ? RD_TEXT_MAX
+             : !strncmp(r->path, "/api/ring/design/", 17) || !strcmp(r->path, "/api/ring/live") ? RD_TEXT_MAX
              : !strcmp(r->path, "/api/timer-sound") || !strncmp(r->path, "/api/sound/", 11) || !strncmp(r->path, "/api/sound-pack/", 16) ? SOUND_CUSTOM_MAX : MAX_BODY;
     if (cl < 0 || (cl > MAX_BODY && (cl > max || !approved_key(r->pub)))) return -2;
     if (!(r->body = malloc((size_t)cl + 1))) return -1;
@@ -431,17 +473,60 @@ static int signed_ok(const struct req *r, int persist)
 
 /* ---------------------------------------------------------------- API */
 
+/* The note as it is kept: one line (control characters as spaces), trimmed, at most NOTE_MAX bytes, without a
+ * character left unfinished at its end, whether the limit split it or the body ended inside it (the page cuts too,
+ * but anything may post) */
+static void note_clean(char *out, const char *s, size_t len)
+{
+    size_t i = 0, n = 0, k;
+    while (i < len && (s[i] == ' ' || (unsigned char)s[i] < 0x20)) i++;
+    for (; i < len && n < NOTE_MAX; i++) { unsigned char c = (unsigned char)s[i]; out[n++] = (char)(c < 0x20 || c == 0x7f ? ' ' : c); }
+    for (k = n; k && ((unsigned char)out[k - 1] & 0xc0) == 0x80; k--) ;       /* back to the last character's lead byte */
+    if (k && (unsigned char)out[k - 1] >= 0xc0) {
+        unsigned char lead = (unsigned char)out[k - 1];
+        size_t need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : 2;
+        if (n - (k - 1) < need) n = k - 1;
+    }
+    while (n && out[n - 1] == ' ') n--;
+    out[n] = 0;
+}
+
+static void note_load(void)
+{
+    char p[300], t[NOTE_MAX * 2 + 2] = ""; FILE *f;
+    snprintf(p, sizeof p, "%s/note", state_dir());
+    if ((f = fopen(p, "r"))) { if (!fgets(t, sizeof t, f)) t[0] = 0; fclose(f); }
+    pthread_mutex_lock(&note_lk); note_clean(note, t, strlen(t)); pthread_mutex_unlock(&note_lk);
+}
+
+/* 0, or -1 when it could not be written (the note in memory stays the old one) */
+static int note_save(const char *s, size_t len)
+{
+    char p[300], t[NOTE_MAX + 2]; int e;
+    note_clean(t, s, len);
+    snprintf(p, sizeof p, "%s/note", state_dir());
+    pthread_mutex_lock(&note_save_lk);         /* the fsync without note_lk: every hello would wait on the flash */
+    if (!t[0]) e = unlink(p) && errno != ENOENT ? -1 : 0;
+    else { size_t n = strlen(t); t[n] = '\n'; e = statefile_write(p, 0600, t, n + 1); t[n] = 0; }
+    if (!e) { pthread_mutex_lock(&note_lk); memcpy(note, t, strlen(t) + 1); pthread_mutex_unlock(&note_lk); }
+    pthread_mutex_unlock(&note_save_lk);
+    return e;
+}
+
 /* members: the Echos of our network (for the login page's "through another Echo"; what beacons say anyway).
  * port: the page's own, which it calls the other Echos on; the URL it was opened at may be a reverse proxy's (80, 443) */
 static size_t hello_json(char *o, size_t cap, int members)
 {
-    char p[65], name[160], node[160]; size_t n;
+    char p[65], name[160], node[160], nt[NOTE_MAX * 2 + 8]; size_t n;    /* no control characters in it: 2 bytes a byte at most */
     hex(p, pk, 32); jesc(name, sizeof name, core_name); jesc(node, sizeof node, core_node_name());
-    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\",\"start\":\"%s\",\"port\":%d",
-                         name, node, board.model, board.codename, VERSION, p, start_id, core_web_port);
+    pthread_mutex_lock(&note_lk); jesc(nt, sizeof nt, note); pthread_mutex_unlock(&note_lk);
+    n = (size_t)snprintf(o, cap, "{\"name\":\"%s\",\"node\":\"%s\",\"note\":\"%s\",\"model\":\"%s\",\"codename\":\"%s\",\"version\":\"%s\",\"pub\":\"%s\",\"start\":\"%s\",\"port\":%d",
+                         name, node, nt, board.model, board.codename, VERSION, p, start_id, core_web_port);
     /* no action button (board.action_combo): the page names what stands in for it */
     if (board.action_combo && n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"action\":\"volume_keys\"");
-    if (board.fire_tv && n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"platform\":\"fire_tv\"");
+#ifdef CUBE
+    if (n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"platform\":\"fire_tv\"");
+#endif
     if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
     return n < cap ? n : cap - 1;
@@ -508,6 +593,11 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     n = isnan(cpu) ? app(o, n, cap, "null") : app(o, n, cap, "%.0f", cpu);
     { static const char *const models[] = { "none", "firmware", "newer" };
       n = app(o, n, cap, "},\"sound\":{\"model\":\"%s\",\"failed\":%s", models[sound_model()], core_sound_failed() ? "true" : "false"); }
+    /* what "Language you speak" on Automatic stands on: the zone, how it was found (clock.c), the language it gives */
+    { char z[100], zj[200], cc[3][3], l[16]; const char *how; clock_zone_info(z, sizeof z, &how, cc); core_speech_language(l, sizeof l);
+      jesc(zj, sizeof zj, z);            /* the countries: two capitals each or "" (clock.c cc_take) */
+      n = app(o, n, cap, "},\"zone\":{\"zone\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"home\":\"%s\",\"wifi\":\"%s\",\"language\":\"%s\"",
+              zj, how, cc[0], cc[1], cc[2], l); }
     /* the timer sounds this Echo has (the stock ones where its firmware keeps them), and the length of its own */
     { static const enum sound snd[] = { SND_TIMER, SND_ALARM, SND_CUSTOM }; static const char *const nm[] = { "timer", "alarm", "custom" };
       n = app(o, n, cap, "},\"timer_sound\":{\"custom_ms\":%u,\"present\":[\"beep\"", sound_own_ms(SND_CUSTOM));
@@ -785,6 +875,9 @@ static void mww_api(int fd, struct req *r)
  * /api/ring/pack/<id>    POST  a pack as the Echo keeps it (ringdesign.h, version 2), checked; id 0: a new one -> {"id"}
  * /api/ring/pack-delete/<id> POST
  * /api/ring/apply        POST  the assignments onto the ring: root installs them, the ring goes dark for a second
+ * /api/ring/live         POST  a design's text: the live ring plays it now, as drawn (no Apply, nothing kept); empty:
+ *                              stops what plays.  Only while "Light ring live" is on (ringlive.h).  GET /api/ring says
+ *                              "live": {"on", "playing"}
  * All signed. */
 static void ring_api(int fd, struct req *r)
 {
@@ -794,6 +887,10 @@ static void ring_api(int fd, struct req *r)
         size_t cap = 65536; char *t = malloc(cap);
         size_t n = t ? rd_status_json(t, cap) : 0;
         if (!n) { free(t); respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+        if (t[n - 1] == '}' && n + 160 < cap) {                 /* the live ring beside the designs */
+            char nm[RD_NAME], en[2 * RD_NAME + 8]; ringlive_playing(nm, sizeof nm); jesc(en, sizeof en, nm);
+            n += (size_t)snprintf(t + n - 1, cap - n + 1, ",\"live\":{\"on\":%s,\"playing\":\"%s\"}}", ringlive_enabled() ? "true" : "false", en) - 1;
+        }
         respond_s(fd, r, 200, "application/json", NULL, t, n); free(t); return;
     }
     if (!write && (!strcmp(r->path, "/api/ring/designs") || !strcmp(r->path, "/api/ring/packs") || sscanf(r->path, "/api/ring/stock/%31s", slot) == 1)) {
@@ -811,6 +908,12 @@ static void ring_api(int fd, struct req *r)
     else if (write && sscanf(r->path, "/api/ring/delete/%d", &id) == 1) rc = rd_delete(id, err, sizeof err);
     else if (write && !strcmp(r->path, "/api/ring/assign")) rc = rd_assign(r->body, err, sizeof err);
     else if (write && !strcmp(r->path, "/api/ring/apply")) rc = rd_apply(err, sizeof err);
+    else if (write && !strcmp(r->path, "/api/ring/live")) {
+        if (!ringlive_enabled()) snprintf(err, sizeof err, "\"Light ring live\" is off (Features)");
+        else if (!r->blen) { ringlive_stop(); rc = 0; }
+        else rc = ringlive_play_text(r->body, r->blen, err, sizeof err);
+        if (!rc) { pthread_mutex_lock(&core_lock); core_settings_changed(); pthread_mutex_unlock(&core_lock); }   /* the select's state */
+    }
     else snprintf(err, sizeof err, "not found");
     if (!rc) { respond_sjson(fd, r, 200, "{\"ok\":true}"); return; }
     jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej);
@@ -1042,15 +1145,21 @@ static void log_api(int fd, struct req *r)
 
 /* Online updates come from GitHub: a line of BODY that switches them on (from off) counts only once this Echo reached
  * it (update_probe), else it is turned into a comment and WHY says what failed.  Imports go the same way.  Before
- * core_lock: the probe takes up to 15 s. */
+ * core_lock: the probe takes up to 15 s.  Lines are read as settings_apply_text reads them (its first
+ * SETTINGS_LINE_MAX - 1 bytes, up to a \r, which ends its line; any white space ahead of the name; the choice in any
+ * case, as settings.c parse() takes it): "Beta" passed this gate untouched and switched updates on without the probe,
+ * and so did a line padded past what settings_apply_text keeps of it, the rest of the value cut off there. */
 static void updates_gate(char *body, char *why, size_t cap)
 {
     why[0] = 0;
     for (char *p = body; *p; ) {
-        size_t l = strcspn(p, "\n"); char *k = p + strspn(p, " \t"), v[16];
-        if (!strncmp(k, "online_updates=", 15)) {
-            snprintf(v, sizeof v, "%.*s", (int)strcspn(k + 15, "\r\n"), k + 15);
-            int on = !strcmp(v, update_channels[UPDATE_BETA]) || !strcmp(v, update_channels[UPDATE_RELEASE]);
+        size_t l = strcspn(p, "\n"), m = strcspn(p, "\r\n"); char *k = p, *e, v[16];
+        if (m > SETTINGS_LINE_MAX - 1) m = SETTINGS_LINE_MAX - 1;
+        e = p + m;
+        while (k < e && isspace((unsigned char)*k)) k++;
+        if (e - k >= 15 && !strncmp(k, "online_updates=", 15)) {
+            snprintf(v, sizeof v, "%.*s", (int)(e - k - 15), k + 15);
+            int on = !strcasecmp(v, update_channels[UPDATE_BETA]) || !strcasecmp(v, update_channels[UPDATE_RELEASE]);
             if (on && update_channel(-1) == UPDATE_OFF && (why[0] || update_probe(why, cap))) *k = '#';
         }
         p += l + (p[l] == '\n');
@@ -1073,7 +1182,7 @@ static void handle(int fd)
         }
         if (!found) respond_json(fd, 404, "{\"error\":\"not found\"}");
     }
-    else if (!strcmp(r.path, "/api/hello")) { char o[2400]; hello_json(o, sizeof o, 1); respond_json(fd, 200, o); }
+    else if (!strcmp(r.path, "/api/hello")) { char o[HELLO_MAX]; hello_json(o, sizeof o, 1); respond_json(fd, 200, o); }
     else if (!strncmp(r.path, "/api/vouch/", 11) && !strcmp(r.method, "POST")) vouch_api(fd, &r);
     else if (!strcmp(r.path, "/api/login") && !strcmp(r.method, "POST")) {
         /* body: "<browser key hex> <label>" */
@@ -1112,6 +1221,15 @@ static void handle(int fd)
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         core_identify();
         respond_sjson(fd, &r, 200, "{\"identify\":true}");
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/note")) {         /* body: the note, empty clears it */
+        char o[NOTE_MAX * 2 + 24], nt[NOTE_MAX * 2 + 8];
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        if (note_save(r.body ? r.body : "", r.body ? r.blen : 0)) { fprintf(stderr, "web: cannot write the note\n"); respond_sjson(fd, &r, 500, "{\"error\":\"cannot write it\"}"); }
+        else {
+            pthread_mutex_lock(&note_lk); jesc(nt, sizeof nt, note); fprintf(stderr, "web: note %s\n", note[0] ? "set" : "cleared"); pthread_mutex_unlock(&note_lk);
+            snprintf(o, sizeof o, "{\"note\":\"%s\"}", nt); respond_sjson(fd, &r, 200, o);
+        }
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/dropin")) {       /* body: the node to drop in on, or "end" */
         char e[120], t[64], o[200], ej[160];
@@ -1153,6 +1271,7 @@ static void handle(int fd)
             memmove(clients + i, clients + i + 1, sizeof clients[0] * (size_t)(nclients - i - 1)); nclients--; found = 1; break;
         }
         if (found) save_clients();
+        if (login.state == 1 && login.kind == W_ADB && !memcmp(login.pub, who, 32)) adb_withdraw("its browser's login revoked");
         pthread_mutex_unlock(&lk);
         fprintf(stderr, "web: a browser's login %s\n", found ? "revoked" : "to revoke not found");
         respond_sjson(fd, &r, 200, found ? "{\"revoked\":true}" : "{\"revoked\":false}");
@@ -1161,13 +1280,12 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
     else if (!strncmp(r.path, "/api/mww", 8)) mww_api(fd, &r);
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
-    else if (!strncmp(r.path, "/api/wifi", 9)) {
 #ifdef CUBE
+    else if (!strncmp(r.path, "/api/wifi", 9))
         respond_json(fd,409,"{\"error\":\"Manage networking in Fire TV Settings\"}");
 #else
-        wifi_api(fd, &r);
+    else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
 #endif
-    }
     else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);
     else if (!strcmp(r.path, "/api/screen")) screen_api(fd, &r);
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);
@@ -1227,6 +1345,7 @@ int web_start(int p, const struct web_hooks *h)
     int r = load_key();
     if (!r) load_clients();
     pthread_mutex_unlock(&lk);
+    note_load();
     if (r) return -1;
     if (!pthread_create(&t, NULL, expiry, NULL)) pthread_detach(t);
     return pthread_create(&t, NULL, listener, NULL) ? -1 : (pthread_detach(t), 0);

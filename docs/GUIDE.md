@@ -41,7 +41,13 @@ System) off takes any certificate, but then anyone on your network could slip th
   which need not be the wake word's: German voices saying the English "Alexa" were found in 48 of 75 tests with
   German sounds, in 23 with English ones. So "Language you speak" (settings page, Wake word) picks it; automatic goes
   by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain, Mexico: Spanish;
-  Japan; else English), then by the wake word's own language. It also learns from your requests how the word sounds
+  Japan; the UK, Ireland, the US, Canada, Australia, India: English), then by the wake word's own language. Home
+  Assistant tells the Echo only the zone's offset and summer time, which Germany shares with France, the Netherlands
+  and others, so the country comes from Home Assistant's home location, near a border from your Wi-Fi router (see
+  "Time and time zone" below); the settings page shows under the setting what Automatic found and from what. The list also has Italian, Portuguese, Dutch, Swedish,
+  Danish, Norwegian, Finnish, Polish and Romanian, which automatic picks by the time zone too: there are no sounds for
+  them yet, so for the wake word they count as not said, picked or automatic, and the Echo goes on as before they
+  were listed (in Brazil: English); the Echo Show writes its date in the language picked. It also learns from your requests how the word sounds
   in your home (your voices, your room, its microphone: speaker adaptation, as the aligner's models were trained for)
   and finds the end more often from the sixth request on (in tests 74 % right instead of 55 % without it); it forgets
   the oldest as new ones come, and what it learns stays on the Echo ("Learn how the wake word is said here" on the
@@ -119,6 +125,11 @@ System) off takes any certificate, but then anyone on your network could slip th
   "Stop the timer" is not "stop": it goes to Home Assistant, which has forgotten the finished timer and says none is
   running. Switch on "Any request stops a ringing timer" on the settings page and whatever you say after the wake
   word during a ring stops it, in any language; a question asked during a ring then only stops it.
+  With several Echos, a ringing one wins the wake word round, but only if it heard you: from the next room, or over its
+  own ring, it may not, and another Echo gets the "stop". Switch on "A stop another Echo heard ends the ring" (Voice
+  page, Timers card) on the Echos whose rings may be stopped that way, and "<wake word>, stop" said to any Echo of their
+  arbitration network ends them; that Echo then leaves its music alone. It reaches every room, it needs this version on
+  the Echo you speak to as well, and "Any request stops a ringing timer" is not passed on. Off by default.
   Several timers can ring at once: each new one gives the ring its full time again, and one stop ends them all.
   A timer rings with Alexa's own timer tone, from the Echo's firmware. "Timer sound" on the settings page picks
   another: Alexa's alarm tone, a triple beep (as loud as Alexa's tone), or a sound of your own: "Upload a sound…" takes
@@ -337,13 +348,21 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
 The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it
 rings for 30 s instead and only its action button connects. The ring shows Alexa's call animations meanwhile. To end a
 call: the action button, "<wake word>, stop", "<wake word>, hang up" (or "auflegen", "raccroche", "cuelga",
-"riattacca", "ophangen") on either Echo, or "End Drop In".
+"riattacca", "ophangen", "închide") on either Echo, or "End Drop In".
 Music on the Echo pauses when a call connects (it does not resume by itself). The volume buttons work during a call; the wake word too, but not while the other side talks (its "Alexa" for its own
 Echo would wake this one).
 
 Calls are refused with do not disturb on, with the microphones off, or with another call running; the caller's log and
 Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
 Assistant in between.
+
+**Your side's sound.** On the Echo Dot 3 and Echo Dot 2 a call sends what Amazon's own calls sent: the front end's
+call processing, with noise reduction, an even level and an echo canceller made for calls. It sounds natural and
+steady, a little duller than the assistant's stream (little over 4 kHz). "Call microphone" (Features, under Drop In)
+switches back to the assistant's stream, brighter and with more of the room. Should the call microphone stop during a
+call, the assistant's takes over at once. The Echo 2 and the Echo Dot 5 send the assistant's stream for now (they have
+the call processing too, but it has not been tried on them yet); the Echo Shows and the Echo Input have only the
+assistant's.
 
 **Echo.** The Echo puts Amazon's audio front end into its call mode, whose echo canceller works on the other side's
 voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
@@ -401,6 +420,9 @@ Beyond the README's two figures:
   meanwhile. A colour or an effect for the light makes it one colour again.
 - Fill and LED by LED need each LED's own animations, 10 MB of the Echo's system partition. Where it has no room for
   them, the Echo installs the ring without them: the light works, and Home Assistant has no fill, rotation or action.
+- **Echo Dot 5**: its ring keeps animations in a small co-processor that takes only a few hundred, too few for the set
+  above. There the light is drawn when it changes, into an animation the ring already holds, so it needs no set made
+  beforehand: same colours, effects, fill and LED by LED as on the other Dots.
 
   ```yaml
   - action: esphome.echo_dot_3_5695c4_light_ring_leds
@@ -432,6 +454,60 @@ Beyond the README's two figures:
   name, author and a line about it. **Use** sets its animations, only those or all of them (the rest back to
   Amazon's), and applies. A pack travels with its designs: as a `.ringpack` file (Export, Import) or with "Copy
   models". Up to 50 packs; their designs count towards the 100.
+- **Light ring live** (Echo Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5; settings page, Lights, "Live from Home Assistant", off by default): the
+  Echo draws its ring itself, from Home Assistant, in any colour on any LED, up to 30 pictures a second, and plays your
+  designs at once, without Apply. In layers, the lowest first:
+  - "Light ring" (the light above) in its exact colour instead of the nearest of the set, fading when it changes
+    (Home Assistant's transition, else a quarter of a second), with more effects: Breathe, Color loop, Comet, Wave,
+    Sparkle and Fire beside Pulse, Spin, Blink and Rainbow, and six that follow the music the Echo plays (Music
+    Assistant, a phone over Bluetooth, Home Assistant's media). The Echo listens to it itself: twelve bands, the kick,
+    snare and hi-hat, the tempo and the beat, left and right, how loud it gets. **Music beat** (the ring blooms on every
+    beat from LED 1 round to the back and settles to a glow, each beat of the bar a shade apart, every fourth whiter),
+    **Music spectrum** (the twelve bands LED by LED, bass at LED 1 round to the highs at LED 12), **Music VU meter**
+    (stereo: the right channel from LED 1 the clock's way, the left the other way, green to red, peaks falling),
+    **Music orbit** (two comets going round once a bar, opposite ways, flaring on the kick), **Music drums** (the kick a
+    wave from LED 1, the snare one from the back, hi-hats sparks) and **Music aurora** (light flowing slowly round,
+    swelling on the beat, turning cooler with brighter sound). They take the light's colour; for white, colours of
+    their own. They follow what comes out of the speaker, not what is still in its buffer, and the music's own
+    loudness, not the volume; with nothing playing they breathe quietly. Fill, rotation and `light_ring_leds` work as before;
+  - twelve lights "Light ring LED 1" to "12" over it (colour and brightness each; LED 1 is where the volume starts,
+    turned by "Light ring rotation"), for scenes and automations; an LED that is off lets "Light ring" through;
+  - an animation over everything: your own frames from `light_ring_animation`, or a design of your library from the
+    select "Light ring design", the action `light_ring_design`, or "Show on the Echo" on the Lights page (beside each
+    design, and in the designer for what you are drawing, saved or not). "None" in the select, or "Stop" on the page,
+    ends it.
+
+  The actions: `light_ring_frame` (12 colours `#rrggbb` from LED 1 on, `""` dark; `brightness` 0 to 255; `timeout`
+  in seconds, 0 for none: sets the twelve lights), `light_ring_animation` (`frames`: one `"<ms>:RRGGBB,RRGGBB,..."` per
+  picture with all 12 LEDs, as a design's lines; `repeat` 0 for until stopped; `brightness`), `light_ring_design`
+  (`name`, `repeat` 0 for as drawn, `brightness`) and `light_ring_stop` (the animation, and the twelve lights off).
+  The Echo plays animations itself: smooth, whatever Home Assistant does meanwhile. About 600 pictures fit in one
+  action; a picture shorter than 33 ms is skipped.
+
+  The Echo's own lights always come first: listening, thinking, replies, timers, volume, Drop In and the red ring of
+  muted microphones show as you set them above, and your lights come back after them. Nothing is brighter than the
+  Echo's own lights: it follows "LED brightness" (auto included) the way Amazon's ring does, and no LED goes above what
+  Amazon's ring itself writes at that level. The current through the LEDs, the mute button's light and the ring at
+  start-up stay Amazon's. Switched off, the ring is Amazon's ring program's again and "Light ring" uses its set.
+
+  ```yaml
+  - action: esphome.echo_dot_3_5695c4_light_ring_animation
+    data:
+      repeat: 3
+      brightness: 255
+      frames:
+        - "150:FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+        - "150:000000,FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+        - "150:000000,000000,FF0000,000000,000000,000000,000000,000000,000000,000000,000000,000000"
+  - action: select.select_option
+    target: { entity_id: select.echo_dot_3_5695c4_light_ring_design }
+    data: { option: Sunrise }
+  - action: light.turn_on
+    target: { entity_id: light.echo_dot_3_5695c4_light_ring }
+    data: { effect: Music drums, brightness: 200 }
+  ```
+  An Echo installed before this needs the update once: root then lets hassmic write the ring's LEDs (that one file of
+  the LED driver, given again at each start); until then the setting is not shown.
 - **Listening points at you**, as with Alexa, and also while a timer rings or the light is on (Amazon's ring stops
   turning as soon as a second light shows; hassmic plays the listening ring already turned).
 - **Echo Show 5 (both generations) and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
@@ -444,7 +520,8 @@ Beyond the README's two figures:
   the designer's Ring / Band switch shows a design either way on any Echo.
   Your words, the reply and timers can show on the screen too: [The screen](#the-screen-echo-show), "Words and timers".
   The volume of voice replies shows in cyan, as on the Dots. The screen wakes for the band and sleeps 5 minutes after the last light (1 minute with
-  the microphones off or in Do not disturb).
+  the microphones off or in Do not disturb); the Screen page's **Screen sleeps after** changes the 5 minutes (0 keeps
+  the screen on), and **Clock when idle** shows the time in place of going dark.
 - **Microphone off** plays Alexa's own sounds. A switch that is already off when hassmic starts is shown, not announced.
 - **Wake sound**: Alexa's own where the firmware has it; the Echo Show 8 1st gen has none and plays hassmic's short blip
   (or one of your own: "Your own sounds", below). On the Echo Show 8 (1st and 2nd gen), the Show 5 2nd gen and the Echo Input a sound
@@ -487,6 +564,24 @@ satellite of its own has to run without its microphone (as a display) while hass
   smile. Below them: the clock, in Home Assistant's time zone (12-hour where the Echo's language is US, Canadian or
   Australian English), or what Music Assistant plays, with play/pause; tap it for the music. A request to the
   assistant, a ringing timer or a Drop In bring the face back from the music.
+- **Music on the screen** (Screen page, "Music on the screen while it plays", off by default): while a track from Music
+  Assistant plays, the Playing tab (the big cover) shows instead, until the music stops. **In place of the face** replaces
+  only the face: an app in front (Kiosk Satellite, a dashboard) stays. **In place of the home app too** also comes over the
+  app chosen as Home (or Kiosk Satellite), and that app comes back when the music stops; other apps are left alone. A
+  pause keeps the page, and so does the gap between two tracks. A request, a call or a ringing timer bring the face and
+  the page comes back when they are over. It goes by itself only while it still shows the Playing tab: browse the
+  library or search on it and it stays, as if you had opened it yourself (the drawer's **Home** brings the home app back). Choosing the face or Home yourself (the drawer's **Face** or
+  **Home**, the face button on the music page), or going back to the app, keeps the music page away until the music has
+  stopped; a face chosen that way stays, as it always has, until the drawer's **Home** brings the home app back.
+- **Clock when idle** (Screen page, card **When idle**, off by default): where the screen would go dark, it shows the
+  time across the whole screen instead, with the date under it (in the language of "Language you speak"), a clock for
+  the nightstand. The wait is the screen's
+  own: **Screen sleeps after** (5 minutes), 1 minute with the mic off or in Do not disturb (the clock then says so on a
+  line under it). Until then the face shows as always; a touch on the clock brings it back (that touch does nothing
+  else), and so does anything the Echo does: a request, a ringing timer (with its **Stop**), a Drop In, the volume,
+  music starting. Music playing shows its bar under the clock. With an app or the music page in front the screen goes dark
+  as before.
+  Brightness follows the Brightness card: **Adaptive brightness** dims the clock at night.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
@@ -503,6 +598,12 @@ satellite of its own has to run without its microphone (as a display) while hass
   to +100) or dimmer (down to −100), as the stock slider does with adaptive on. With Kiosk Satellite installed, the Echo
   switches off the app's own adaptive brightness (stopping the app for a moment), so these settings set the screen; switched
   on again in the app, it goes off again within seconds.
+- **Adaptive colour** (Echo Show 8 2nd gen): under **Screen**, **Brightness and colour** also has Amazon's
+  **Adaptive Color** setting. It warms the screen's white with the room's light, which can turn a dashboard yellow
+  at night. It is **off by default**. Switch it on to follow the room's light again; your choice survives a restart.
+  The switch shows the device's confirmed state, so a change can take a few seconds to appear. It is hidden while
+  the display service is unavailable. Amazon can temporarily switch it off during video playback. Returning to
+  stock Alexa restores the original setting.
 - **Words and timers** (the settings page's Screen page, both off by default), over whatever the screen shows: the
   face, the music or an app (Kiosk Satellite too); not over the menu pulled down from the top, which hides them while
   it is out.
@@ -555,9 +656,21 @@ Assistant starting on the Echo pauses the phone. The voice assistant ducks both,
 ended, by 16 dB unless "Music ducking" (Sound page, 0 to 60 dB) says otherwise: raise it if commands over loud music or
 an audiobook are not understood. "<wake word>, stop" pauses either, and the action button pauses and resumes.
 
-- **Music Assistant** finds the Echo by itself (Sendspin player). Pair it with the Echo's token: shown at the end of
-  `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in Home Assistant (disabled by default).
-  Steps: the model's page, "Optional: Music Assistant". When Music Assistant restarts, the Echo announces itself again
+With several Echos (wake word arbitration on), every Echo that heard the wake word turns its music down too, by its
+own "Music ducking", until the Echo that answers is done: two Echos in one room playing the same Music Assistant group
+both go quiet for your command and the reply. An Echo that did not hear you, in another room, plays on. The answering
+Echo tells the others over the Echos' own network that it is busy (every 2 s) and when it is done; without Home
+Assistant, without touching the volume. A follow-up question keeps the others down for your answer too; music Home
+Assistant then plays on the answering Echo (a radio you asked for) does not. If the "done" is lost, the music comes
+back about 7 seconds after the last "busy". "Duck for other Echos" (Sound page, on by default) switches it off for
+one Echo. The log says
+`duck: echo-living-room answers what we heard too, music down until it is done` and `duck: ... is done, music back`.
+
+- **Music Assistant** finds the Echo by itself (Sendspin player) and, with Home Assistant 2026.11 and Music Assistant
+  2.10.9 or later, pairs with it by itself too: the Echo tells Home Assistant its Sendspin id, and Home Assistant hands
+  Music Assistant the Echo's pairing token, over the encrypted connection only. With older versions pair it by hand
+  with the token: shown at the end of `scripts/setup.sh`, and as the diagnostic entity "Sendspin pairing token" in
+  Home Assistant (disabled by default). Steps: the model's page, "Optional: Music Assistant". When Music Assistant restarts, the Echo announces itself again
   until it is back (after 30 s, then less and less often, at most every 30 min). Where Music Assistant cannot see the
   Echo's announcements (another subnet or VLAN), add `<echo-ip>:28928` under its Sendspin provider's "Manual IP
   addresses for discovery": with the port, since a bare address means Sendspin's default 8928, which is not the Echo's.
@@ -652,7 +765,11 @@ name and state.
 ## Bluetooth proxy
 
 Works like an ESPHome `bluetooth_proxy` with `active: true`: scanning, up to 3 connections, "Just Works" pairing only.
-While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering.
+While a phone plays, the proxy stops scanning: the radio cannot do both without the music stuttering. While Home
+Assistant talks to a connected device (a desk moving, a lock), scanning pauses too, until a second after the last
+request and for about 30 seconds at a time (then it scans for 3 seconds). Connected devices get the short link
+ESPHome's proxy asks for (about 10 ms; a device that asks for a link of its own gets that one): an exchange took about
+25 ms, measured with a PC as the device (not yet with a desk).
 
 On by default. "Bluetooth proxy" (settings page, Features) switches it off: the Echo then tells Home Assistant it is no
 proxy, so Home Assistant sets up no scanner for it, and the Echo stops scanning and refuses connections. Disabling the
@@ -677,13 +794,18 @@ Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (I
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |
-| Sendspin pairing token | diagnostic, disabled by default |
+| Sendspin pairing token | diagnostic, disabled by default, no state until Home Assistant has set the Echo's key: Music Assistant gets the token from Home Assistant by itself (2026.11 and later) |
 
 Time and time zone: the Echo takes both from Home Assistant, over the encrypted connection only (no time before
 Home Assistant has given it its key), when it connects and every 6 hours. Change Home Assistant's time zone and the Echo
 follows within those 6 hours, or at once when Home Assistant reconnects. Home Assistant says the zone as its rule
-(offset and summer time), not its name, so the Echo picks a zone with that rule from its own time zone data: it may
-call Europe/Berlin "Europe/Amsterdam", with the same time. Its log stays in UTC.
+(offset and summer time), not its name, so the Echo picks a zone with that rule from its own time zone data: the
+one of the country Home Assistant's home location (its Home zone) is in (Germany: Europe/Berlin, not
+Europe/Amsterdam, which has the same time). It reads that location from Home Assistant like any other state and keeps
+only the country, never the coordinates. Within about 3 km of a border, or without a location, it takes the country
+your Wi-Fi router says it is in. With neither it keeps a zone set on it before, else takes one with the right time
+whose name may be another country's; that one never sets the language ("Language you speak", under Voice). Its log
+stays in UTC.
 
 A new IP address (the router hands out another one, or a Wi-Fi switch): Home Assistant finds the Echo again by itself,
 within about two minutes. It ignores the Echo's announcement while it still holds the old connection (90 s), so the
@@ -740,12 +862,17 @@ network. Then:
   Its updates install by themselves.
 - Its own adaptive brightness is switched off: the Echo's brightness settings set the screen
   ([The screen](#the-screen-echo-show)).
-- Three rows appear on the settings page under System, once the app is installed:
+- Four rows appear on the settings page under System, once the app is installed:
   - **Internet access** (on): only that app gets out, for its updates and outside pages. Off: your network only.
   - **Microphone** (off): for a plugin that talks, such as a doorbell. In the plugin pick "Voice communication": "Automatic"
     and the other sources give silence. The wake word keeps working during such a call.
   - **Camera** (off): needed to scan a QR code on the Echo. The Home Assistant token can also be pasted from a PC at
     `http://<echo-ip>:2324`.
+  - **DLNA renderer** (off): phones and media servers on your network find the app's DLNA renderer and play on the
+    Echo. Switch the renderer on in the app too (off there by default). The firewall then admits the port the app
+    names under Settings > DLNA Renderer > Server port, from private addresses only and only while the app listens
+    there, and closes it when the renderer stops. A port you type in the app works too. DLNA has no password: anyone on
+    your network can play on the Echo while this is on.
   Turning microphone or camera off closes the app for a moment.
 
 To remove it, `scripts/kiosk-install.sh --uninstall [echo-ip]`. A plain `adb uninstall` fails, because the Echo made the
@@ -786,7 +913,9 @@ Amazon hands out: "Download from Amazon" on the settings page, or `scripts/artif
 Amazon does not hand this model to the Echo Show 5 (it refuses that device type); "Copy models" from a Dot that has it
 is the way there, not yet tried on a Show.
 
-The sensor is set when you stop speaking, before speech to text has finished, so the agent's prompt can read it. For
+The sensor is set when you stop speaking, before speech to text has finished, so the agent's prompt can read it. Each
+request starts it as unknown: a request that is not scored (the wake word alone, a cancelled one) never leaves the one
+before's answer standing. For
 example, in the LLM conversation agent's instructions. The template finds the sensor of whichever Echo you spoke to,
 so one prompt serves every Echo, whatever you named them:
 
@@ -805,7 +934,9 @@ Replace `[whisper]` with the markup your text to speech understands; Piper has n
 > may be read out aloud. Expect a whispered answer most of the time, not every time.
 
 - In tests (Echo Dot 2, German, 1–2 m) whispered commands scored 984–999 of 1000, spoken ones 0–18, quiet ones too.
-  Saying the wake word normally and whispering the rest is fine.
+  On an Echo Dot 3 among five Echos, "Alexa" whispered too: 890–993 whispered, 0–1 spoken. Above 500 counts as
+  whispered. Saying the wake word normally and whispering the rest is fine: the detector hears what Home Assistant
+  hears, from the wake word's end on.
 - Sounds without words (breathing, rustling) can score high, but only what the pipeline took for a command is scored.
 - On the Echo, during your request only. ESPHome only. Background: [re-whisper.md](re-whisper.md).
 
@@ -820,10 +951,12 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 - **Only between the Echo and the router**, also in the next room if the router is there. Elsewhere in the room may
   not show at all.
 - **Expect false alarms** from other Wi-Fi devices, doors, people in the router's room; try the sensitivity before
-  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3 and Echo Show 5 allow
-  for that).
+  relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3, Echo Dot 5 and Echo Show 5
+  allow for that).
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
-  on (within 10 s), then until the Echo restarts.
+  on (within 10 s), then until the Echo restarts. Where Wi-Fi going off and on reloads the driver (seen on the Echo
+  Show 5), the module hooks the new one by itself (from the version of 2026-11-17 on, once the Echo restarted; not yet
+  seen on an Echo); should no frame reach it for a minute, the sensor shows unknown and the log says why.
 - ESPHome only. It does not use the microphones; muting does not stop it.
 
 ## Settings page
@@ -890,13 +1023,24 @@ turns the action button, microphone and volume sounds off too, as that switch di
 **Identify** (at the foot of the menu, and beside each Echo in the lists; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
-**Speaker gain** (Sound; Echo Dot 2, Echo 2 and Echo Dot 3, and the Echo Show 5 and both Show 8s): for an Echo that is too
+**Note**: a few words of your own under the Echo's name at the top of the menu, such as where it stands. Click "Add a
+note" there, or Edit on the Note row of the System page; save it empty to remove it. It shows in the browser tab's
+title, on your other Echos' pages (Overview, Echos, the list below) and on the login page, so you know which Echo's
+button to press. Up to 80 bytes, one line. Anyone on your network can read it, as the name. It stays with that Echo:
+not in the settings file, and a factory reset removes it. The name itself is fixed; name the Echo in Home Assistant.
+
+**Your other Echos from the name**: click the Echo's name at the top of the menu (or press the down arrow key on it) for
+a list of your other Echos with their notes and addresses. Pick one and its settings page opens on the page you are on
+(Voice here, Voice there). It lists the Echos the Echos page knows; one that does not answer comes last.
+
+**Speaker gain** (Sound; Echo Dot 2, Echo 2, Echo Dot 3 and Echo Dot 5, and the Echo Show 5 and both Show 8s): for an Echo that is too
 quiet at full volume. It raises the analog gain in front of the speaker (Echo Dot 2 and Echo 2: the codec's "HP Driver
 Gain", +0 to +12 dB over stock; Echo Dot 3: the amplifier's output level, +0 to +2 dB, all it has above where Amazon
 leaves it; Echo Show 5: the codec's line out, +0 to +12 dB in steps of 1.5 dB, each dB set going to the nearest step; Echo Show 8 1st gen:
 the same, and down to −6 dB, since it is loud at full volume already; Echo Show 8 2nd gen: the amplifier's digital
 volume, +0 to +9 dB in steps of 0.5 dB, the top kept below where bass distorts; Echo Show 5 2nd gen: it depends on the
-amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's), so everything the
+amplifier in that unit: as the Show 5 with Realtek's codec, +0 to +4 dB with TI's, +0 to +6 dB with Maxim's; Echo Dot 5: its
+Maxim amplifier, +0 to +6 dB), so everything the
 speaker plays gets louder at every volume step; the 3.5 mm jack and Bluetooth speakers keep their level. Owners of an
 Echo Dot 2 found +6 dB loud and clean at full volume; speakers differ, though (some Dot 2s are much louder than others
 at the same gain), so raise it a step at a time and lower it at the first crackle: loud music near full volume
@@ -967,6 +1111,7 @@ ARGS=""                     # extra options, below
 | `-m <pryon.manifest>` | wake word model to start with, until one is picked in Home Assistant |
 | `-w remote` | wake word in Home Assistant; the page then cannot change it |
 | `-E` | no sound on wake |
+| `-D` | the microphone keeps streaming while a reply plays (Wyoming, for a realtime agent such as hermes-talk's Echo surface; the echo canceller keeps the reply out) |
 | `-L` | leave the LED ring alone |
 | `-V` | leave the volume buttons alone |
 | `-z 0` | no Sendspin player |
@@ -1010,3 +1155,7 @@ for 30 minutes:
 | Encrypted link | ✅ key set by Home Assistant | ❌ plain TCP |
 | Online updates | ✅ | ❌ pushed from your PC only |
 | Settings page, setup from a phone, factory reset | ✅ | ✅ |
+
+## Echo Dot 5 (Cannoli) development
+
+For Cannoli NS6575/build 8349, follow the [device instructions](../devices/cannoli/README.md). This port requires the separate NAND/UBI installation workflow and isn't part of the upstream guided setup or release matrix yet. The remaining work is tracked in [PLAN.md](../PLAN.md).

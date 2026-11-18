@@ -22,14 +22,14 @@ and refuse a mismatch. Every Echo on Fire OS or Vega OS, with or without a direc
 
 | File | Used by | What |
 |---|---|---|
-| `device.mk` | `Makefile` | compiler target (NDK API level), audio and wake word backends, stock libraries to link against; optionally the Wi-Fi motion kernel module (`KMOD`) and its kernel (`KVER`, `KARCH`, `KCROSS`, `KCONFIG`: the kernel's own config (IKCONFIG of `boot.img`) in the model's directory, or `KFRAG`: a fragment where the kernel has none, `KCFLAGS`; and what `make kernel-tools` downloads for it: `KSRC_URL`, `KSRC_SHA256`, `KCC_URL`, `KCC_DIGEST`, unless the Makefile's 3.18 defaults fit) |
+| `device.mk` | `Makefile` | compiler target (NDK API level), audio and wake word backends, stock libraries to link against; optionally the Wi-Fi motion kernel module (`KMOD`) and its kernel (`KVER`, `KARCH`, `KCROSS`, `KCONFIG`: the kernel's own config (IKCONFIG of `boot.img`) in the model's directory, or `KFRAG`: a fragment where the kernel has none, `KCFLAGS`, `KMOD_INIT` (`tools/kmod-init.py`), `Module.symvers` beside it where the kernel has modversions (`tools/kcrc.py`); and what `make kernel-tools` downloads for it: `KSRC_URL`, `KSRC_SHA256`, `KCC_URL`, `KCC_DIGEST`, unless the Makefile's 3.18 defaults fit) |
 | `board.c` | `hassmic` (linked in) | `struct board` from `src/hassmic/board.h`: identity towards Home Assistant, the codename (names the model's bundle in a release), input devices, mute latch, Bluetooth device node and address, stock wake word and earcon paths, thermal zone, light sensor, LED volume steps, the speaker's volume curve (`volume_curve`, required: below), the ALSA control a "Speaker gain" may raise, its stock value and steps per dB (or per `speaker_gain_db` dB where a step is not a whole dB) (`audio_device.xml` or `mixer_paths.xml` of the firmware, or the kernel's control tables where the firmware leaves it alone) |
 | `device.conf` | PC scripts (`scripts/lib/device.sh`) and, shipped next to them, the scripts on the Echo | product and firmware id, firmware file and checksum, files to compare in `probe.sh`, install method, the daemon's user and groups, names of the stock services to stop; `KMOD`/`KMOD_ARGS` for `main.sh` to load the Wi-Fi motion module; Android models (`ANDROID=1`: Android's framework runs, so the scripts ship and use `wifictl.dex`; independent of `INSTALL`; `ringbar.dex` goes with `SCREEN_BAND`): `ALEXA_PACKAGES`/`SETUP_PACKAGES` (`pm disable`, `package/class` for one component) and `STOCK_APPS_OUT` (folders under `/system` that `sysinstall.sh` takes off the partition) |
 | `stubs/*.syms` | `make STUBS=1` (CI) | per stock library in `LIBS`, the symbols our binaries need of it, written by `tools/mkstubs.sh` from the firmware: stand-ins to link against without it |
 | `hassmic.rc` | `install-system.sh` → `/system/etc/init/` | init services, and the trigger that starts the satellite once the audio stack is up |
-| `sepolicy.rules` | `install-system.sh` | allow rules added to the stock policy so init can start the scripts |
+| `sepolicy.rules` | `install-system.sh` | allow rules added to the stock policy so init can start the scripts; hassmic's own domain (`scripts/system/sepolicy-hassmic.rules`, `sepolicy-mirror.sh`) is added after them on every model |
 | `README.md` | people | what is known about the model, and its install instructions (requirements, downloads, unlock, root, install) |
-| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh`; `ROOTED_SKIP`: the steps an Echo rooted already has behind it (`rooted_already` in the steps); on Windows (`WINDOWS`, Git Bash) the unlock tool never runs: `step_unlock` calls `unlock_elsewhere` instead, which names the model's `WIN_UNLOCK` (another way to unlock from Windows) if it sets one; a model whose unlock runs on Windows sets `UNLOCK_WINDOWS=1` and handles `WINDOWS` in its steps itself (biscuit: firebreak) |
+| `setup.sh` | `scripts/setup.sh` | the same install steps for the guided setup: `STEPS` (id and title per line) and one `step_<id>` function each, built from the helpers in `scripts/lib/setup.sh`; `ROOTED_SKIP`: the steps an Echo rooted already has behind it (`rooted_already` in the steps); the unlock tool never runs from it, nor is it unpacked or its steps retold (its author, R0rt1z2, asks that it is only run by hand as his XDA thread says): `step_unlock` takes an Echo on adb as unlocked (`twrp_or_unlocked`: TWRP, or Fire OS restarted into TWRP), else names the model's thread with `unlock_thread` (`XDA`), waits for Enter and checks again; boot-root, R0rt1z2's too, the same way: `step_root` waits in TWRP with `root_thread` and checks for root adb; on Windows (`WINDOWS`, Git Bash) `step_unlock` calls `unlock_elsewhere` instead, which names the model's `WIN_UNLOCK` (another way to unlock from Windows) if it sets one; a model that can be brought from stock to adb on Windows sets `UNLOCK_WINDOWS=1` and handles `WINDOWS` in its steps itself (none since firebreak left biscuit's, 2026-11-09) |
 
 A model without `setup.sh` is listed by the guided setup as not supported yet; a model without `device.mk` does not
 build.
@@ -60,7 +60,9 @@ Rough order. Each step is safe to stop at.
 
 1. **Unlock and root.** This is the hard part, and it is different for almost every model (bootrom exploit, TWRP or
    none, A/B slots or not, how the SELinux policy can be patched). Write down what worked in the new model's
-   `README.md`. Pin the firmware version before the Echo ever reaches Amazon: an update can close the hole.
+   `README.md`, except the unlock's own steps: link its XDA thread for those, and have `step_unlock` use
+   `unlock_thread` (the tools are R0rt1z2's, and he asks that they are only run by hand as his thread says). Pin the
+   firmware version before the Echo ever reaches Amazon: an update can close the hole.
    Amazon's help pages list only version numbers now; FTVDB has a record page for most builds (not always the
    newest: radar's), with Amazon's download (`https://ftvdb.com/echo/firmware/com.amazon.<codename>.android.os/`).
    Link that record page, not the download itself, and put the size and sha256 in the README.
@@ -81,6 +83,8 @@ Rough order. Each step is safe to stop at.
      `volume_curve`: see [Volume curve](#volume-curve); until it is measured, `board_vol_dot2` with the comment the
      other models have.  `cold_lead_ms` (Android models): `tools/cold-lead.py` with a microphone on the PC beside the
      Echo measures what a sound loses when the output was closed; -1 where nothing, unset (350 ms) until measured.
+     `call_mic` (mixer models): 1 once micHfp, read beside micRaw while speech plays on a Voip stream, has the echo well
+     under micRaw's (the call path; PLAN.md "Calls with Amazon's call microphone" has the take); unset, calls send micAsr.
    - `device.mk`: API level from `ro.build.version.sdk`. If the model has Amazon's `mixer` (`libmixerAPI.so`) and
      `libpryon.so`, the existing backends should work once `probe.sh`, `mixcap` and `pryon_test` agree. If not, write a
      new `audio_*.c` or `wake_*.c` behind `audio.h` / `wake.h` and name it here.

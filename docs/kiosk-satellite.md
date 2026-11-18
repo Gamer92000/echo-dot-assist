@@ -137,6 +137,61 @@ gets `-m owner --uid-owner <uid of KIOSK_PACKAGE, from /data/system/packages.lis
 that one uid, nothing else. Off removes the rule.  Also admitted: INPUT TCP 2324 (KS's web page and API) and 6053 (its ESPHome API, the one Home Assistant's ESPHome integration connects to; hassmic's own is 26053), both outside
 16384-32767) from private addresses only (`keep`), and UDP 2330 in `arbitration_mode=kiosk`.
 
+**DLNA renderer** (issue #109). The app has one of its own, off in the app by default. rmaffeo, athena with KS
+2026.10.45: device description (`/device.xml`), SOAP control and event subscriptions on TCP 2326; discovery is SSDP, a
+controller's `M-SEARCH` to 239.255.255.250:1900. With INPUT rules for both added by hand, discovery, control and
+playback worked. From the app's source (jxlarrea/kiosk-satellite, 2026-11): `dlna_manager.dart` binds the renderer
+to `0.0.0.0` at its "Server port" setting (2325 when empty) or up to 3 above it, whichever is free first, and writes
+the port it got back into that setting (`flutter.ks.dlna.port`, a string in `shared_prefs/FlutterSharedPreferences.xml`);
+2325 is taken on athena by the app's secure-context proxy, which binds `127.0.0.1` only (`proxy_manager.dart`). SSDP:
+`0.0.0.0:1900` with `reuseAddress`/`reusePort`, joined to 239.255.255.250. The app also listens on `0.0.0.0:2329` (its
+voice chime, `sound_manager.dart`) and on a port of the kernel's (intercom), so "what the app listens on near 2325"
+would have opened those too.
+
+Setting **`kiosk_dlna`** (settings page, System; screen models, shown once the app is installed; default off; not
+exported). `kiosk_state` reads it from `state/config` (`=on`); `kiosk_dlna` then reads `/proc/net/{tcp,tcp6,udp,udp6}`:
+- TCP: the port in the app's setting, read as the app's own user (`runas u0_a<n>`: a link or a FIFO put there reaches
+  only what the app could, as `main.sh`'s `kiosk_prefs`; a link is not followed), admitted only while the app's uid
+  listens on it beyond loopback (state `0A`). Any port 1024-65535, so a port the owner typed in works. The rule goes
+  when the renderer stops, and whatever listens on that port later is not reached through it. The preferences
+  unreadable (no `runas` beside the script, another format): the app's listeners in 2325-2328, the renderer's own range
+  at the default, never 2329. `runas` runs only while the app listens on something beyond 2324 and 6053.
+- UDP 1900, destination 239.255.255.250 only: INPUT cannot match the socket's owner (`-m owner` is OUTPUT's), so it is
+  admitted only while the app's uid holds a socket on 1900 and no other uid does (loopback-bound ones aside). Another
+  uid there too: not admitted, and the firewall log says which (`apply`). Looked at every 5 s: another uid that binds
+  1900 in between gets the searches until the next look. The renderer's answers, announcements and
+  GENA events go out as any local traffic does. A search sent to the Echo's own address (UPnP 1.1's unicast
+  `M-SEARCH`) is not admitted: Home Assistant's `dlna_dmr` (async_upnp_client) and the controllers tried search by
+  multicast, and the renderer says UPnP/1.0.
+
+Both from private and link-local IPv4 only (`kiosk_rules`), in `keep` with 2324 and 6053. A rule of the app's shape
+(from one of those sources, to a port in 1024-65535, or SSDP's) that is not wanted now (another port, the renderer
+stopped, the setting off, the app gone) is taken out by `load_once`/`load_each` (`kiosk_stale`, the shape read with the shell's own patterns, no fork per
+rule), and
+`wrong()` names its port, so the 5 s check follows a moved port within a round. The screen models have no stock
+`firewall.sh` and their `FW_KEEP` is DHCP's alone, so no rule of anyone else's has that shape. An app restart takes the
+rule out for the seconds the renderer is down and puts it back: connections already open stay (the `ESTABLISHED`
+rule), and Home Assistant reconnects on the renderer's next `ssdp:alive`. Not yet seen on a Show: whether anything of
+Amazon's listens on 1900 (the rule stays out then, and says so).
+
+Tried on a Show 5 (checkers, Android 7.1.2, KS 2026.11.11, 2026-11-11), the PC on another subnet of the same router:
+with the renderer off, the app listened on `0.0.0.0:2324` and `127.0.0.1:2325` (the proxy), nothing of anyone on 1900.
+Renderer on (its prefs): `0.0.0.0:2326`, `flutter.ks.dlna.port` 2326 written back, UDP `0.0.0.0:1900` the app's alone.
+Before the rules `/device.xml` timed out from the PC; after one apply it answered, SOAP `GetTransportInfo`,
+`GetVolume`, `SetAVTransportURI` + `Play` (an image from the PC, fetched by the Show) + `Stop` worked, and a GENA
+`SUBSCRIBE` got its `NOTIFY` back. The setting's port set to 2340: the check said the 2340 rules were missing, apply
+put them in and took 2326's out, 2340 answered (read through `runas` from the `su` domain). Renderer off: the check
+named `1900 2340` as not wanted, apply took them out. Started again, the renderer once won the race with the proxy
+and took 2325 (the proxy then not listening at all): the rules followed to 2325. Multicast discovery itself was not
+tried (no controller on the Show's subnet). A check took 0.33 s against 0.32 s for the release's with the setting off,
+0.42 s on with nothing listening, 0.5 s with the renderer up (the runas).
+
+What it widens: the port is whatever the app writes to its own setting, so while `kiosk_dlna` is on the app can open
+any port of 1024-65535 to the LAN by listening there, where before only 2324 and 6053 were. That is within "trusted
+like adb" (its update helper already runs as the shell user), but it is the app's choice, not this project's. The
+renderer itself has no login: DLNA has none, so anyone on a private address can play on it, control it and subscribe
+to its events.
+
 Checked on the Show 8 2nd gen (2026-10-15): KS's uid reaches `api.github.com:443`; root, system and shell time out;
 `iptables -L hassmic_out -v` counts the uid rule's packets. (A resolver of the user's network may block some public
 addresses regardless: 1.1.1.1:443 timed out from the same uid while GitHub connected.)

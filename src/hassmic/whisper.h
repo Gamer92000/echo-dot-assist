@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* whispered: 1 or 0; confidence 0..1000 against the model's threshold */
+/* whispered: 1 or 0; confidence 0..1000 against the cut-off (threshold) */
 typedef void (*whisper_cb)(int whispered, int confidence, int threshold);
 
 int  whisper_open(whisper_cb cb);           /* loads the model; -1: none installed (or it does not load) */

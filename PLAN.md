@@ -196,6 +196,43 @@ Run in this order. Each step says what it proves.
       Verified by the author on a Dot 2; `tests/fake_ha_remote_followup.py` (fails on the old core: flags [3, 3, 3]).
       Seen meanwhile, not fixed: with `-w remote` an ERROR outside a reply (e.g. nothing said) ends the run and asks for the
       next, then its RUN_END finds that new run and asks again: two starts, HA cancels the first
+- [~] Bluetooth proxy latency (issue #167, 2026-11-12/13): the Idasen desk stutters through a Dot 2, not through an ESP32
+      proxy (the report). HA's `idasen_desk` (idasen-ha 3.0, idasen 0.14) moves by a loop: write the target with response
+      (bleak 3 picks with-response when the characteristic has it), sleep 100 ms, GATT read of height and speed; the desk
+      stops between refreshes that come late. Its up and down buttons are writes without response. Measured on the Dot 2
+      (2026-11-13, the PC's BlueZ as the device, `bluetoothctl advertise peripheral`; descriptor write with response + 100
+      ms + read of the device name, 150 rounds a run; builds run by hand with an empty `HASSMIC_STATE`, plaintext API): LE
+      Create Connection's 30-50 ms gives 50 ms, each request and answer 100 ms (two events), the loop 300-350 ms, 464-506 ms
+      while Wi-Fi is saturated; at 11.25 ms 22-24 ms a request, the loop 146-150 ms, 261-301 ms under load. Wi-Fi PC -> Echo
+      (toybox nc, 24 MB, 3-6 runs each): idle link 2.06-2.63 MB/s at 11.25 ms, 1.71-2.31 at 50 ms; with the loop running
+      2.15-3.00 against 2.35-2.53: no cost found, but the measurement is weak (one early run at 0.8-1.6 did not repeat; the
+      house's Wi-Fi varies 0.68-2.05 without any link). Changed: (1) ESPHome's 8.75-11.25 ms (`MEDIUM_*_CONN_INTERVAL`,
+      esphome/components/ble_device_base/ble_client_state.h, dev branch 2026-11-12) asked for by LE Connection Update once
+      the MTU exchange is done (`fast`; HASSMIC_IVAL/NOUPD experiment builds, not in git, for the interval sweep), not in LE
+      Create Connection: there 14 of 16 tries to the PC failed (it ends the link, 0x13, when its LE Read Remote Features is
+      refused 0x1a, btmon; at 30-50 ms 12-14 of 24 failed, old and new build alike, so the PC is a flaky test device). A
+      device that asked for its own parameters (L2CAP) gets them (ours not sent when it asked first); one update at a time
+      (`upd_wait`, 5 s cap), refusals retried after 1 s (ours 2 tries, its 3), neither during encryption or pairing; never
+      on the peripheral link. Linux apparently asks only when the interval is outside its 30-50 ms, so the PC stayed at
+      11.25 (the update's Complete came 430 ms after the connect). The interval is logged (`connected to ..., interval`, LE
+      Connection Update Complete). (2) Scan paused for GATT (`gatt_busy`: 1 s after each request HA sends, spells of about
+      30 s, then 3 s of scanning). ESPHome keeps scanning while connected, in its 30 ms window (`connection_scan_window`,
+      esphome/components/esp32_ble_tracker/__init__.py, dev branch 2026-11-13). Measured at 11.25 ms, 3 runs each (a local
+      experiment build, not in git: `gatt_busy` returning at once when an env variable was set): loop 146-148 ms (p90
+      158-162) with it, 158 ms (p90 180-191) without; under load 270-301 (p90 315-360) against 292-305 (p90 372-439); Wi-Fi
+      with the loop running 2.15-2.65 against 2.04-2.55. At 50 ms no difference (300 ms both). `ble_scanning()` says what HA
+      was told, so a subscribe during a pause does not hear idle. (3) Each ESPHome message in one `writev` (`write2`;
+      TCP_NODELAY was on already, `net_accept`): one segment instead of two, effect not measured.
+      `tests/fake_ha_bt_proxy.py`: the connect at 30-50 ms, the update to 8.75-11.25, a device's own wish kept, the pause
+      and its end, the scanner state asked for during it. **Open:** not tried with a desk, nor whether the Idasen asks for
+      parameters of its own (then it keeps its own interval). Not tested: the 30 s spell and 3 s break; writes without
+      response and service discovery starting a pause; refused updates, their retries and a failed LE Connection Update
+      Complete; a device's request arriving while ours is in flight or during encryption; no update when the link is already
+      at 11.25 ms or less; the `!c->srv` guards; the report after a controller lost during a pause and the 100 ms report
+      cap; `write2`'s short writes. Fixed too, older than this: an encryption that never finished (a pairing timed out in
+      S_ENC, or a bonded link's Start Encryption never answered) left `enc_pending` set, which held GATT requests (and now
+      both updates) until the link ended; 30 s after Start Encryption went out (`enc_t`, SMP_MS) the link is closed now (not
+      tested). Left: a key refresh event clears `enc_pending` early (older, harmless here).
 - [x] Bluetooth proxy as a feature (issue #152, 2026-11-09): setting `bluetooth_proxy` (Features, on by default, exported).
       Disabling HA's entities left the scanner: HA subscribes to raw advertisements whenever the device info carries
       proxy flags. Off: `proto_esphome.c` `bt_proxy()` leaves fields 11, 15 and 18 out of the device info, refuses
@@ -204,6 +241,63 @@ Run in this order. Each step says what it proves.
       a connect HA asked for that ble.c's thread had not taken yet came up afterwards and stayed, a slot taken for
       good). ble.c keeps the controller for A2DP, the speaker and Improv. `tests/fake_ha_bt_proxy.py` (fake_improv.py's controller; `HASSMIC_BT_MAC` stands in for idme's
       `bt_mac_addr` in ble.c). **Open:** not tried on an Echo with a real Home Assistant (whether HA drops the scanner at once).
+- [~] "Stop" forwarded to a ringing Echo (issue #161, 2026-11-10): `ringstop.c`. A ringing Echo claims with prio 2
+      and every Echo that heard "<wake word>, stop" runs the keyword (`stop_word`, round lost or not), so what failed
+      was only a ringing Echo that never detected the wake word (too far, or its ring over it): no claim, the other
+      Echo won alone and had nothing to stop. Setting `timer_stop_from_others` (Voice, page only, exported, off) on
+      the ringing Echo: while `alarm_on` (`alarm_set` -> `ringstop_ringing`) it broadcasts `T_MSG` `{0x41, 1}` (three
+      copies 0/100/300 ms, then every 2 s) and `{0x41, 0}` when it stops or the setting goes off; every Echo keeps the
+      members that ring, `HOLD_MS` 6.5 s past each "on". `stop_word` with nothing of its own to end (no ring, call,
+      SPEAKING/THINKING run, nor a LISTENING one its wake word cut) and a member ringing: `ringstop_forward` queues
+      `{0x42, id32}` (three copies, one id; receivers take each sender's id once), the "stop" counts as ended (music
+      not paused, the wake word's LISTENING run dropped, `trigger` starts none in the round). Not via `wake_cut_ms`:
+      that made a "stop" transcript within 10 s look like one of a cut here and skip the forward (found by the test).
+      One rule for keyword and transcript (`stop_is_here`): a ring here, SPEAKING, THINKING (keyword only: at the
+      transcript the run itself is THINKING), or a cut by the last wake word (`wake_cut_ms >= heard_ms`). Not "a cut
+      within 10 s": a ring here cut and stopped kept a "stop" for another Echo's ring 7 s later from going out (found
+      by the test's control). `core_transcript` forwards before `music_stop`; `cut` (10 s) only when not forwarded.
+      `ringstop_forward` sends nothing and returns 0 without its thread, outside our mode or without members (arb's
+      lock under `core_lock`, as proto_esphome.c's `arb_peers()`), so the "stop" stays this Echo's.
+      **Open (accepted):** on the ringing Echo, a stop that arrives before its own detection of the same wake word is
+      processed finds `heard_ms` newer than `stop_ms`, and that run starts with "stop" in its audio; the "stop" is said
+      after the word and travels the network, so it would need the capture thread late by that much. `timer_stop_any` is not
+      forwarded. Whole house: the ringing Echo took no part in the round, so nothing tells how near it is (the rivals'
+      table only knows members that claim). The setting is the ringer's so that off (default) changes nothing on any
+      Echo. Kinds 0x41/0x42 beside the duck's 0x40: #165's builds take only 0x40, older ones drop a T_MSG to all.
+      Kiosk mode: no messages; its claims carry no priority either (Kiosk Satellite's protocol, not ours).
+      The receiver carries a stop out on ringstop's thread (`core_alarm_stop_elsewhere`; not on arb's, whose socket
+      would wait for `core_lock`) and drops a run its own wake word opened over the ring (it heard the word, not the
+      "stop"), as `stop_word` does. Taken only in our mode; no forward without the sender's thread. A remote ring wins
+      over local music, one stop ends every ring that allows it, and a false "stop" keyword (2 in 354 requests on one
+      Echo) now ends a ring elsewhere where it only paused music before: accepted for an opt-in setting.
+      `tests/fake_ha_arbitration_ringstop.py`. **Open:** not tried on two Echos; redeye86's case (biscuit + athena)
+      not confirmed to be the "never detected" one (logs of both Echos of one failed stop would say).
+- [~] Ducking on the other Echos that heard it (issue #165, 2026-11-10): `duck.c`. An Echo whose round runs ducks
+      from the wake word (`duck_round` in `wake_heard`'s score wait and `claim`, until the decision + `LOST_WAIT_MS`
+      1.5 s; `duck_won` clears it on the winner, whose state ducks from there). The winner, for a run a round it won
+      started (`WON_MS` 3 s; a button run or an announcement tells nobody), broadcasts a 2-byte `T_MSG` (`0x40`,
+      on/off) to every member (`arb_tell(NULL)`: `to` = ff x 8; older builds drop it; `hooks->message`'s `all` keeps
+      it from Drop In, whose invite to all would ring every Echo) on each change, three copies (0/100/300 ms), "on"
+      again every 2 s; only with members and in our mode. A follow-up or barge-in restarts from the IDLE that ends the
+      run (`core_pipeline_finish`; the next run is LISTENING in the same call, but the sender's thread woke between
+      the two and said "off", "on"): `duck_follow` bridges 5 s at most. HA's media is no run (`speak_media`: at the
+      request when nothing plays, else at the stream's start in `tts_kind`). A loser takes "on" within `ACCEPT_MS` 5 s
+      of its round from members that claimed in it (`arb_round_claimed`: `round_.cl`, kept until the next round),
+      up to 4 at once (two may both answer), each held `HOLD_MS` 6.5 s past its last "on", ended by its "off" (the own
+      round's duck, `round_until`, stays). The round stands in for "same room": HA has areas, but an automation would
+      act after the window plus its link, move the real volume (MA, ring, a change meanwhile lost) and need per-pair
+      setup. Setting `duck_for_others` (on) gates the receiving side and the round's own duck. `duck_active()` replaces
+      `core_state() != IDLE` in sendspin.c and a2dp.c. `tests/fake_ha_arbitration_duck.py` (each fix checked by
+      undoing it). **Open:** not tried on two Echos with real music.
+- [x] A note per Echo and the other Echos from its name (issue #153, 2026-11-11): the name is fixed (model + MAC end), so
+      Echos of one model differ by six hex digits. `web.c`: `state/note` (one line, control characters as spaces,
+      trimmed, 80 bytes cut before a split character; empty removes the file), `note` in `/api/hello` (unsigned like
+      the name: the login page shows it, where it says which Echo's button to press) and so in the state's `device`,
+      signed `POST /api/note`; not exported (it is this Echo's), gone with a reset. HA's own name or area would be
+      better, but ESPHome sends neither to the device and it does not know its entity ids. Page: the line under the
+      name and a "Note" row on System edit it; the tab's title, the Echos page and the overview show it; the name is a
+      menu of the other Echos (the Echos page's `others`, read again on opening when a round is over 30 s old)
+      linking to the same `#/page` on each. `tests/fake_web.py`; the layout in Chromium (desktop, phone, login).
 - [~] Ducking depth and multi press (2026-11-08): `DUCK` (a sixth, -15.6 dB) was fixed; the setting `music_duck` (0..60 dB, default 16,
       about the old 15.6) is the target of `music_duck()`'s glide in sendspin.c and a2dp.c, read through `settings_duck_gain()` (any thread).
       Reason: over a loud audiobook 15.6 dB left too little voice for STT. Setting `multi_press` (off): the action button pressed
@@ -486,6 +580,21 @@ Run in this order. Each step says what it proves.
       every 10 minutes and at the 5th request. Setting `wake_word_adaptation` (on).
       Open: the time on a device, real recordings (rmaffeo's, the #72 reporter's), native English and the untried
       languages. The models are in git (`wakealign/`, CC BY 4.0, credited in its README), every bundle carries them.
+      A fresh install did not (#160, derFinlay, 2026-11-09: an Echo Dot 3 and two Echo 2 set up from 28ff81c's beta,
+      German): `install-system.sh` and `install-boot.sh` push file lists of their own, the aligners not on them, so
+      /system/hassmic had none until the first update's promotion and `word_tail_end` went by the level, #72's pause
+      included, on every request (the Dot 3: 36 wake words, 0-360 ms of tail left out, 151 on average for the 31 with a
+      pause; no aligner line). After a push of the same build: `alexa aligned by .../alexa-de-DE.wa (de-DE spoken)`,
+      +40 ms from Pryon's end, aligned in 115 ms.  Both lists name them now.  `sysinstall.sh`'s room check held the
+      aligners alone against what is free: a first install with room for them and not much more took them and then
+      failed on its other files, and a promoted update counted installed aligners again against the room they took, so
+      a nearly full partition lost them and got them back the time after.  It counts what the run writes as `new()`
+      does: every file that differs from its destination (a first install's policy twice, the old one kept; the home screen app twice), and writes new
+      aligners only with a megabyte over it; those already there and the same stay whatever the room, others go
+      after `commit()` (a failed write leaves them) (`tests/unit/sysinstall_aligners_test.sh`, sysinstall.sh on the PC
+      with its paths in a folder).  Room seen: 754 MB free on the Dot 3's /system, 502 MB on an Echo 2's.
+      Open: an install through the changed scripts on a device; whether requests come out better with the aligner
+      (13 on two of the Echos since, a television on, what was said not known).
       Format 3 (2026-10-29): the 62 files were 6.58 MB (gzip 6.05, xz 2.09: the same data again and again), 16 of
       them byte for byte another's (en-CA = en-US, en-AU = en-GB, fr-CA = fr-FR: the same acoustic model and
       dictionary; alexa = alexa-en-US). Now a .was per acoustic model holds each GMM once (german 557 KB, english 757,
@@ -652,6 +761,19 @@ Run in this order. Each step says what it proves.
       `tests/fake_ma_sendspin.py`: approved unpaired → no player role; paired with the token → plays (19/19)
       The pairing token is also an ESPHome text sensor ("Sendspin pairing token", diagnostic, disabled by default) so it can be copied
       from Home Assistant.
+      **Paired through Home Assistant (2026-11-11).** HA 2026.11's ESPHome integration tells Music Assistant the Sendspin client
+      ids of devices whose DeviceCapabilitiesResponse has `sendspin.feature_flags & PAIRING_TOKEN` (`sendspin/subscribe_clients`),
+      and fetches the token with SendspinPairingTokenRequest (159/160, `sendspin/get_pairing_token`); MA 2.10.9's
+      `hass_auto_pair.py` pairs any unpaired encrypted client both announced and connected. Until then the list stayed empty for
+      Echos (seen on five Echos, each paired by hand). `proto_esphome.c` now answers DeviceCapabilitiesRequest (149/150: the proxy's
+      and voice assistant's flags as in DeviceInfo, Sendspin with the client id) and the token request (OK only on the keyed link,
+      else ENCRYPTION_REQUIRED, as ESPHome's `api_connection.cpp`; DISABLED with `-z 0`, before the key check; NOT_READY without
+      a client id, a guard only: sendspin_start sets it before the API serves). The text sensor's state likewise goes only to
+      a keyed subscriber (`send_token_state(c)`): before, every plaintext client read it until HA set the key, even with the
+      entity disabled in HA (setting a key first instead takes the Echo from HA, which shows). HA
+      asks for capabilities only from API 1.15 on (`device_capabilities_compat`), so the API version went 1.10 -> 1.15: 1.11 makes
+      the media player's feature flags its own (now sent: the set 1.10 implied, 1184268), 1.13 climate's, 1.14 object_id optional
+      (always sent); 1.16 (proxy acks) not taken. aioesphomeapi 46.4.1 -> 46.25.0 (HA 2026.11's) for the tests.
       Not implemented: PIN pairing (CPace: SHA-512 + Elligator2) → refused with `pair/abort method_not_supported`;
       metadata/artwork roles (no display). Installed and in daily use. Missing: listening test against another synced player in the
       same room (trim with MA's static delay)
@@ -1272,7 +1394,7 @@ Run in this order. Each step says what it proves.
       both times. Found there: back() let its own reconnect overwrite why (reported noassoc); fixed, fake now settles
       through ASSOCIATING. dhcpcd: init's `dhcpcd wlan0 -AdLK` (6.8.2), `-K` = no link events: 15 s on a missing network
       and back left address, router ARP entry (0x2) and `dhcp.wlan0.*` untouched, so the address-only check would have
-      passed on another network with the old lease. Now `setprop dhcp.wlan0.result hassmic` + `dhcpcd -n wlan0` and only
+      passed on another network with the old lease. Then `setprop dhcp.wlan0.result hassmic` + `dhcpcd -n wlan0` (a restart since 2026-11-15) and only
       a lease its hook (`95-configured`) writes counts; same network: RENEW in 1 s, switch in 5 s. Other subnet
       (192.168.100.0/22 -> DasImhof'scheTortenstueck 192.168.0.0/23): 17.8 s; there dhcpcd did see the drop (EXPIRE,
       CARRIER, a moment of IPv4LL) and REBIND gave 192.168.1.242, router 192.168.0.1; lockdown re-applied with the new
@@ -1680,6 +1802,16 @@ Run in this order. Each step says what it proves.
       model in `/data/local/hassmic/whisper` (`scripts/artifacts.sh`). `fake_ha_esphome.py`: unknown until a request,
       on at its VAD end. Live with HA (Echo Dot 2): fed from the start of streaming, the normally spoken wake word's
       tail took whispered requests to 641-979; with the first 0.5 s not fed, whispered 999/984, normal 1/0.
+      Broken by the replay from the ring (2026-10-12: the stream waits for the arbitration round and the word's tail):
+      the live audio at the start of streaming lay 0.8-1.7 s past the word's end, the 0.5 s skip on top. Echo Dot 3
+      among five Echos (2026-11-13, "Alexa" whispered too, German, capture dump replayed with `whisper_test` on the
+      Echo): 7 whispered requests 763/186/57/203/68/997/40 as fed (live: 764/192/57/215/68/997, the replay matches),
+      890/989/943/993/992/975/978 from Pryon's word end, 962-998 from its begin; 8 normal ones 0-225 as fed, 0-1 from
+      either. Now fed from the ring at the request's start (`whisper_from`: the tail's end, as sent to HA; the first
+      block without a wake word; live with `-w remote`, no ring), no skip, cut-off 500 (AHE's) instead of the result's
+      922. The detector is finished in a thread right after its end of utterance (backlogWait, session end, delete):
+      its result came now and then only when the next request retired it. The sensor goes unknown at each run start;
+      a request not scored logs why. Open: the live numbers with this build.
       Open: that the agent's template sees the new state in time (not checked with an LLM yet), other speakers.
       Background: stock has it on the device: `libpryon.so`
       exports `WhisperApi_*` (a detector of its own: audio in, end of utterance in, one `confidence` out, whispered
@@ -1791,6 +1923,32 @@ Run in this order. Each step says what it proves.
       `*Uspd.tflite` models, no ultrasound section in AFE.cfg. A `mixer` record stream `ultraSound` exists (reports
       2000 Hz x 9 ch x 32 bit) but the HAL refuses it (`Could not open input stream -22`), and **mixer retries every 10 ms
       for ever after the client has gone** (35 % CPU, logd 18 %) until `stop mixer; start mixer`: do not open it.
+- [x] Wi-Fi motion's hook lost with the driver (2026-11-13): an Echo Show 5 showed the sensor unknown for 37 h with
+      `hassmic_rcpi4m` loaded: `/proc/hassmic_rcpi4m` AGE 134762780 ms, FRAMES frozen at 75444, and `wlan_mt76x8_sdio`
+      newer than our module in `/proc/modules`: there Android's Wi-Fi HAL rmmods and insmods the driver on Wi-Fi off/on
+      (NetWatchDog's restarts before #168), the patched `bl` went with the old text, the new copy was
+      unpatched, and the module had no way back (permanent, no exit).  hassmic said nothing: a counter that does not
+      move is "no new frame" (`r == -2`), never a failure, so the sensor kept its last state (unknown there, likely
+      as a hassmic started after the freeze never had a reading).  Now: the module keeps the driver's name
+      (`__module_text_address` of the hooked function; cannoli: `drv_mod`) and a module notifier
+      (`register_module_notifier`) runs the same hook again at MODULE_STATE_LIVE of that name (init done, symbols
+      listed; module_mutex not held there, so cannoli's `HM_LOCK` around `find_module` works as in init), GOING logs
+      it and clears HOOKED; `HOOKED` in the proc file.  The proc entry is made once in init, not per hook.  `hook()` is idempotent
+      (a call already to hm_fill counts as done) and runs under a mutex of its own; init hooks, registers the
+      notifier, and hooks again, so a reload between the first hook and the registration (its LIVE heard by nobody)
+      is caught.  The freeze message goes by `HOOKED`: 1 "Wi-Fi down?", 0 "unloaded or not hooked again", missing on
+      an rcpi4m file "Wi-Fi down, or the Wi-Fi driver reloaded, which this older module does not hook again: restart the Echo if Wi-Fi is up" (the old module until a reboot).
+      60 s is no quiet link: idle, 13-17 frames/s came from the access point (donut, checkers above), broadcasts ~2/s;
+      and without frames nothing is measured, so unknown is the truth either way.  A driver found GOING (kallsyms and find_module still list it until it is freed) is not patched: hook_lock
+      held from that check through the patch keeps its text, as its GOING notifier waits for the lock.  Only the
+      hassmic side is tested (PC, a stand-in file); the module's re-hook has not run anywhere yet.  Athena's and cannoli's
+      `Module.symvers` got the new imports' CRCs (`tools/kcrc.py --check` against their stock modules:
+      register_module_notifier, strcmp, strlcpy; athena also __module_text_address, preempt_schedule, mutex_lock,
+      mutex_unlock).  Whether the
+      Dots' drivers are ever reloaded is not known (their init rcs insmod only the prealloc module); harmless there.  hassmic: the counter unchanged for 60 s (`FROZEN_MS`; 3 s on the PC) logs why once and sets the sensor
+      unknown (`motion = -1`), and the first new frame resets the detector and the kind levels (a new link may sit at
+      another level).  Test: `fake_ha_esphome_features.py` (the module's lines with a counter, stuck, moving again).
+      Not yet seen on the Echo: a reboot is needed for the new module (the old one stays loaded).
 - [~] Wi-Fi motion, experimental (2026-10-01, `wifimotion.c`): the receive level of the Wi-Fi radio as a motion sensor.
       donut's driver (`wlan_mt76x8_sdio.ko`, MT7668, gen4m) has CSI commands: `SET_CSI <mode 0/1> <wf 0/1> <frame slot
       0-3> <frame type 0 = beacon>` (argc 2 or 5, band fixed 0, role 1; command 0x4c to the firmware, 8 bytes) and
@@ -2021,8 +2179,7 @@ Run in this order. Each step says what it proves.
       LE Connection Complete as peripheral, ACL with credits), a phone's GATT client, py-improv-ble-client's packets,
       real wifi.sh on the fake tools, aioesphomeapi for adoption and the reset button, the keypad as a FIFO for the
       holds.  Open (device): the MT7668 advertising beside scanning/A2DP; a real phone (HA app on Android and iOS);
-      whether wifisvc or Amazon's own Wi-Fi store brings forgotten networks back after a reset; init's
-      `dhcpcd-wlan0` on a fresh Echo; acebuttond's 5 s hold (Amazon's setup mode; its services are stopped) doing
+      whether wifisvc or Amazon's own Wi-Fi store brings forgotten networks back after a reset; acebuttond's 5 s hold (Amazon's setup mode; its services are stopped) doing
       nothing visible; a Wi-Fi password with non-ASCII characters (refused, as on the page).
 - [x] One name (2026-10-07, asked after the first reset on the Dot 2 kept "Echo Dot 2" from hassmic.conf: no name in
       several places, a reset resets, the name comes from Home Assistant's adoption; default by model). HA's API has no
@@ -2317,9 +2474,241 @@ Run in this order. Each step says what it proves.
       white) LEDs 11 40, 0 dark, 1 green, 2 dark, 3 blue, 4 404040; HA's green then one colour at 75 %.  Identify
       over a 50 % fill: the rainbow 0.12 s after the press, the fill back at 10.3 s.  No ledctrl errors.
       Open: the Dot 3 (its system partition's room; no system image of it here) and the Echo 2.
+- [~] Light ring live (feature/led-live): any colour on any LED from Home Assistant, frame by frame, without a
+      ledcontroller restart.  Measured on a Dot 3 (donut NS65741, "Büro", 2026-11-12, `scripts/led-probe.sh`
+      read/stock/write; logs in device-logs/):
+      - The driver is ISSI's IS31FL3236 (36 channels, I2C 0-003f, DT `issi,is31fl3236`, `channel-offset` 3).  `frame`
+        is text: 12 LEDs x `RRGGBB` in hex, LED 0 first, in the order of the animation files (active-thinking's lines
+        match LED for LED, no turn), a newline after it; the HAL writes `%02X%02X%02X` per LED (libacehal_led.so
+        `setLedFrame`, path `k_framePath`).  ledcontroller keeps it open read-write (fd 15).
+      - The driver scales every channel as it takes a frame and `frame` reads back what it got after that:
+        `ledcalibenable` 1, `ledpwmscaling` 586a55 (R 88, G 106, B 85 of 127: out = in x s / 127, truncated),
+        `ledpwmmaxlimit` dbffd6; all three root's 0644, from the unit's calibration (idme `ledparams`), never touched.
+        Checked: 0000FD written reads 0000A9, 0000A9 reads 000071; solid_red F00 at brightness 100 reads AF0000,
+        green 0F1 00D30A, white AFD3A9, orange F30 AF2900, cyan 0EF 00C4A9.  So the frame ledcontroller writes is the
+        file's colour x the brightness table's `pwm` (led_mute_ring_config.json `rgbTable`, per cap colour (idme
+        alsparams `capcolor`, 0 = black), 102 levels: pwm 0.122 .. 0.993 on black), and FD is the most it ever writes.
+      - Brightness: the frame's values and `led_current` (the chip's current setting: 0 = Imax, 1 = /2, 3 = /4 in the
+        table) both follow it.  solid_blue: level 100 -> A9 with led_current 0, 50 -> 76 / 3, 25 -> 31 / 3, 10 -> 1D / 3,
+        1 -> 15 / 3.  The mute button's PWM (pwm1, period 40000) follows the level too (duty 39739 at 100, 1268 at 1:
+        `muteTable`), lit while not muted.
+      - ledcontroller writes only when its picture changes: idle, and with a static pattern (solid_blue) on, 0 writes
+        in 10 s, 0 CPU.  A frame written by someone else stays: solid_blue's own value on an idle ring for 5 s, the dark
+        frame over a showing solid_blue for 4 s.  Over a moving pattern (active-thinking, 100 ms frames) the next frame
+        of ledcontroller's replaced ours after 40 ms.  It writes its frame again on every set and unset (unset of the
+        last one: dark).
+      - Speed: one write takes ~15 ms however it is made (cat or the shell's own print: 70 and 68 a second, 100 in
+        1.50 s), nearly all of it waiting for the I2C bus: 1.3 ms of system CPU a frame (0.13 s for 100).  The Echo was
+        at 54 % of its 3 CPUs before, 55 % while writing flat out, 64 % at 15 a second with a fork a frame.  Reads: 50 in
+        20 ms.
+      - Who may write: `/init.ledcontroller.rc` chowns frame, led_current, boot_animation and pwm1's period, duty_cycle
+        and enable to ledcontroller at boot (0644, label sysfs_ledcontroller).  hassmic (uid 5100, effective gid aipc,
+        real gid 3990) may read them, write none.  SELinux is no wall here (su permissive; hassmic's domain may do what
+        su may), the file mode is.
+      Now (`ringlive.c`, feature "Light ring live", off by default; CLAUDE.md has the parts): root's main.sh gives
+      that one file to group 3991 (LED_GID, only hassmic's) at each satellite start, g+w; hassmic writes colours as
+      seen through gamma 2.2 and the table's pwm for the ring's level (capcolor 0 = black), so at most what
+      ledcontroller writes there (FD at 100); 30 frames a second at most, latest wins; never while one of the Echo's
+      own patterns shows (ring.c `ring_busy`) or the microphones are off, ours again 150 ms after; read back every
+      200 ms and put back, 5 s of rest after 3 overwrites in 3 s (something hassmic did not set animates); nothing
+      left: the dark frame once.  Home Assistant: 12 lights, `light_ring_frame|animation|design|stop`, the select
+      "Light ring design" of the library; "Light ring" drawn live as the bottom layer (exact colour, 11 effects, fades),
+      the LED lights over it, an animation over all; the page's "Show on the Echo".  Tests:
+      tests/unit/ringlive_test.c (stock's solid_blue at the five levels as the driver was written, the cap, the
+      table, the writer against a file), tests/fake_ha_ring_live.py (aioesphomeapi: entities, LED/frame/animation/
+      design/select, the wake word's ring and mute first, written over, "Light ring" against live, timeout, stop).
+      On the Dot 3 ("Büro", 2026-11-12, a trial build in /data with the frame given to keystore by hand: main.sh's
+      grant comes with the update), read back from the driver: LED 1 red AF0000, white AFD3A9, blue 0000A9, green
+      00D300, each the very value stock's solid_* gives at level 100; muted: stock's 680000 ring, not one write of
+      ours, ours back after; an animation of 12 frames at 50 ms played twice by the Echo; stop: dark; led_current 0 and
+      pwm1 39739 as before.  Second build (ae31dd4 and after): "Light ring" magenta drawn live AF00A9 (stock's
+      scaling of FD00FD), LED 1 green 00D300 over it; Comet, Fire and Rainbow move by themselves with LED 1 staying;
+      off over 2 s: 220021 half way, then dark; muted (stock's 680000 ring), then `stop hassmic` and `start hassmic`:
+      the red ring untouched throughout.  init's stop kills outright (no SIGTERM: an LED left blue stayed blue); the
+      next start's own unsets had ledcontroller draw its frame, dark.  So the marker (`state/ring-live`) carries the
+      boot id: after a reboot or a power cut the chip was redrawn by ledcontroller and the marker is only deleted.
+      Review before the PR (2026-11-12): the marker held the frame as read back and was written (fsync'd) on every
+      change Home Assistant made and every 5 s while an effect moved (tests: 17 writes in 8 s at a change every 0.4 s,
+      ~17000 a day with an effect on: flash wear for nothing, since a moving frame never matched after a kill), and a
+      kill while an effect or a fade ran left that frame frozen (no match, and with live on ring.c has no palette
+      pattern to unset at the start).  Now the marker is the boot id only, written once a run, deleted at a clean end;
+      the next start in the same boot darkens the ring once the mute and the Echo's own patterns are known
+      (`ringlive_begin` after settings_load), unless one of them shows.  Also found and fixed: `light_ring_frame` with
+      brightness 0 lit each LED at its colour's own level; "Light ring live" off left "Light ring" on an effect not in
+      its list any more; a SIGTERM within the writer's 200 ms after the Echo's own pattern was set wrote the dark frame
+      over it (now `ringlive_yield` from main.c `led()` and the mute).  ASan/UBSan and TSan over fake_ha_ring_live.py
+      and a stress run (400 random actions with absurd values, reconnects, the setting toggled, designs saved): clean;
+      no top-level ESPHome message can exceed its buffer (pb `over` drops nothing that went out before).
+      Live states are not kept over a restart: everything starts off, and Home Assistant is told so (asked: always off).
+      Music effects (`musiclight.c`, asked for with variants): the PCM Sendspin, the A2DP sink and Home Assistant's
+      media write, each 10 ms: six RBJ band-passes (60 Hz .. 6 kHz) and the level against running peaks (24 / 30 dB
+      under, falling 2 dB/s), beats when the bass is 1.6x its 0.7 s average and rising, 250 ms apart; stamped with the
+      output's queue (music_queued_us, bt_queued_us), so they show when heard.  On made-up music (unit test): a kick at
+      120 bpm 8 beats in 4 s, its band 0.99 on the kick and 0.06 between, heard 210 ms after it was fed with 200 ms
+      queued; through Home Assistant's play_media on the PC "Music pulse" went FD on each kick and 00 between, 5 in
+      2.4 s.  Asked again (2026-11-12: "boring, they look odd; what does Music rainbow even do"), seen as pictures
+      first this time (tools/ringviz: a row a frame, the ring cut open): the VU meter was full all the time (levels
+      against their range sit at the top in music mastered loud), beats came only from jumps in the bass (rare where the
+      bass never stops), no sense of the bar.  Second version: 12 bands, the level as punch against 1.5 s, drums from
+      log-amplitude flux with level gates (on tools/ringmusic.py's track, 124 bpm, written down: kick F 0.46 -> 0.89,
+      snare 0.28 -> 0.60, hi-hat 0.87 -> 0.91; the dB flux counted bass notes and chords out of silence as drums), tempo
+      124.3 (autocorrelation), the grid on 73 of 73 beats where the kick plays (a circular mean of the kicks sets its
+      phase: before, it kept the phase it started with, 150 ms off, and the 20 % window never pulled it in), the accent
+      every 4 beats on bar or half bar (1 against 3 is not told apart: four on the floor has a kick on both, and the
+      track's pads come in too softly to hear the chord change); effects Music beat, spectrum, VU meter (stereo), orbit,
+      drums, aurora.  make unit-ringviz keeps those numbers.  Open: on the Dot 3 with real music.
+      Found on the Dot 3 (2026-11-12, "Music spectrum" set through the API): "Light ring"'s state message was cut (48
+      bytes, the longest effect names need 51), aioesphomeapi refused it ("Wire format was corrupt") and Home
+      Assistant dropped the link and connected again, ~400 times in a minute, until the effect was set back.  pb.h
+      dropped what did not fit and the message went out cut; now `struct pb` says `over`, send_to sends none such and
+      logs it, the light's state has a buffer of its own, and tests/fake_ha_ring_live.py sets all 17 effects and wants
+      each back whole (it failed on the build before with the same corrupt message).
+      Review on the PR (2026-11-13): an inner message (an action's argument, a Bluetooth characteristic) cut short
+      went out inside an outer one that looked whole: `pb_msg` carries `over` out, ble_db leaves out what does not fit
+      whole (tests/run.py with send_to aborting on `over`: none).  A frame of ours could land after ledcontroller's for
+      a pattern just set (ringlive_yield only poked the writer): led() and the mute now bracket ring_set with
+      ringlive_yield/_yield_end, the writer's write is under write_lock and checked against yielding and yield_gen;
+      SIGTERM's handler only where ours shows since our last write, in hassmic's own pid.  HA's media to the music
+      analysis with the TTS stream's queue (modelled) instead of 0.
+      The Dot 2 (biscuit, on USB, 2026-11-13, `scripts/led-probe.sh` read/stock/write; the write
+      stage now has a measured case per model and sets brightness 100 itself): the same IS31FL3236 at 0-003f, the same
+      `frame` text, the same `init.ledcontroller.rc` (its header says Donut_puffin); no mute PWM (the mute is the red ring
+      in `frame`, 1C0000 at level 5).  One table, `default` (cap colour 0 only; radar's file is byte for byte the same):
+      pwm 0.129 at 0 .. 0.875 at 100.  `frame` reads back what was written, no calibration: solid_blue at 100/50/25/10/1
+      reads DF/C0/68/3C/22 = the table's pwm x 255, truncated; led_current 0 at 100, 2 at 50, 3 below.  Idle, a frame
+      written by someone else stays (5 s); over a moving pattern (active-thinking) overwritten at once; over a static one
+      (solid_blue) ledcontroller writes its own back after 410 ms (the Dot 3 never did: the safe way).  77 writes a
+      second (13 ms each, cat or print alike).  /proc/<pid>/io is missing on its kernel (the probe's write counts read
+      0).  So `ring_frame` and `LED_FRAME` for biscuit.
+      Its table is ledcontroller's 0760 (in system.img too; the Dot 3's 0644): hassmic could not read it, "not here: no
+      brightness table".  Root's main.sh `led_frame` copies it to /data/local/hassmic/led-table.json (root's folder,
+      0644), ringlive_start reads that when /system/etc's is not readable.  Tried on the Dot 2 (signed push, ESPHome
+      API from the PC with its key): LED 1 red on the driver's LED 11 at 2E0000 (level 5: pwm 0.184 x 255), "Light
+      ring" blue under it, Comet moving, Identify taking the ring and giving it back, SIGTERM dark at once, SIGKILL
+      left Fire frozen and the next start darkened it ("what the last run left"), mute pressed over Comet: stock's
+      380000 ring 5.5 s, not one frame of ours in between, Comet back 0.9 s after the unmute's own animation.
+      Found there: after a fade to dark whose last frames already read 00, the writer kept the ring as its own (the dark
+      frame was what it wrote last, so no write and no hand-back) and would put dark back over any frame that came, until
+      the mute's hold and resume.  Now nothing left of ours always hands it back (ringlive_test fails before).
+      The Echo 2 (radar) from its firmware, against the Dot 2's: the same kernel (3.18.19 at ecb8cb4) with the same
+      leds_is31fl3236 driver (its strings identical; no calibration attributes, which only the Dot 3's 4.4 has), the same
+      device tree node (is31fl3236@3F, channel-offset 3), libacehal_led.so's scaleDutyCycle, setLedFrame, set/getBrightness
+      the same instruction for instruction (another build, the same 50 symbols and sizes), libled_controller.so and
+      libled_resources.so byte for byte, the table byte for byte and 0760, init.ledcontroller.rc and the patterns'
+      names and LED order the same; ledcontroller itself differs by AIPC service names only.  So radar gets them too,
+      matched by firmware, not probed on one.
+      The Echo Dot 5 (cannoli, 2026-11-16, on the PC only, no Dot 5 at hand): no frame file there (the W4970 is the
+      SCP's LED manager's, behind /dev/tinysys_ipc_2), so the frames go the way the light's do: one looped frame a
+      picture into a slot of ours, `hassmic_live`, replaced in place by `aceLedMgr_updateAnimationData` through
+      libhmled.so (one more animation: 184 with stock's, well under the ~400 the LED manager takes), set once and
+      unset for the Echo's own patterns and the mute (the compositor would mix ours into their gaps, as the light's).
+      Full duty: its ledcontroller hands the LED manager the brightness tables (libacehal_led_interface.so
+      `prepare_brightness_tables_for_acs`, `mpcClient_setBrightness`), which scale every animation; the light's slots
+      are written unscaled too.  Through ring.c's connection (the test's stand-in serves one client at a time).  Found on the way: after ledcontroller ended (root's ledc_watch starts it again) the
+      light stayed dark until Home Assistant changed it; the connection's hang-up is now looked for every 200 ms
+      (`shim_check`) and the light and the live frame are drawn into the new one.  tests/fake_ha_ring_live_acs.py.
+      Reviews (2026-11-16): the shim dropped a client idle for 30 s, which read as ledcontroller gone: no idle
+      timeout now (ledshim.c; the new set's digest has root restart ledcontroller with it).  The live frame's round
+      trip goes under a lock of its own (`shim_lock`), not ring.c's nor write_lock, so a pattern of the Echo's own
+      being set (maybe under core_lock) never waits for the LED manager; only -s/-u are queued under them.  A hangup
+      counts as a connection (`shim_conns`), so a frame put into a ledcontroller that went away is put again.  What of
+      ours shows as one frame is set again every 30 s (a set ledq lost); effects are not (a set may restart them).
+      main() waits for ledq at its end, so the live slot's unset runs.
+      On the Dot 5 (cannoli fc66a9, 2026-11-16, ota-push.sh, the ESPHome API from the PC; the LEDs read back through
+      the shim's new "?leds": aceLedMgr_getLedState(led, out) = message 0x13 to the SCP, 5 bytes a LED: on, the
+      ring's brightness, RGB as sent, so full duty is right; src/tools/ledstate.c):
+      - An update stops the animation it replaces: a slot playing red read back dark after its update, green only
+        after ledctrl -s (what PLAN's "became a 24-frame pulse in place" missed: a set followed).  Started again in
+        the shim after each update (its wrappers of ledcontroller's start/stop, the config copied), every frame was
+        dark for the ~30 ms a start takes: Fire blinked badly (seen).  Now `hassmic_live` and `hassmic_live_b` swap:
+        the frame into the one not showing, started, the other stopped (one layer shows its first active one): Fire
+        smooth (seen).  An update 13 ms, a swap ~47 ms: ~20 frames a second; CPU with Fire: ledcontroller +6 % of a
+        core, hassmic +2 %.
+      - Checked by readback: LED 1 on the ring's LED 11, a frame with a timeout dark after it, an animation twice and
+        dark, Identify's rainbow and a volume step over it (gaps dark: the slot hidden first) and the ring back after,
+        soft mute's red ring and back, ledcontroller killed: drawn again unasked 11 s later (now a retry every 2 s
+        there), hassmic killed with an LED on: dark at the next start.  ledctrl -g kept listing patterns long unset.
+      - Not about the Dot 5: Home Assistant's media (play_media) puts the core in SPEAKING, whose stock ring loops,
+        so the live ring waits for the whole song and the music effects never show over HA's media (any model; the
+        PC test's stand-in set has no looping speaking ring).  Sendspin and Bluetooth set no pattern.  Open.
+      - Fire stood still between steps after days of uptime (issue #192, 2026-11-17): its noise took the monotonic clock
+        in ms as a float (`t / 90.0f`, 24 bits): 64 ms steps from ~6 days on, 128 from ~12, 256 from ~25.  The picture
+        then changed ~4 times a second, and the writer, which writes only a frame that changed, sent ~4 a second: so the
+        reporter's 3.7 is most likely this (inferred: the arithmetic fits) (ring-live-acs wants 10; their uptime not
+        known, the test's clock is CLOCK_MONOTONIC, a fresh CI runner passes).  `noise` takes a double now.
+        `ringlive_test.c`: every non-music effect makes at least 3/4 of the new pictures in 2 s after 30 days' uptime
+        that it makes after a minute (all but Sparkle, whose flares differ, the same number) (Fire on the old code: 4 in
+        1 s against 30 after a minute; now 60 in 2 s either way).  Not seen on an Echo (none up that long here); the
+        arithmetic is the same there.  The same test's fade was sampled once at 200 ms, which CI caught still at the
+        light's FD under `make -j unit` (4 cores; the writer stalled 200 ms or more there, not explained; the same run's
+        effect counted 15 frames in 1 s): it now watches the frames for a value in between and for dark no sooner than
+        300 ms (a load only makes it later).
+- [ ] Idea (the user, 2026-11-12): the Echo's own patterns overridden from Home Assistant, e.g. "Thinking" red when
+      the speaker is recognised as one person, green as another.  The live ring would draw the slot itself (a design
+      of the library, or stock's look in another colour), at once, mid-request.  An action `light_ring_override` (slot,
+      design or colour, for this request only by default / for minutes, capped / until cleared), over the keyed link
+      only, never kept over a restart, under the live ring's brightness cap.  Never for what tells about the
+      microphones or privacy: listening, microphones off and on, Drop In's calling, ringing and call, page login,
+      factory reset, not set up; only the cosmetic ones (thinking, speaking, not understood, timers, volume, do not
+      disturb, identify).  Who spoke has to come from Home Assistant.  Not built yet.
+      The update path on the Dot 3 (2026-11-12, ota-push.sh with the owner's key): the bundle installed, passed its
+      self test and became the factory copy, hassmic ran with group 3991 (runas takes numbers) and the Wi-Fi module
+      came along; but main.sh's grant failed: "chgrp: group '3991': No such file or directory" (toybox's chgrp takes
+      names only), and live was off ("not here"), safely.  Now `otatool chgrp GID PATH` (a number only, never 0, a
+      file only; tests/otatool_test.sh) does it.
+      Open: biscuit and radar (`scripts/led-probe.sh read` finds the driver by itself; same 0-003f by PLAN's earlier
+      reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
+      Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked
+      about, not built.
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
+- [~] Calls with Amazon's call microphone (2026-11-13, Echo Dot 3): a user's calls from a Dot 3 sounded dull and full of
+      the room next to a phone's, and worse than stock's Drop In had. micAsr is the ASR path (no NR, no AGC) under our
+      +20..+30 dB gain.  AFE.cfg (`/system/vendor/etc/audio-algorithms/`) has a "Voice" path beside "ASR": VOIP
+      MicPreProcess +6 dB, VAEC, Frequency Masking Lite RES, Recursive Magnitude Estimation NR, Random Filler CNG, FB AGC
+      (target -22 dBFS, +20 dB constant), VOIP Tx Parametric IIR = VOIPTxParametricEQ.cfg (+6 dB peak at 1.9 kHz, -3 dB
+      shelf over 3.5 kHz), Tx limiter; no beamformer.  Its output is **micHfp while a Voip stream is open** (logcat
+      "VoIP mode 1"); without one micHfp is the bare mic (the Drop In entry below saw that case).  micPstn is the bare
+      mic at 8 kHz.  One take on all four streams in call mode, listening mode on, a talker across a kitchen: speech /
+      pauses micRaw -52/-65 dBFS, micAsr -48/-65, micHfp -20/-43, micPstn -52/-65; micHfp 15 dB less over 4 kHz than
+      micAsr.  (An earlier reading of "muffled microphones" was a wrong reference: the bare mic at 30 cm has speech's
+      usual tilt; across the room the room takes 5-8 dB over 4 kHz.)  Calls now send micHfp (`call.c`
+      `callmic_thread`, setting `call_mic`), without micgain, the gate's duck -12 dB.  On the Dot 3 (a SIP call from a
+      phone, a branch with a SIP client on this code): "exactly as I recall" stock's, in G.711 and in Opus.  First try
+      refused the stream: its format getters answer -1.  `fake_ha_dropin.py` 7b: the hall's call microphone (a 700 Hz
+      tone, `HASSMIC_CALL_CAP`) arrives at its own level (-21.8 for -20), switching mid-call goes back to micAsr.
+      Dot 2 (biscuit, 2026-11-17): AFE.cfg's "Voice" path has AEC (not VAEC), Frequency Masking RES, the same NR and
+      CNG, FB AGC target -23 dBFS, +20 constant, +12 at most (donut: +6 pre-gain, +15), no pre-process.  13 s of speech
+      played on Voip (volume 50), micRaw and micHfp read beside it, no talker: 300-3400 Hz, the echo micRaw -50.6 /
+      micHfp -67.5 dBFS (-14.6 dB; the front end logged ERLE 10 dB), the room without the far end -65.6 / -59.1 (+6.5,
+      the AGC); micHfp dips to -80 under the echo (RES), its coherence with micRaw is ~0.  So micHfp is the call path
+      here too, and the Drop In entry's "micHfp is the bare mic" (2026-10-08) was wrong.  Unlike donut, opening micHfp
+      alone starts the call path ("AFE VoIP Diagnostics started"): on TTS the echo was 13 dB under micRaw's as well.  A
+      talker's level from the AGC's figures: donut's -52 dBFS talker in micRaw + 32 dB = -20, so the gate's -45
+      (`NEAR_MIN_HFP_DB`) and the far end's 25 dB over its floor (`FAR_OVER_DB`) hold with room to spare.
+      Dot 2 with a talker (2026-11-17, the same Echo, call mode, a talker for 12 s then the Echo's speech on Voip;
+      micRaw, micHfp and hassmic's micAsr dump side by side), 300-3400 Hz, voice median / p90, its quiet after, the echo
+      alone: micRaw -51.7 / -48.4, -65.0, -63.2; micAsr -55.4 / -47.6, -66.7, -66.9; micHfp -30.4 / -22.0, -52.8,
+      -64.0.  Voice over the room: micHfp 22 dB, micRaw 13, micAsr 11; the echo 11 dB under micHfp's room.  Full band
+      micHfp -26 / -16 dBFS (AGC target -23).  The gate: 99 % of the voice frames over `NEAR_MIN_HFP_DB`, 91 % over the
+      room + 9.  Over 4 kHz 6 dB less than micRaw.  Half of every stream's energy was a 120 Hz hum of the room (in
+      micRaw too).  The front end's own "Near-End Active Speech SNR" said 1-2 dB for these takes: not to be trusted.
+      Per model: `board.call_mic` (donut and biscuit 1); radar and cannoli have the path in AFE.cfg (radar VAEC + Lite
+      RES as donut, cannoli AEC as biscuit) and keep micAsr until measured as above.
+      A stall: the mixer's read waits up to 1.5 s for nothing (audio_mixer.c), callmic_thread gave up after three, and
+      the capture thread stood aside all along: 4.5 s without audio, and the far end ends a call after 5 s (4 s in
+      the test, where it did).  Now the capture thread sends micAsr once micHfp has been silent `HFP_STALE_MS` (250);
+      micHfp takes over again when it is back, after three empty reads it is given up.  A Voip stream that fails also
+      ends micHfp for the call (`voip_gen`: the bare mic again, without our gain).  Each swap of sources restarted
+      the gate with listening mode's state, so a side that talked as micHfp stalled kept the front end listening (its
+      canceller frozen) for the call: the state is kept across a swap now.  `fake_ha_dropin.py` 7c
+      (`HASSMIC_CALL_CAP_STALL`): a short stall, micAsr meanwhile, listening mode off in its silence, micHfp back and
+      heard; a long one, longest gap at the kitchen under 800 ms, the call goes on; 7d (`HASSMIC_VOIP_FAIL`).  After a
+      failed Voip stream the playout went on telling the echo suppressor what it no longer played: the far end's voice
+      ducked this side for the rest of the call; it counts as silence now (7d: the hall's trace).
+      Open: Echo to Echo with micHfp on both ends, the -12 dB tuned on a trace, double talk, the Echo 2 and Echo Dot 5,
+      a call while music plays.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
       invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock
@@ -2411,7 +2800,8 @@ Run in this order. Each step says what it proves.
       - Playback stream: `Voip` exists in the mixer (`PLAYBACK_MODE_VOIP`) and switches libasp to "VoIP mode 1" (call
         tuning, NDVC, normalisation off; logcat). Same speech, volume 50, micRaw -48: residual in micAsr -60..-66 dBFS
         on Voip against -45..-58 on TTS (floor -72). Voip follows MainVolume (+9 dB from 30 to 60). micHfp is the bare
-        mic (floor -46), not a call Tx stream.
+        mic (floor -46), not a call Tx stream (wrong: it is the call path, 2026-11-17, "Calls with Amazon's call
+        microphone").
       - Connect 4 ms after the invite (auto). Jitter: micAsr comes in 50 ms blocks, frames leave in bursts of 2-3; a
         3-frame prebuffer started level with the bursts and stayed a frame ahead: 639 of 802 frames came after their
         turn. Now 4 frames from the oldest and an underrun conceals without moving on: 0 of 805 missing, 9 waits at the
@@ -2525,6 +2915,77 @@ Run in this order. Each step says what it proves.
       Open: `noauto_da_alloc` on `/data` not checked on any model yet (`adb shell grep /data /proc/mounts`; the fix
       holds either way); the fsync's time on the Echos not measured: `settings_save` pays it under `core_lock`, once
       per setting changed from HA or the page.
+- [x] Root wrote through names in the daemon's folders (2026-11-12, GitHub issue #130, reported with Codex/ChatGPT's
+      review of f8b875c): `main.sh` ota_watch `state/ota/result.tmp` (echo, then `chown $DAEMON_USER`: both follow a
+      link; any request answers, a junk one too), `artifact-install.sh` `state/artifacts/result.tmp` the same, its
+      `request` read by root and each word echoed back in "FAILED <id>: not an artifact" (a link to a root file showed
+      it to the daemon), `migrate`'s `echo > state/wake_word`, and `/data/misc/avahi/services/hassmic.service`
+      (folder the daemon's, written and chowned by root at every satellite start). With a link to `hassmic.conf`
+      (main.sh chowns it back to root but sources what is in it) or `ota/current/main.sh` (boot.sh does not verify
+      again) that was root for code running as the daemon; SELinux no wall (`su`, permissive). Now:
+      - results made and chowned in root's `ota/` / DATA, renamed into state (a rename replaces a link);
+      - every request root acts on is taken first (`main.sh` `take`: renamed into `/data/local/hassmic/taken.<name>`,
+        then a plain file, not a link, link count 1: no model's init.rc sets `protected_hardlinks`, so a hard link to
+        a file of root's on /data is possible): clock, timezone, mdns, reset (renamed back while hassmic will not
+        stop), reboot, restart, leds-request; `wifi.sh take` the same into `wifi/request`, `lockdown.sh adb_gate` into
+        `adb-request.taken` (the request now goes a few ms before the answer: hassmic looks every 2 s);
+      - `state/ota` and `state/artifacts` themselves: `cd -P` into them, `pwd -P` must be the folder itself (state/'s
+        parent is root's, so state/ cannot be swapped), names relative from then on; a link there removed (`rm -f`
+        never follows one); the bundle and its signature renamed into `ota/in/` before `otatool` reads them (a FIFO
+        held ota_watch, and with it reset and reboot);
+      - the artifact request read through `READ_AS`; the service file and `wake_word` written through `runas` as the
+        daemon (the service file keeps the label avahi reads);
+      - `state/config` (and the old `state/settings`) read in place only when a plain file, else `/dev/null` (`cfg`;
+        a swap to a FIFO in between can still hold a loop: denial of service only, values are on/off and numbers).
+      Tests: fake_web_artifacts (request a link / a hard link to a root file, result.tmp and result links, the folder
+      a link to a root folder), fake_ha_esphome_timers (adb refused on the keyed link, closing taken); `take` and the
+      folder check tried under bash. ota_watch, adb_gate, wifi.sh take and the avahi file not run on a device yet
+      (mksh, toybox `ls -ld`). Also: the ESPHome `KEY_ADB_WIFI` command, unlisted since debug access went to the
+      page, still opened adb on the key alone; now close-only.
+      adb itself: loopback is open (`-i lo`/`-o lo` ACCEPT) and adbd has no key check, so a daemon taken over could ask
+      for adb (it is the one that does, for the page and the push port), connect to 127.0.0.1:5555 or its own address
+      and be root. `lockdown.sh` `rules`: first in `hassmic_out`, `-p tcp --dport 5555 -m owner ! --uid-owner 0
+      -j DROP` (iptables and ip6tables; every user but root, not only hassmic's: another user's service it can make
+      connect counts too; the owner match on the user, not NET_GID, which hassmic sets itself); kiosk_test checks it.
+      Dot 2 with adb open: puffin and shell refused, root in. Left: a daemon taken over can still
+      open adb for someone else on the LAN; and not checked on a device: whether the daemon (uid puffin/system, domain
+      `su`, permissive after the unlock) can `setprop service.adb.tcp.port`/`ctl.*` itself (property_service's checks
+      are SELinux only from Android 7 on): then it would not need root's gate at all, and `ctl.start` would start any
+      root service. The DROP holds for adb either way.
+      Checked on a Dot 2 (biscuit, Fire OS 7.1.2, 2026-11-12): it could. As uid 5100 in `su`, `setprop
+      service.adb.tcp.port` went through (init: `avc: denied { set } ... uid=5100 ... permissive=1`). So hassmic got a
+      domain of its own: `scripts/system/sepolicy-hassmic.rules` (`type hassmic domain`, `allow hassmic * * *`, then
+      `deny` of `property_service`, `process { transition dyntransition setcurrent setexec ptrace }`, SELinux's own
+      switches) and `sepolicy-mirror.sh` (from the policy patched so far: su's attributes, every `allow X su` as
+      `allow X hassmic`, su's exec transitions where the target is enforcing: amzn_dha on the Dots, crash_dump and
+      netutils_wrapper on athena; magiskpolicy reads no "-" in a name, so neo-service-coordinator's read of /proc is
+      left out), applied after the model's rules by install-system.sh and install-boot.sh. `runas -Z` enters it by
+      writing its own context just before the exec: an exec into it from /data (updates) is refused, /data is nosuid
+      and su does not bound hassmic (`op=security_bounded_transition seresult=denied`). A policy without the domain
+      leaves hassmic in su ("runas: no SELinux domain", seen after a reboot). On the Dot 2: setprop (any, ctl.*,
+      hassmic.adb.until), setcurrent, setexec and ptrace of a puffin process in su refused (`permissive=0`); hassmic
+      runs in it from boot after install-system.sh, self test, HA, Sendspin, no denials; adb opened by root: hassmic
+      refused on 127.0.0.1 and its own address, root and the PC in; a second push through the new ota_watch (cd -P,
+      ota/in) and state/ota swapped for a link (refused, link removed, the root folder untouched). Offline (magiskpolicy
+      under qemu) the rules load on biscuit, radar, donut, cupcake, checkers and athena's policies; crown and cronos
+      have no firmware here. Not tried on a device but the Dot 2: the Shows (binder callbacks into hassmic come
+      through the mirrored `allow domain su binder`), and a voice request, the light ring and Amazon downloads (DHA:
+      amzn_dha) in the domain.
+      Review (2026-11-12) added: no relabelling (`relabelfrom`/`relabelto` on file classes: Dot 2, chcon refused; denying
+      `setfscreate` too broke btout.c, which labels its AIPC socket as btmanagerd's: "avc: denied { setfscreate }
+      comm=hassmic" at start; labels it creates stay allowed, every mount it may write is nosuid), no `service_manager add` (Android 7's
+      servicemanager replaces a name already registered), no `binder set_context_mgr`; `rm -rf` before results are
+      renamed into state/ (a folder by that name); adb_gate's request with one name only; artifact-install.sh needs
+      READ_AS set (empty only in the PC tests); install-boot.sh checks hassmic is not permissive. Left as they are:
+      the reset request renamed back into state/ while hassmic does not stop (it is the daemon's own file, checked
+      plain with one name); state/config read in place (a FIFO swapped in between the look and the read holds a
+      loop: no more than that); `hassmic -G` parsing state/ring-applied as root (O_NOFOLLOW, plain file, 8 MB at
+      most; a parser bug there would be root's, a copy would not change that: running -G as the daemon would).
+      Echos that only take updates keep the old policy: hassmic stays in su there and can set properties until
+      install-system.sh / install-boot.sh runs again. Tried and dropped (2026-11-12): `runas -N`, a mount namespace with
+      /dev/socket/property_service bound to /dev/null for every process of the daemon's user. It worked on the Dot 2,
+      but not on the Android models (the daemon's user is system there, as are dumpable processes outside it, whose
+      /proc/<pid>/root shows the real socket), and one way for the Dots and another for the rest was not worth it.
 - [~] From #33 (Echo Show 8), for every model (2026-10-17, GitHub issue #45):
       Restart lost: `stop hassmic; start hassmic` in main.sh's ota_watch. Both services are `disabled oneshot`; toolbox
       `stop`/`start` only set `ctl.stop`/`ctl.start` and return, and init (7.1) `Service::Start` returns early while
@@ -2667,10 +3128,51 @@ Run in this order. Each step says what it proves.
       TWRP before the wipe (`twrp_check`, first in every model's `step_flash`): 3.7 or newer, else stop with nothing
       wiped (the issue: amonet v1's TWRP 3.2.3, on Dots EchoLocal sold unlocked, cannot install 6574.1).  Every unlock
       here brings 3.7.0_9-0: `ro.twrp.version` and the string next to it in the ramdisks of amonet-biscuit v2.0.0,
-      amonet-radar v1.0.0, amonet-checkers v2.0.1 and kamakiri-donut v1.0.0.  Where the property is not set, the first
-      "Starting TWRP <version>-<commit>" of /tmp/recovery.log (the same format string in all four); neither: asked.
+      amonet-radar v1.0.0, amonet-checkers v2.0.1 and kamakiri-donut v1.0.0 (v1.1.0: the same `twrp-donut.img`).
+      Where the property is not set, the first "Starting TWRP <version>-<commit>" of /tmp/recovery.log (the same
+      format string in all four); neither: asked.
       Version logic checked against stand-in answers (3.7.0_9-0, 3.2.3-0, 3.7.1_12-0, 3.10.0-0, 4.0.0_1-0, log only).
       Open (device): an old TWRP itself (does 3.2.3 set the property; the log's line).
+- [x] The unlocks and boot-root by hand only (2026-11-09, GitHub issue #156: the setup's pin on
+      kamakiri-donut-v1.0.0.zip, gone from the thread, refused v1.1.0).  kamakiri-donut v1.1.0 (files dated 2026-11-06; zip sha256
+      `1d4eab37...056c`, 23 452 489 bytes): against v1.0.0 `bin/` (preloader, LK, TEE, tee payload, kaeru, GPT, TWRP),
+      `brom-payload/` and `requirements.txt` byte for byte the same; every script and module gains a copyright header
+      (+772 bytes each, nothing else changed in `device.py`, `functions.py`, `load_payload.py`, `common.py`,
+      `check_sig.py`); `main.py` and `handshake2.py` print a credits banner, `logger.py` writes it at the top of a new
+      `amonet.log`, `fastboot-step.sh` prints it before its two fastboot commands (unchanged).  Nothing the Echo
+      receives changed, so issue #112 stands as it was.  New: LICENSE (all rights reserved; redistribution, also inside
+      an installer, a GUI, a wrapper or a tool, needs the author's written permission), README.md and AGENTS.md, where
+      R0rt1z2 asks that the unlock is only run by hand as the thread says: which revisions, the timing, the Echo's state
+      before each step and what to do when one stalls are only there, kept current with its files; a wrapper freezes
+      them and cuts the reporting path.  The other models' unlocks are his too (amonet "by k4y0z & r0rt1z2",
+      kamakiri-cupcake, saiyaku-athena, each from his thread), so no setup runs one now: `unlock_thread`
+      (scripts/lib/setup.sh) names the model's thread, says to stop once TWRP is up and to ask there when stuck, waits
+      for Enter, then up to 60 s for the Echo on adb; `twrp_or_unlocked` takes TWRP, or Fire OS on adb (restarted into
+      TWRP), as the result.  Gone with it: the unlock zips' pins and downloads, their unpacking, the bootrom and
+      fastboot gestures, `fastbrick` and its YES and hands-off framing (issue #154), `unlock_wait_twrp` (issue #50's
+      Echo stuck in fastboot), `show_wait_twrp` and `amazon_usb` (issue #132's Fire OS instead of TWRP), cronos'
+      `lk_build_desc` age check, athena's serial port hint, the tools only the unlocks needed (pyusb, pyserial; fastboot
+      on the Dots).  The READMEs and unlock.md files point to the thread instead of their copies of its steps.  Kept:
+      the udev rules (PC side), donut's #112 warning before the thread, USB access, the firmware flash.  boot-root.zip
+      (his too, from the same threads) the same way: `root_thread` (donut, biscuit, radar, cupcake with donut's thread,
+      athena) waits in TWRP while the person installs it as the thread says, then up to 120 s for root adb in Fire OS;
+      the files step still pins and checks the zip, since the setup takes `patch/magiskpolicy32` out of it (and the
+      Shows `sbin/adbd`).  The Shows' root stays ours (install-boot.sh, our own boot image).  firebreak (bboe's, which
+      fetches and runs amonet itself) is gone from biscuit's setup with `UNLOCK_WINDOWS`, `unlock_firebreak` and
+      `fw_rooted`: on Windows every model needs an Echo unlocked already (`unlock_elsewhere`), docs/WINDOWS.md and its
+      figures reworked (the fastboot-gesture figure removed).  The docs' copies of the threads' restore and by-hand root
+      steps (cronos' "Back to Fire OS", crown's `boot-root.img` by fastboot) point to the threads too.  Then no file of
+      the threads either: magiskpolicy from Magisk's release, `Magisk-v30.7.apk` (sha256 `e0d32d21...ebd5`), whose
+      `lib/armeabi-v7a/libmagiskpolicy.so` is byte for byte boot-root's `patch/magiskpolicy32` (`e5fafc1f...0f3a`; v30.6
+      and v31.1 differ), `magiskpolicy_get`, every model at `firmware/<codename>/magiskpolicy32` (athena's own zip not
+      compared: not on this PC).  The Shows' adbd from Google's Android 7.1.1 emulator image
+      (`system-images;android-25;google_apis;armeabi-v7a` r18, userdebug, NYC): static ARM, `ro.secure`/`ro.debuggable`
+      /`root_seclabel`, FunctionFS and `/dev/android_adb` as CyanogenMod's had (which also had `cm.service.adb.root`),
+      sha256 `cc017805...3c18`, 728 964 bytes; of the 953 MB zip only its ramdisk member (1.3 MB) through HTTP ranges
+      (`scripts/zipmember.py`, CRC checked; `adbd_get`).  API 24's default armv7 image (7.0, r07) has one too
+      (`9e35b456...`).  A checkers root image built with it on the PC (`mkbootroot.py`, `--check` still exact).  Open
+      (device): root adb in `su` with Google's adbd on a Show.  `init.fosflags.sh` in our image: our own two lines now,
+      not the XDA image's file byte for byte (the same two properties).  Dry run of every model.
 - [x] Unlock, what an LK too new for it does (2026-10-25, GitHub issue #50: a Dot 2 with LK `2c3569d-20260617`,
       June 2026).  fastbrick sends the brick payload, fastboot answers "the command you input is restricted on
       locked hw", and fastbrick.sh's own timeout is exit 124 to it — "Exploit most likely successful!" — so it
@@ -2685,7 +3187,7 @@ Run in this order. Each step says what it proves.
       (device): that the hung LK still shows in `fastboot devices`, and that a good fastbrick leaves fastboot before it
       returns;
       biscuit's README names the LK build as a prerequisite.  Open: an amonet release that unlocks LK builds from
-      June 2026 on (R0rt1z2's XDA thread).
+      June 2026 on (R0rt1z2's XDA thread).  The repo side is gone since 2026-11-09: the unlocks by hand only (above).
 - [x] fastbrick's last words (2026-11-09, GitHub issue #154, an Echo Dot 2 from the guided setup).  After the
       payload fastbrick.sh prints "Please wait until the process finishes and DO NOT INTERRUPT IT." and then "Press
       any key to exit..."; the tester could not tell whether it was over or whether the key would stop it (the white
@@ -2705,7 +3207,7 @@ Run in this order. Each step says what it proves.
       whatever its exit status (`set -e` and its last `read`: no "stopped" while the Echo writes).  The Dots' "unplug
       the power" hint moved from 90 s to 3 min, three times the minute the Echo writes.  Checked against stand-in
       fastbrick.sh copies (sent, unlocked already, "yes"); the READMEs' "10 s grace period" is gone: v2.0.1's
-      fastbrick.sh has none.
+      fastbrick.sh has none.  Gone again the same day: the setup no longer runs fastbrick (the unlocks by hand only).
 - [x] A login left waiting, a page reloaded into a restart (2026-10-25, a tester's Echo 2, radar, v2026.10.21.213542).
       Ring: `web: login waits for the action button (iPhone)` at 00:43:12Z, then neither "approved" nor "ran out"; the
       ring pulsed until the next day.  `login_expire` (web.c) ran only on a login or adb ask and on the button, so a
@@ -3108,6 +3610,60 @@ Run in this order. Each step says what it proves.
       after `core_transcript`, and `stop_word` clears what it ended.  Checked on the PC: `ui_test` (fades, hold, the
       drawer, timers by the second, the pulse by alpha only, a reply too long, broken UTF-8, under ASan/UBSan),
       `tests/fake_screen_words.py`, `build/uishot`.  Open: the moved form not yet on an Echo.
+- [~] Echo Show: clock when idle, and the screen's timeout (2026-11-11).  Asked for: the time across the whole screen
+      where it went dark, the face as before until then.  A first form (the clock in place of the idle face at once)
+      was not that.  Setting `screen_sleep_minutes` ("Screen sleeps after", 5, 0 never): the timeout in place of
+      `TIMEOUT_MS`, mic off and Do not disturb at most stock's minute.  Setting `screen_clock` ("Clock when idle",
+      off): with it on and our own face in front (the UI's `front 1`, `scene.c` `front_tell`: no music page, drawer
+      or setup screen, each of which would otherwise never go dark; a request, a call, a ringing timer keep it, or
+      each would flip the timeout, a `settings put` VM each way), `ring_band.c` holds the screen on (`INT_MAX`, AOSP
+      Settings' never; when it lets go, a userActivity if `isInteractive`: PowerManager counted from the last one,
+      maybe an hour back; the UI's count restarts as it takes over: no frames behind an app counted it) and the UI counts the same timeout itself (`scene_active`: a touch,
+      a pattern coming on, the volume, mute, Do not disturb, music starting (not its stop: a new Sendspin session says "stopped" again), the music view, the drawer, an app in front;
+      the face while it is not waiting), then `face.c` `big_clock`: the digits at 0.56 of the height (0.48 with the
+      music's bar), sized on "88:88", the date under them, mic off and Do not disturb on a line, one hit over all of
+      it (`A_WAKE`: the waking touch does nothing else).  An app or the music page in front: dark after the timeout as
+      before (the clock is the face's).  Told as `ck <on> <min>` beside `wo`.  Cost: `ui_test` counts 0 frames in 20 s on the clock
+      against 117 for the idle face.  Checked on the PC: `ui_test` under ASan/UBSan (the face at half the timeout, the
+      clock after it, no frames between minutes, a touch wakes and sends nothing, a request, mic off, a ringing timer
+      with its Stop, 0 minutes, off again), `fake_screen_words.py` (`ck`, held on only with `front 1`, an app: as
+      before, 0: never), `fake_screen.py`, `fake_web.py`, `build/uishot`.  Seen on an Echo Show 5 (checkers, 2026-11-12, 1 min, mic
+      off): held on with the face, the clock a minute later (time, date, "Microphone off"), a touch on it the face; Kiosk
+      Satellite over it: said in the log, 60 s, userActivity then (`mLastUserActivityTime` 5 s ago); back on the face
+      the clock 59.3 s later, not at once; the drawer 60 s while out, held again closed; a paused music page dark 60 s
+      after the last touch.  `service call power 12` answers `00000000 00000001` / `00000000` there, and a
+      userActivity leaves a dark screen asleep.
+- [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
+      `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
+      (Brazil's before "America/"); the aligner (no MFA model for them in build.sh) skips them, the page's as the
+      zone's (`speech_locale` `aligner`, `align_lang`), and goes on as before they were listed: issue #176, Brazil's
+      zones had lost "America/"'s en-US, and alexa-pt-BR (own locale pt-BR, no `.wa` either) was left with no
+      aligner.  Zones match by whole name or folder, not prefix: "America/Bahia" caught America/Bahia_Banderas,
+      `tz_lookup`'s pick for CST6 (Mexico, Central America, Saskatchewan).  The zone's name from HA's POSIX rule alone was
+      `tz_lookup`'s first of that rule unless the set one had it (CET: Europe/Amsterdam, EET: Europe/Athens,
+      GMT/BST: Europe/Guernsey, `<-03>3`: America/Araguaina for Argentina, Uruguay, Paraguay, the Guianas; `<-04>4`:
+      America/Boa_Vista for Venezuela, Bolivia, Guyana; WET: Europe/Lisbon for the Canaries): a Dutch date in Germany.
+      And `speech_locale` read `state/timezone`, which root's `tz_set` takes away within 10 s: on an Echo the zone
+      reached the language only in that window (Dot 2, 2026-11-18: no `state/timezone`, `persist.sys.timezone`
+      Europe/Amsterdam, `persist.puffin.locale` de-DE).  Now: the country of Home Assistant's home location
+      (`zone.home` latitude/longitude, readable by any device; `geo.c` on Natural Earth's 1:10m borders cut to 363 kB by
+      `tools/geo/build.py`: land borders and enclaves ~500 m, remote coasts ~10 km; self-check against the full
+      borders: 1500/1500 random European points, of 1500 points 0.5-6 km from a land border 1481 right, 19 with the
+      right one named within 3 km, 0 wrong; ~10 ms on a Dot 2), within 3 km of a border or without a location the Wi-Fi's country
+      (`apcountry.c`, nl80211 GET_SCAN dump as the daemon's user: the Dot 2's AP "DE" in 0.6 ms), picks the zone of
+      that country in zone.tab, and `state/zone` keeps how it was found; the language takes only a country's or a kept
+      zone, never a guess (nor the guess's own zone set by an older hassmic).  `tests/unit/tz_ref.py` (every zone.tab
+      country and rule), `geo_ref.py` (geo.c = geo.py, 66 places), `apcountry_test.c` (ASan/UBSan),
+      `fake_ha_esphome_timers.py` (Cologne + Wi-Fi NL: Europe/Berlin; Herzogenrath: NL's; none: kept; the page).
+      Open: the other models' Wi-Fi drivers not tried for IEs in cfg80211's scan results (only matters near borders
+      or without a location).  `core_speech_language` -> screen.c `lg` -> `src/ui/lang.c`
+      `ui_date`: day and month names per language (bionic's strftime is C locale only), English for none or one not
+      known, Japanese left out (no kanji in Roboto).  `bt_langs` has ro.  `core_transcript` compares folded (`fold`:
+      U+00C0..U+017F and ș ț without marks, lower case, no hyphens): "Închide" was never lower-cased, and the old
+      byte-wise strip of ¡ ¿ cut á (C3 A1) in two; stops + "oprește", hang-ups + "închide (apelul|Drop In)", "termină
+      apelul", "încheie apelul".  Blueprint: ro sentences and replies.  Checked on the PC: `ui_test` (each language's
+      date, cut at the end, `lg`), `fake_screen_words.py` (`lg`), `fake_ha_dropin.py` ("Închide apelul!"),
+      `blueprint_dropin.py` (ro-RO).  Open: seen on an Echo; the page and the screen's other words stay English.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,
@@ -3212,7 +3768,7 @@ Run in this order. Each step says what it proves.
       `kiosk_tick` opens the app whenever hassmic's home shows and keeps its update helper running as the shell user (never root),
       `kiosk_grants` gives it the permissions it would ask a person for (microphone and camera by their settings).  `lockdown.sh`: setting
       `kiosk_internet` (default on) lets that uid out to the internet with one rule, INPUT TCP 2324 (its web page) and 6053
-      (its ESPHome API) from private addresses only.  `install_screen_apps` in the guided setup offers Simple Keyboard (the
+      (its ESPHome API) from private addresses only; `kiosk_dlna` (off) its DLNA renderer (issue #109, below).  `install_screen_apps` in the guided setup offers Simple Keyboard (the
       image has no input method).  Lux readings agree with the app's within ~1 lx in dim light.
 - [x] Kiosk Satellite microphone for a plugin (2026-10-26, athena, Show 8 2nd gen, Android 9; user's doorbell plugin
       `reolink-doorbell` 1.1.1 inside KS 2026.10.40, a Reolink doorbell on the LAN, talk over Baichuan/ONVIF, no Home
@@ -3253,6 +3809,27 @@ Run in this order. Each step says what it proves.
       Put back: same APK by `pm install -r`, uid 10154 (was 10002), data restored (tar, chown, chcon to
       `app_data_file:s0:c512,c768`) with hassmic stopped; dashboard back, logged in, 48 of 49 prefs keys the same
       (`boot_pending_since` cleared by the app), grants, admin, uid rule and helper back within 42 s.  Open: athena.
+- [~] Kiosk Satellite's DLNA renderer through the firewall (issue #109, 2026-11-11).  rmaffeo (athena, KS 2026.10.45):
+      the renderer on TCP 2326, discovery SSDP on UDP 1900; with INPUT rules for both by hand, `/device.xml`, SOAP,
+      multicast discovery and playback worked.  The app's source (jxlarrea/kiosk-satellite, 2026-11): renderer on
+      0.0.0.0 at its "Server port" setting (2325 empty) + up to 3, the port it got written back to
+      `flutter.ks.dlna.port`; the secure-context proxy on 127.0.0.1:2325; SSDP 0.0.0.0:1900 reuseAddress/reusePort; the
+      voice chime on 0.0.0.0:2329 and the intercom on an ephemeral port, so a range of the app's listeners would have
+      opened those (the first version did, 2325-2339).  Done: setting `kiosk_dlna` (settings.c, off, page only, not
+      exported); `lockdown.sh` `kiosk_dlna`: the setting's port, read through `runas u0_a<n>` (a link not followed),
+      while the app's uid listens there beyond loopback (`/proc/net/tcp*`); unreadable: its listeners in 2325-2328;
+      UDP 1900 to 239.255.255.250/32 only while the app's uid alone holds it; both from `LOCAL4`'s private and
+      link-local ranges.  `kiosk_stale` (no fork per rule) takes out any rule of that shape not wanted now (screen models: no
+      stock firewall.sh, `FW_KEEP` DHCP's only), `wrong()` names the ports.  Under athena's mksh (qemu): `local`,
+      `$((0x..))`, the loopback patterns, stale selection.  `tests/unit/kiosk_test.py`: the setting's port and not 2329,
+      an owner's port, links, junk, a shared 1900, moves, setting off, uninstall, through load_once and load_each.  Not
+      measured on a Show: what else listens on 1900, the four /proc reads and a runas every 5 s (only with it on).
+      On a Show 5 (checkers, 2026-11-11; docs/kiosk-satellite.md): 2326 then a set 2340 then 2325 (the renderer
+      once ahead of the proxy) followed, `/device.xml`, SOAP control, an image played, GENA events, all from another
+      subnet; stale rules out on each move and with the renderer off; check 0.33 s (release 0.32), 0.5 s with it up.
+      Multicast discovery not tried there (no controller on that subnet).  Independent review (2026-11-11) fixed: a prefs port the app does not listen on falls back to 2325-2328, at most
+      5 digits read, fork-free `kiosk_stale`, locals; documented: the 5 s window for 1900, no login, the app's choice of
+      port.
 - [~] WPA2/WPA3 mixed Wi-Fi (issue #90, 2026-11-01; reported and tried on an Echo 2 by its reporter; this form on the PC,
       and on a Dot 2 with its writes stubbed).  wifisvc's `libacehal_network_all.so` (biscuit, radar, donut) rewrites entries to `WPA-PSK
       WPA-PSK-SHA256` at each start; on an AP with `[WPA2-PSK+SAE+PSK-SHA256-CCMP]` radar's driver refuses that AKM
@@ -3436,3 +4013,370 @@ Run in this order. Each step says what it proves.
       (the block in `sh` with a stand-in `settings`), `fake_ha_esphome_timers.py` (`HASSMIC_FAKE_BACKLIGHT`: entities,
       commands, page), `fake_ha_esphome.py` (none on a Dot).  **Open:** Android 9's (athena, crown) curve not read, nor
       tried there; the adjustment's effect on the backlight not measured; Kiosk Satellite's switch on cronos/crown/athena.
+- [x] Echo Show 5: Amazon's network bounce (2026-11-11).  The links to HA, Sendspin and the arbitration network all
+      dropped for ~5 s every few minutes (14:37, 15:11, 15:14), signal -36 dBm.  logcat: `WifiDiagsUtil` (fosservices,
+      in system_server) pings the gateway and DNS and fetches `generate_204` from mmechocaptiveportal.com and
+      fireoscaptiveportal.com; behind the egress lock the fetch times out -> `BAD_CONNECTION` -> `wifidiags-bounce` ->
+      wpa_supplicant `CTRL-EVENT-DISCONNECTED reason=3 locally_generated=1`, joined again 4.1 s later
+      (`wifi-disconnect-duration`).  Its `WifiDiagsConfigReceiver` (registered without a permission) takes a boolean
+      `val` for SET_ENABLENETBOUNCE and SET_ENABLEWIFIDIAGS (`receivedIntentSetEnableNetBounce, val=false` logged);
+      kept in memory only.  device.conf `ANDROID_BROADCASTS`, main.sh `android_tell` in netwatch: sent once per
+      system_server pid after boot, 3 netwatch rounds (>= 30 s) after a new pid is first seen: sys.boot_completed
+      stays 1 over a framework restart and am reports "Broadcast completed" with no receiver registered yet; am under
+      `timeout 10`, the first failure ends the attempt (netwatch held 10 s at worst), retried 6 rounds later and logged
+      once per pid; the 30 s are a margin, not timed.  alexa-on.sh sends each back as true (stock's).  TRIGGERNETRECOVERY in the same receiver calls System.exit: never sent.
+      Then (13:33 UTC, 12 min on) `NetWatchDog` (same class family): its timer is reset only by a passing test of
+      Amazon's, so it fired (`network-watchdog`), `setWifiEnabled(false)` then `true`, wpa_supplicant restarted, ~8 s
+      off.  It skips while Wi-Fi is off, setup is not complete, a MIRRORING_ON / OOBE_STARTED broadcast came, or
+      `Settings.System smartconn_status` contains "enabled"; `WifiDiagsHandler.shouldResetConnection` skips the bounce
+      for that too, and nothing else reads it.  So `system/smartconn_status=enabled` in ANDROID_SETTINGS (persistent,
+      alexa-on.sh deletes it again), the broadcasts kept beside it: SET_ENABLEWIFIDIAGS false stops the tests
+      themselves (`WifiDiagsHandler.handleMessage`: RUN_TEST_CONTINUOUSLY "doNothing, reason=wifidiagsDisabled", the
+      next one not scheduled).  The other Android models from their firmware's code (2026-11-12, the dex in
+      fosservices.odex, athena's compact dex in fosservices.vdex, disassembled): `onNetworkRestartTimeout` and
+      `shouldResetConnection` are instruction for instruction checkers' on cronos, crown and cupcake, athena's the same
+      checks in the same order; the only readers of smartconn_status, and nothing writes it (every APK's and jar's
+      dex looked through too).  cronos, crown, cupcake: setting and both broadcasts; athena's receiver has no
+      SET_ENABLENETBOUNCE (mEnableNetBounce only from its config): setting and SET_ENABLEWIFIDIAGS.  **Open:** a day's
+      run on each of them.
+- [x] Android models: captive portal DNS lookups (2026-11-17, issue #189).  A Show's owner saw DNS queries for
+      mmechocaptiveportal.com and fireoscaptiveportal.com reach 8.8.8.8 (a resolver DHCP named, so the lock admits port
+      53 to it) over and over, with no TCP after them.  Source from the firmware: boot-fosframework's
+      `AmazonCaptivePortalSettingsProviderCallback` (`insertGlobalCaptivePortalSettings`) writes fireos-res's
+      `amz_captiveportal_*_url` into Settings.Global `captive_portal_http(s)_url`/`_fallback_url` (checkers, cronos,
+      crown, athena: mmechocaptiveportal.com + fireoscaptiveportal.com; cupcake: fos6echocaptiveportal.com +
+      fireoscaptiveportal.com); AOSP's `NetworkMonitor` (services) probes them, the fetch never answers behind the lock,
+      the network never validates, and it evaluates again with a growing delay, resolving the name each time.
+      WifiDiagsUtil (the entry above) fetches both URLs too, every ~2.2 min while it runs (logcat's
+      runHttpConnectionTestAttempt on the Show 5 below: 2:13, 2:14, 2:13, 2:13 apart).  Fix:
+      `global/captive_portal_mode=0` (IGNORE = 0: `Settings$Global` in checkers' boot-framework) in ANDROID_SETTINGS of
+      the five: NetworkMonitor logs "Validation disabled." and takes the network as validated without a probe (that
+      string is in each model's services); AOSP reads the mode when a network connects (not checked in the bytecode; the
+      run below agrees: set with `captive_portal_detection_enabled` unset, "Validation disabled." after the next join),
+      so it takes the next Wi-Fi join.  The setting persists in SettingsProvider: alexa-off.sh sets it (a failed read:
+      at the next run) at the satellite's start (after an update, or at boot after boot_completed, the network then up
+      already), so the network up at that moment keeps probing and every later join reads 0.  athena's fireos-res also
+      has `amz_captiveportal_mode` = 1 (PROMPT, in resources.arsc), and only athena's boot-fosframework names both it
+      and `captive_portal_mode`: its callback presumably writes the mode too, not checked (should it at every boot
+      before the join, ours would not hold there); alexa-off.sh saves whatever stock had and alexa-on.sh puts it back
+      ("null": deleted).  On checkers the callback does not run at every boot: a marker `captive_portal_use_https` 1
+      outlived a reboot, where the callback would have written its `amz_captiveportal_use_https` 0 (resources.arsc);
+      athena's not checked.  alexa-off.sh no longer notes a failed `settings get` (empty: Java under load) as "null",
+      which alexa-on.sh would have turned into deleting stock's value: three calls at most, one only once a key failed
+      all three in that run (Java down: ~6 keys x 3 calls of ~2 s otherwise); then the setup flags are set without
+      stock's value noted (they must not wait; alexa-on.sh leaves them), any other key is left for the next run, so
+      stock's value is always noted before ours.  `tests/unit/alexaoff_test.py` (`make unit-alexaoff`, a stand-in
+      `settings`; also every ANDROID=1 device.conf has the key) fails on the old loop.
+      Echo Show 5 (checkers, 2026-11-17, its 2026.11.12 build had neither the WifiDiags broadcasts nor smartconn_status;
+      count-only OUTPUT rules on UDP 53 after hassmic_out, one with `-m string` "captiveportal"): 13 of 15 queries in 10
+      min were the names (WifiDiagsUtil + NetworkMonitor); WifiDiags stopped by hand, 2 of 2 in 10 min, both
+      NetworkMonitor's `PROBE_DNS` (`dumpsys connectivity` mValidationLogs from the join on: 1.4, 1.4, 1.5, 1.6, 1.9,
+      2.4, 3.5, 5.6 min apart; the window, 12-22 min after boot, held the last two).
+      This build pushed: alexa-off.sh set the mode at the satellite's start (stock "null" saved); after a reboot
+      mValidationLogs "Validation disabled.", the network VALIDATED, 0 of 5 and 0 of 2 queries the names in two 10 min
+      runs; then 20 min of every name (the Show's UDP 53 DNAT'd to a logging forwarder on the PC): ntp-g7g.amazon.com,
+      kindle-time.amazon.com, 2.android.pool.ntp.org, nothing else.  Those are time: Android's NetworkTimeUpdateService
+      and fosservices' time update, which schedules itself whether or not the network is a captive portal ("Captive
+      Portal Network, Scheduling Untrusted Update" / "Captive portal authenticated, Scheduling Trusted Update"), so not
+      brought on by the mode as far as its code says; not compared with a run without it.
+      Not covered: WifiDiagsUtil's runs before android_tell reaches it (one in the first minute after the reboot there),
+      and other daemons' lookups.  Blocking port 53 per uid cannot work (netd resolves for every app, hassmic included,
+      which needs public names: GitHub, HA's external URL); a hosts file entry would, but changes a stock file for two
+      names.
+      Dots (no Android framework, no NetworkMonitor; their libace_netsvc_core / libace_connectivity_manager name
+      acsechocaptiveportal.com (biscuit's and radar's fireoscaptiveportal.com too, cannoli's luma_svc that one):
+      wifisvc's tests, which main.sh stops once there is an address): no DNS query at all in 10 min on a Dot 3
+      (2026.11.13) and a Dot 5 (2026.11.16), DHCP naming 8.8.8.8 as dns2 there too (the same rules; a ping of
+      fireoscaptiveportal.com counted, so they see one).  **Open:** the time lookups (auto_time 0 would end Android's;
+      fosservices' not looked at); what a validated network sets off over a day; athena's callback and stock mode on a
+      device; cronos, crown, cupcake, athena not run.
+- [x] Echo Show 8 2nd gen adaptive colour (2026-11-10, issue #162): `screen_adaptive_colour` on the settings page's
+      Screen page, off by default. `board.adaptive_colour` and device.conf `ADAPTIVE_COLOUR` enable it on athena.
+      Of the four supported Shows' extracted firmware images checked here, only athena declares
+      `com.amazon.feature.adaptive_color` (`system/etc/permissions/athena_features.xml`) and contains the
+      `ambientdisplayinfo` service/interface in its framework. Checkers, cronos and crown lack both; shared
+      KnightSettings UI strings are not proof of support. This is not an exclusivity claim for all Echo devices:
+      [Amazon lists Adaptive Color on other Show models too](https://digprjsurvey.amazon.com/csad/help/node/GK77UBXXN7X3DBK8).
+      Root's `main.sh backlight` reads `ambientdisplayinfo` transaction 2 and sets transaction 1 with `i32 0|1`, then
+      reads back. The reporter confirmed these transactions and persistence across reboot. The existing partial
+      implementation defaulted to on and showed the requested value even if the service failed; the finished version
+      saves the preference separately and publishes confirmed state in root-owned `/data/local/hassmic/adaptive-colour`.
+      This transient file also gates visibility, including when the service appears after hassmic has started. Failed
+      sets get five attempts per preference change, explicit retry, or service recovery, then a single log message.
+      Explicit page writes create `state/adaptive-colour-request`, consumed by root even for the same preference.
+      Readback continues
+      every backlight round; external changes are shown without fighting Amazon's temporary video override. The
+      original value is kept in `alexa-settings` and restored by `alexa-on.sh`. PC regression coverage: default off,
+      existing off, on/off, failed writes, late/lost service, readback, restore, and the signed settings API's visibility,
+      persistence across restart, and exports. Presets accept the preference before root publishes readback, without
+      exposing an unavailable switch on the page. Physical-device validation of this implementation remains open.
+- [~] Music page in place of the face, or of the home app, while a track plays (2026-11-10, PR #163, asked by a cronos
+      owner: "a big cover as default"; reworked in review 2026-11-11).  Setting `music_on_screen` off / face / home
+      (Screen page, off by default; `settings.c` -> `screen_music_page` -> `mpage 0|1|2` to the UI, `MP_*` in `ui.h`).
+      `scene.c` `music_page_tick`: a track playing (Sendspin state 1), the face calm (`face_calm`: idle, mic off, DND), no
+      drawer, nothing on its way (`scene_waiting`).  `face`: only with the face as home and our screen in front; with an
+      app as home our screen in front means that app is away (crashed, retried, not up yet at start) and is left to come
+      back: the first version took `own_asked` there (`music_show`) and the app's retries stopped for good.  `home`:
+      also over the home app in front (only that app: another one is left alone), as words.c brings our screen up for a
+      ring: `own_asked` set and the old value kept (`mp_own_was`), `mp_app`; at the stop that app is launched again with
+      the page's frame held, the face under it once it is in front (`mp_gave`).  An app that takes the screen back
+      (Back, Home in the drawer, the app by itself, our home never coming) holds the page off until the stop
+      (`music_page_hold`): no tug of war.  A request, call or timer bring the face (`face_pattern`, unchanged) and the
+      page returns when they end.  Left when Sendspin says stopped (state 0) or the music is gone for 5 s
+      (`MP_STOP_MS`: a gap between two tracks reports 0 for a moment); a pause (2) keeps it.  Left by itself only as it
+      came, the Playing tab with no sheet (`music_page_as_opened`): the queue ending while someone searches the library
+      leaves them there.  Switched off (or from home to face while over the app): what came by itself goes at once.
+      The drawer's Face / Home and the music rail's face button hold it off until the stop; a page opened by hand
+      (`music_show`) is never left by itself.  `ui_test.c`: every one of these, the app as home in both modes.
+      Open: on a real Show (cronos 192.168.4.246): whether Sendspin's state 0 between tracks is shorter than 5 s there, the
+      page after a wake word on a long track, the screen waking for the first track, Kiosk Satellite given back.
+- [x] Duplex over Wyoming for a realtime client (`-D`, 2026-11-12): hermes-talk's Echo surface (`hermes talk echo`) talks
+      to a realtime voice model and cuts replies itself on barge-in, so it needs the microphone through a reply. Without
+      `-D` `core_tts_begin` stops the stream (unchanged); with it the stream stays open, a wake word during SPEAKING is
+      left to the client (no second run), and `mic_gain.hold` also holds while `tts_on`. Why the hold: on radar the
+      first live run looped, the model answering its own reply ("I'll stay quiet" three times in a row, no one
+      speaking): the gain control raised the echo canceller's leftover between words until it read as speech. With the
+      hold and the client's own gate (it zeroes chunks under 0.02 RMS while the Echo plays), radar
+      2026.11.12.014742+8dd9dfe over three sessions: microphone RMS while the Echo spoke median 0.004-0.005, p95
+      0.011-0.032, peaks 0.07-0.33 (barge-in), 94-99 % of chunks gated; no loop since, and barge-in by voice still cuts
+      the reply.  Tests: `tests/fake_talk_duplex.py` (host build, both modes: the stream during a reply, the mid-reply
+      wake word, the run ending at audio-stop; the action button still cuts the reply and a new run begins; `-D` under
+      ESPHome is ignored with a log line).  The front end's listening flag stays set through the reply (the stream
+      never stopped), so its cancellers do not adapt while it plays: what the radar figures above were taken with;
+      `listening(0)` for the reply, as `-w remote` has it, not tried.  Open: ESPHome (`-D` is Wyoming only).
+
+## Cannoli local port — 2026-11-13
+
+See `devices/cannoli/README.md`.
+Cross-build, stock Pryon emulation, ARM Wyoming and host ESPHome tests pass.
+Rooted stock A now boots with headless TWRP B retained. Host-backed UBI writes,
+overlay startup, root USB ADB, Wi-Fi, encrypted Home Assistant adoption, Music
+Assistant pairing and microphone capture under enforcing SELinux are verified.
+Since then (entries below): the light ring, the light sensor, the buttons, the wake
+word and echo cancellation in a room, all checked on our unit (2026-11-15).
+
+- [ ] **Stock LED animations (ledcontroller) on our unit, 2026-11-14.**  ledcontroller now runs (it was stopped at
+      post-fs-data), but its LED HAL never comes up: `aceLedMgr_init: mpcClient_init failed: -2` after 5 s, `openHal
+      ... result is -10006`.  The ring's animations are played by the LED manager in the SCP firmware (`scp_a`, loaded
+      by BL2 = `brhgptlk`, not by the kernel: remoteproc's own `scp.img` request fails on stock too), reached through
+      `/dev/tinysys_ipc_2`.  The SCP does not run here: no `SCP is ready`, every SCP mailbox interrupt at 0 in
+      `/proc/interrupts`, and the IPI ledcontroller sends is never acked (`tinysys_ipc_tx_timeout_timer_callback ...
+      Aborting Head=0 from 5016 msecs ago`).  `scp_a`/`scp_b` are 8349's byte for byte; BL2 is not: this unit keeps
+      its launch BL2 (README "Arrival day" 1a), and 8349's BL2 has more around it (`enable all memory size emimpu`,
+      `amzn_cpld_reset_reg_i2c`, FIT range and integrity checks).  The 8349 SCP is an SRAM part (0x280000) plus a DRAM
+      part (0x48000000, `tinysys_mem_region`); likely the launch BL2's EMI MPU leaves the SCP out of that DRAM and it
+      faults before its ready message.  Not proven (no `/dev/mem`).  The fix would be 8349's `brhgptlk`, which needs
+      the shadowed U-Boot to pass that BL2's added FIT checks (the first unit came on 8349 and boots).
+      Meanwhile: the boot swirl is the kernel's LED trigger `boot-anim` on each LP5036 module, which the HAL would
+      take off; main.sh `leds()` takes it off at the satellite's start.  ledcontroller sets `PUFFIN_START` after its
+      HAL gives up, after the satellite started: netwatch's `alexa_back` stops Alexa and the cloud daemons again.
+
+- [x] **8349's BL2 flashed, the SCP runs, 2026-11-15.**  The fix the entry above points at, applied and verified.
+      `brhgptlk_0..3` are raw MTD partitions (mtd0/2/4/6, 0x40000 each, interleaved with `reserve_0..2`; everything
+      else is the one big `ubi0` MTD) — not UBI volumes, and invisible from the running OS (`/proc/mtd` empty there):
+      TWRP is the only write path.  From TWRP: `dump_image brhgptlk_N` (the four launch copies byte-identical,
+      38ffa88a…, kept at `firmware/cannoli/lk-launch-backup/` for rollback), then `flash_image brhgptlk_N` with the
+      8349 image (86e7da89…), readback-verified per copy before the next.  First boot after: the shadowed U-Boot
+      passes 8349 BL2's FIT checks as on the first unit, and `dmesg` has `mtk-scp 280000.scp:
+      [scp_A_ready_ipi_handler] SCP id: 0` — the first `SCP is ready` on this unit — with tinysys-ipc probed and
+      buffers registered.  `ledctrl -s setup-mode` is accepted with the HAL answering.  Custom LED designs stay
+      unported (the ACS `.animation_bin` format); stock animations are ledcontroller's again.
+
+- [x] **Setup from a phone (Improv) on cannoli, 2026-11-15, after a reset, the HA app on Android.**  Three faults, the
+      BLE side fine throughout (phone connected, credentials taken, the trailing space a phone keyboard adds dropped).
+      1. `wifi.sh lease()` went by `init.svc.dhcpcd-wlan0`, which init sets only at a service's first start: none on
+      an Echo with no network since boot (wifisvc starts dhcpcd once it has one, wifi.sh stops wifisvc), so the switch
+      took it for a model without dhcpcd, never asked for a lease and gave up after 30 s (`noaddress`).  Now started,
+      and the property only tells whether init has the service.  2. `dhcpcd -n wlan0` to a running dhcpcd (init's
+      `-AdLK`) answered `wlan0: waiting for carrier` for good: a control command's arguments replace the daemon's, so
+      link checks were on, against the carrier read at its start (no network) and never again (`-K`).  `dhcpcd -n -K`
+      sent one DISCOVER, the next 64 s later (backoff since its start) and without `-L` took an IPv4LL address.  Now
+      `stop`/`start dhcpcd-wlan0` for every lease: init's arguments, the carrier read anew, backoff from 4 s (and the
+      addresses dropped between: init stops with SIGKILL, the old address stayed beside the new lease, a stale
+      10.99.0.5 first in ifconfig in a test on the Echo, so a switch between networks would never have matched); the join
+      took 9 s (DISCOVER to ACK from 192.168.100.1).  Every model's switch goes this way now; the Dot 2's RENEW in 1 s
+      by `-n` is not measured again with the restart.  3. After a failed switch the error characteristic kept
+      UNABLE_TO_CONNECT until the next command; the HA app said "unable to connect" at once, with no command reaching
+      the Echo, then once more on a switch the Echo finished (provisioned, result sent).  improv.c clears the error on
+      each connection.  That the app reads the error as it connects is inferred from those two, not from its code.
+      Tests: fake_wifi_tools.py has init's service states (`svc`: none until started) and the stale carrier (`-n` from
+      a dhcpcd started off a network gets no lease); fake_improv.py starts with no dhcpcd, reboots while the network
+      is away, and reconnects after the wrong password (error 0, authorized).
+
+- [x] **PowerDaemon crashed every 25 s on cannoli, 2026-11-15.**  SIGSEGV, fault addr 0x30, in its night mode
+      (`libPowerZTSPowerSavingService.so`, ZTSPwrSavingSubservice::work): `TimeServiceClient::create` connects by AIPC
+      to `com.amazon.puffin` (PuffinApp, stopped by the satellite), logs "Failed to connect to uuid com.amazon.puffin",
+      and work() goes on with the null client.  Each life: ~4 s waiting for `lab126.service.shm`, Arcus remote config
+      and Minerva metrics set up, crash ~20 s in.  sntpd running does not help (it was tried).  Only cannoli has
+      PowerDaemon.  Now in cannoli's `CLOUD_SERVICES` (stopped by lockdown.sh); pwrsvcd stays.  Checked with it
+      stopped: hassmic restarted, mic audio and the self test 1.5 s after its start, HA linked again (nothing waits on
+      it, unlike perfmonitord for the mixer).  Lost: Amazon's night mode power saving.
+
+- [ ] **Cannoli port review on the device, 2026-11-15** (the log, logcat, sysfs; nothing needing hands on the Echo).
+      Fixed: the mute latch's input is `gpio-privacy-state` (SW_MUTE_DEVICE, event1; the button `gpio-privacy-button`,
+      KEY_MUTE, event2), not `gpio-privacy`, so only the state file's once-a-second look saw the button;
+      `enable-gpio-toggle-duration` is 0x32 = 50 ms in the device tree (athena's 1000), no `privacy_button` needed.
+      The thermal zone is `soc_max` (no `mtktscpu` on 5.4; zones soc_max, cpu_little0, cpu_virtual, wifi_temp,
+      amp_temp, ap_ntc0..4; display_virtual and cpufilter_virtual unreadable).  The attestation module's idme noise
+      comes without its eMMC line here (NAND), two lines, which the log filter now drops too.  Benign: `micAsr rate=-1`
+      (as on donut), mesh_btal/halo_regiond/ace_net_mgr/MinervaShim errors (the cloud daemons stopped), the thermal
+      HAL failing on the two virtual zones.
+      Done since (2026-11-15, same day):
+      - light sensor: the ams TSL2540 (`iio:device0` of i2c 4-0039, `in_intensity0_raw` visible, `in_intensity1_raw`
+        IR) as stock's `libacehal_ambientLightSensor.so` makes lux (calc 0x4318, getLux 0x4430): a row of 8
+        coefficients picked by idme alsparams' `capcolor` (4 here), two linear forms of the channels blended by
+        smootherstep on IR/visible, over real gain (calibscale 256 -> 128) x integration time in ms; then a line through
+        the unit's factory points in idme `alscal` (counts at 20 and 400 lx, hex, at alsparams' gain and time).  No
+        alscal: stock answers 0 for good, here no reading.  Stock's `alsctrl` reads idme only with -P/-C; without them
+        it takes row 0 and no calibration (its 278 for a room where the HAL says 53).  Checked on the Echo, as puffin:
+        2462/331 -> 66.2 lx, alsctrl with idme's data 66; lux.h, `tsl2540:` in `board.light_sensor`, lux_test.c.
+      - speaker gain: `Speaker Volume A` of the MAX98396 (i2c 3-0038), the kernel's TLV read on the Echo: DB_RANGE
+        0..17, DB_SCALE 400/100 = +4..+21 dB, 1 dB a step; vendor mixer_paths.xml sets 10 (+14 dB); `Digital Volume
+        A` 126 = 0 dB.  No stock library names the control (libasp and libaudioCtrl only print a volume): nothing moves
+        it with the volume.  Offered up to 16 (+6 dB), cronos' rule, until someone has listened at full volume.
+      - Wi-Fi power save: the driver's default is power save (`iwpriv wlan0 driver get_power_mode`: enforce 3 = none
+        enforced, system mode 2); stock's wifisvc sends `DRIVER ENFORCE_POWER_MODE 0` (CAM) while pwrsvcd holds a
+        perflock and 3 after (libacehal_network_all.so applyPowerSaveMode), and with wifisvc stopped every request
+        failed (-8).  100 UDP round trips from the LAN (a datagram echo on the Echo): power save median 4 ms, p90 26,
+        p99 115; CAM 3, 6, 14; pings 1.1 s apart max 23.6 / 5.6 ms.  Broadcasts were not measurable from the PC (another
+        subnet); in power save they wait for the DTIM beacon.  device.conf `WIFI_AWAKE`, sent by netwatch whenever the
+        driver does not report it; it held over a reassociation.  Other models' drivers not looked at (biscuit: CAM
+        from boot, 2026-10).
+      Checked by hand on the Echo (2026-11-15): the buttons (action, volume up/down: KEY_HELP/VOLUMEUP/VOLUMEDOWN on
+      `gpio-keys`; mute), the wake word and echo cancellation in a room, the light ring (HA's light and effects, the
+      turned listening ring, designs from the settings page).
+      Open:
+      - the volume curve (the Dot 2's stands in): needs a measurement with a microphone beside it; ADC TLV320ADC5140
+        (4-004c).
+      - Bluetooth audio both ways.
+      - Wi-Fi motion: done (entry below), a walk past it and a night still to watch.
+
+- [x] **Cannoli's light ring: our animations and Home Assistant's light, 2026-11-15.**  The format (a background
+      agent from libace_ledmgr.so, libacehal_led_interface.so, ledcontroller and the SCP image; every stock file
+      round-tripped): `<i>.<name>.animation_bin`, big-endian "animagic" "totl" <frames>, per frame an optional "loop"
+      and "fram" <ms> + 12 x RGB, donut's text byte for byte (25 of stock's identical to donut's); index files
+      acs_animation_list/count/name_list (the SCP's slot i = line i; names = what is playable), acs_auto_stop_conf (1
+      exactly for stock's whose loop is black, all 115) and layer_config_common.txt (the JSON flattened, byte for
+      byte); all sent once at ledcontroller's start (HAL `led_initAnimation`, AMF over /dev/tinysys_ipc_2).
+      Limits, on the Echo (a test set swapped in, ledcontroller restarted, "openHal ... result is 0" or -10006):
+      hassmic's donut-like set (772 animations, ~530 kB on the SCP) refused; 400 tiny ones loaded, 440 not, so a
+      count limit near 400 (the 800 kB heap aside); a refused init leaves the LED manager refusing stock's set too until
+      a reboot.  Way round: `aceLedMgr_updateAnimationData(name, data)` replaces a loaded animation's frames, any length,
+      while it plays (seen: a 1-frame animation became a 24-frame green pulse in place), but only from the process
+      holding the session: ledcontroller.  So `libhmled.so` (src/ledshim/) preloaded into it, serving
+      "@hassmic-led" ("<name>\0<data>", the daemon's uid, hassmic_ names, frames checked).  LD_PRELOAD was ignored
+      for init's ledcontroller: its file capability (CAP_WAKE_ALARM, CapEff 0x800000000) makes the exec secure; root
+      runs a copy without it (main.sh ledc_start, its libraries ask for no alarm timers, the HAL came up and played as
+      stock's).  Our set: the listening ring turned 12 ways, the Assistant's volume steps, designs, and two light slots
+      (hassmic_light_a/b, auto-stop 0), 183 animations with stock's, ~43 kB; the light drawn as one animation (effect,
+      fill, LED by LED) into the slot not shown, then shown, the old one unset.  On the Echo: shim guards (root: no
+      answer; a stock name: -1001; ours: 0), and Home Assistant's light, effects, fill and the wake word's hand-off
+      checked by eye.  tests/fake_ha_ring_acs.py.  Designs from the settings page checked on the Echo too
+      (2026-11-15).
+
+- [x] **Wi-Fi motion on cannoli, 2026-11-15.**  The driver, `wlan_mt76x3_sdio.ko` (MT7653; MediaTek's gen4m code with
+      a mac80211 side for eero's mesh), has athena's RX path byte for byte where it counts: `nicRxProcessDataPacket` calls
+      `nicRxFillRFB` once (+0xa0), the RFB's group-valid byte at +16 and group 3 at +32, `nicRxGetRcpiValueFromRxv` reads
+      RX vector word 3.  So `hassmic_rcpi4m.c` with its 32-bit defaults; four things in the way, each found on the Echo:
+      1. The kernel (5.4.86, 32-bit ARM, Linaro GCC 4.9; Android's common kernel) exports no `kallsyms_lookup_name`, has
+      no `patch_text` (no JUMP_LABEL, KPROBES, KGDB) and read-only module text (STRICT_MODULE_RWX), `set_memory_rw` not
+      exported.  `HM_DRIVER_SYMS` (device.mk `KCFLAGS`): the two functions from the driver's own symbol table
+      (`find_module`, its `mod_kallsyms`, all read through `probe_kernel_read`), each taken only if `sprint_symbol` names
+      it at +0; the `bl` written through a `vmap`'d alias of its page under `stop_machine`, the driver's text left
+      read-only.  2. Its `struct module` is Android's: `init` at 0xfc in every stock module (14 of them), kernel.org's
+      with the same config at 0xd8; name (12), exit (0x208) and size (0x240) agree, the 36 bytes come before `init`
+      where ours has padding before the cacheline-aligned `core_layout`.  `tools/kmod-init.py` moves the one relocation
+      after the build (device.mk `KMOD_INIT`).  The other structs the module hands the kernel compare equal with stock
+      modules' (`file_operations`' fields, `kernel_param`'s 20 bytes).  3. CONFIG_MODVERSIONS: `tools/kcrc.py` reads
+      the CRCs out of boot.img (`__ksymtab`/`_gpl` found by their shape, 12-byte entries with 5.4's namespace, each run's
+      `__kcrctab` where the 745 CRCs the stock modules carry all sit at their index; 4740 + 4984 exports) into
+      `devices/cannoli/Module.symvers`; on athena's boot image it gives that hand-made file's CRCs exactly.
+      4. RCPI0 is 255 in every frame: of the two antennas the second one receives (a probe on `nicRxProcessRXV`: word 3
+      `0xffff66ff`, RCPI1 101-108 over 20 frames).  The driver itself takes RCPI1 then (word 0 bits 22-23 = 0), and so
+      does the module now; the other models' RCPI1 is 255, nothing changes for them.
+      Config: boot.img's IKCONFIG, stack protector off (arm-eabi-4.8), the system keyring off (`extract-cert` does not
+      link against an OpenSSL without ENGINE; nothing of it reaches a module), LOCALVERSION `-ab0013323246848`: the
+      vermagic is stock's.  On the Echo: loaded by hand, then by a push update with `wifi_motion=on`: unicast frames
+      RCPI 68-72 (`KIND` 0x14003-0x14006), broadcasts 72 (0x100b); hassmic said
+      "available (through the kernel module)", then "still", then "moving".  Not yet: a walk past it on purpose, a night.
+
+- [x] **Cannoli's prepare.sh comes with updates, 2026-11-15.**  init runs `/system/hassmic/prepare.sh` at
+      post-fs-data, before it mounts the overlay, so it is the SquashFS copy, and updates put theirs into the overlay's
+      upper folder, where init never runs it.  Our unit had the first one flashed (md5 2de1e837..., `set -e`, read
+      through a bind mount of `/`) and was reflashed with this one the same day.  Writing
+      the SquashFS from the running OS (`system_a` = `/dev/ubi0_9`, the mounted root; no dm-verity) was not tried: a
+      failed write leaves slot A unbootable, and the image needs the offline builder.  Made for the Echos flashed from
+      now on (ours is the only one and gets reflashed): the flashed copy is a starter.  It runs the update's copy
+      straight from `/data/hassmic-system/upper/hassmic/prepare.sh` (written by sysinstall.sh from a verified bundle at
+      promotion) with `steps`, before the overlay is up, under `timeout -k 5 90` (init waits for it), so every step is
+      updatable, the mount too (made anew each boot by the update's copy).  Taken only when it can be trusted:
+      `/data/hassmic-system` a real folder, root's, 0700 (`ls -ldn`; /data is system's 0771, so a system process could
+      have put another there), no link on the way, the file root's and writable by root only, the line
+      `# hassmic-prepare-api 1`, `sh -n` clean, and toybox's timeout there (else nothing would bound it).  Its own steps
+      are the fallback: no update's copy, no `hassmic.conf` (opted out: the update's copy is not run, the overlay still
+      mounted as always), not trusted, exit status not 0 (`try` counts every failed step), or no overlay on `/system`
+      after it.  `hassmic.storage.ready` is set whatever happened (the first copy, under `set -e`, left it unset on any
+      failure: no firewall service, no satellite, USB adb only).  lockdown.sh runs under `timeout -k 5 60` in the steps.
+      The interface every later version keeps: the api line, `steps` doing the steps only (definitions only above the
+      dispatch), exit 0 only when all did their job, the overlay mounted; steps that can run twice (the fallback runs
+      after a copy that failed half way).  Limits: the fallback's lockdown.sh is the update's (the SquashFS copy lies
+      under the overlay once it is mounted; as the firewall service's); a time limit kills only the shell it started
+      (measured: a background child of it lived on), so a leftover lockdown may run beside the fallback's until the
+      firewall service loads the chain anew; an update's steps first run at the boot after its promotion (the self
+      test is hassmic's).  On the Echo with stand-ins (paths, lockdown.sh, setprop and
+      the mount through a file replaced): no update's copy, a good one (its steps alone), one that does not mount, one
+      with a failing step (logged with its real status), a syntax error, a hang ignoring TERM (killed by -k), no api
+      line, a link, the folder 0755, the file group-writable, no timeout, no `hassmic.conf` (the update's ignored, no
+      lockdown), a first boot (`hassmic.conf` and the mark made): each reached the property, the fallback where it
+      should.  The real file run by hand on the Echo as the starter: the upper
+      folder's copy ran, lockdown applied, no fallback.  Reflashed (the SquashFS's prepare.sh and /init.hassmic.rc
+      byte for byte HEAD's, read through a bind mount), three real boots: the update's copy with a line of its own
+      added (the line at boot+18.3: init's run took it, timeout found on init's PATH); one whose mount is gone (its
+      line, then "left /system without the overlay", the flashed steps mounted it, storage ready, the firewall
+      service and hassmic running); the real copy back (clean).  A first attempt
+      for the unit as it is (lockdown.sh, which the flashed copy calls after the mount, running the overlay's
+      prepare.sh) was dropped for this.  `/init.hassmic.rc` stays as flashed: Android 7.1.2's init (SDK 25) reads
+      every rc once from the SquashFS before `/data` is mounted and has nothing to load one later (no
+      `perform_apex_config`, `ctl.apex_load`).  It only runs prepare.sh and starts `boot.sh firewall` / `boot.sh
+      satellite` as root in su, all updatable: another user or domain is `runas`, another trigger a script waiting on
+      the property, its `on boot` adb properties can be set again later.  A reflash only when those entry points
+      change.
+
+- [x] **Cannoli's rollback after a bad promotion, 2026-11-15.**  Every promotion (`sysinstall.sh factory`) overwrites
+      the factory copy in the overlay, and boot.sh's fall back (`ota/tries`) only covers an update that never ran a
+      minute (main.sh puts tries to 0 once hassmic ran 60 s, healthy or not): one that runs and still cuts the Echo off
+      (lockdown.sh, boot.sh or main.sh closing the network) left only the USB cable, i.e. opening the Echo.  Now:
+      device.conf `ROLLBACK=/data/hassmic-system`; main.sh `reach_check` (netwatch, every 10 s until it sees one): an
+      ESTABLISHED connection in /proc/net/tcp on 26053, 16700, 28928, 28929 or 28931 (listeners are IPv4 only) from an
+      address other than 127.0.0.1 puts `boots` to 0 and the running version into `reached` (last 8); first in
+      netwatch's round.  A boot before set-up (no state/adopted) or without an address in its first 5 minutes
+      (watched a minute at least: a satellite restarted late in a boot excused it at once, seen on the Echo) is excused
+      (`boots` one down), only for a version in `reached` (an update that loses Wi-Fi or the address itself counts),
+      three in a row at most (`excused`, cleared when reached: one reached once that loses the network later steps
+      back after them), and only by a working main.sh.  `sysinstall.sh factory` keeps the copy it replaces as `previous` (cp -a of
+      /system/hassmic without the staged .new files; previous.new synced, the old to previous.old, the new into place,
+      a cut between the renames finished by the starter) only when its version is in `reached`.  The
+      flashed prepare.sh counts boots (init's run only: no overlay yet, /system is the SquashFS) and with `boots` >= 2
+      takes one step: (1) `ota/current` not the factory copy's version: dropped; (2) `previous` there: the factory
+      copy to `rolled-back`, previous (relabelled system_file first) in its place; (3) else the factory copy aside, the
+      SquashFS's shows through; each version taken out into `ota/refused` (main.sh rejects it as a bundle), the refusal
+      and `ota/current` before the moves, a swap a power cut left half done finished at the next start, `boots` last.
+      Costs: everyone away from the Echo for two counted boots steps back too and refuses a good version (e.g. a
+      fresh update, not reached yet, and two power cuts in a row with a router slower than 5 minutes; a newer one
+      installs; refused is by the exact version string); `reached` is one connection in a boot, not proof for the next;
+      step 3's SquashFS copy runs on the state/ and LED files newer versions left (checked only with a same-day
+      flash); the moves and syncs of a step run outside the time limits (local renames, a 5 MB relabel).  On the Echo, stand-ins (paths, the
+      SquashFS copy and the mount through files): a walk down over nine boots (unpromoted v3 dropped, v2 to v1, v1 to
+      the flashed copy, then "nothing left"), a swap cut short finished, a promoted copy with no previous to the flashed
+      one, the overlay mounted already (nothing), a garbage count, opted out; reach_check's excuses and connections
+      (not set up, no address at 100 s and 400 s, nobody, HA connected, loopback, listening only, an outgoing one).  The
+      real main.sh/sysinstall.sh by pushes: "reached from the network, boot count 0" within seconds of each restart, the
+      first promotion keeping nothing (the copy it replaced was never reached), the second keeping the first (4.8 MB).
+      Reflashed with 0d8c74a (prepare.sh and /init.hassmic.rc byte for byte), USB cable off, and on real boots over
+      Wi-Fi: `boots` set to 2, reboot: "rolled back from 145547 to 145133" (the restored copy from /system/hassmic,
+      labelled system_file, ota/current gone, 145547 refused, the firewall check clean, reached at boot+63); again with
+      no previous: "145133 moved aside, the flashed copy runs" ("factory from /system/hassmic", Home Assistant at
+      boot+63, reached, firewall clean); a push of a newer build brought the newest back.  The SquashFS copy the
+      builder made then had no VERSION, libhmled.so, hassmic_rcpi4m.ko or latency (an update's files): on it the light
+      ring has no Home Assistant light, no Wi-Fi motion, and the logs say "factory".  The builder's `--port` takes a
+      bundle's files whole now, VERSION and update.pub included; this unit keeps the old copy until a reflash.

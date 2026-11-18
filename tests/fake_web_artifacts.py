@@ -126,12 +126,18 @@ def main():
         pb.call("POST", "/api/artifact/begin", f"whisper {by['whisper']['digest']}\nHCLG.fst 10\n".encode())
         st, _, data = pb.call("POST", "/api/artifact/chunk/whisper/HCLG.fst/5", b"x" * 6)
         check(st == 400 and b"past the end" in data, "a piece past the end of its file: refused")
+        st, _, data = pb.call("POST", "/api/artifact/chunk/whisper/HCLG.fst/9223372036854775807", b"x")
+        check(st == 400 and b"past the end" in data, f"a piece whose end is past what a long holds: past the end too: {data}")
         st, _, data = pb.call("POST", "/api/artifact/commit/whisper")
         check(st == 400 and b"incomplete" in data, "commit with a file not whole: refused")
         st, r = copy(pa, pb, by["whisper"])
         check(st == 200, f"the whisper model with its folder copied: {r}")
         st, _, data = pb.call("POST", "/api/artifact/begin", b"wake:echo-en-US " + b"0" * 64 + b"\na/b/c/x 10\n")
         check(st == 400, f"a file three folders down: refused: {data}")
+        # sizes that add up past what a long holds wrapped below the cap and the free space check (on the Echos, whose
+        # long has 32 bits, two files of 2 GB did; here two of 2^62)
+        st, _, data = pb.call("POST", "/api/artifact/begin", b"wake:echo-en-US " + b"0" * 64 + b"\na.bin 4611686018427387904\nb.bin 4611686018427387904\n")
+        check(st == 400 and b"too big" in data, f"sizes whose sum is past what a long holds: too big: {data}")
         check(sorted(arts(pb)["staged"]) == ["sound", "wake.echo-de-DE", "whisper"], f"ready to install: {arts(pb)['staged']}")
 
         # install: hassmic names them for root; root's installer puts them in place
@@ -171,18 +177,54 @@ def main():
             check(r.returncode != 0 and f"FAILED wake:{name}:" in r.stdout and not os.path.exists(os.path.join(b.data, "models", name)),
                   f"{'a link in a folder' if name == 'evil2' else 'three folders down'}: refused by root: {r.stdout.strip()!r}")
 
+        # links the daemon could leave root (issue #130): nothing read or written through them, the folder not followed
+        art, res = os.path.join(b.state, "artifacts"), os.path.join(b.state, "artifacts", "result")
+        secret, victim = os.path.join(b.data, "root-secret"), os.path.join(b.data, "root-conf")
+        with open(secret, "w") as f: f.write("psk=SECRET123\n")
+        with open(victim, "w") as f: f.write("ROOTCONF\n")
+        def clear():
+            for n in ("request", "result.tmp", "result"):
+                if os.path.lexists(os.path.join(art, n)): os.unlink(os.path.join(art, n))
+        def said(r): return r.stdout + (open(res).read() if os.path.isfile(res) else "")
+        clear(); os.symlink(victim, os.path.join(art, "result.tmp")); os.symlink(secret, os.path.join(art, "request"))
+        r = root_install(b)
+        check(r.returncode != 0 and "SECRET" not in said(r) and open(victim).read() == "ROOTCONF\n"
+              and not os.path.lexists(os.path.join(art, "request")) and open(secret).read() == "psk=SECRET123\n",
+              f"request a link to a file of root's: taken, never read; result.tmp a link: its file untouched {said(r)!r}")
+        clear(); os.link(secret, os.path.join(art, "request"))
+        r = root_install(b)
+        check(r.returncode != 0 and "SECRET" not in said(r) and open(secret).read() == "psk=SECRET123\n",
+              f"request a hard link to a file of root's: taken, never read {said(r)!r}")
+        clear(); os.symlink(victim, os.path.join(art, "result.tmp")); os.symlink(victim, res)
+        with open(os.path.join(art, "request"), "w") as f: f.write("bogus\n")
+        r = root_install(b)
+        check(r.returncode != 0 and not os.path.islink(res) and open(res).read() == "FAILED bogus: not an artifact\n"
+              and open(victim).read() == "ROOTCONF\n", f"a plain request answered beside the links, their file untouched {said(r)!r}")
+        clear()
+        os.rename(art, art + ".real"); rootdir = os.path.join(b.data, "rootdir"); os.makedirs(rootdir)
+        for n in ("request", "result", "wake.x", "wake.x.ready"):
+            with open(os.path.join(rootdir, n), "w") as f: f.write("wake:x\n")
+        os.symlink(rootdir, art)
+        r = root_install(b)
+        check(r.returncode != 0 and not os.path.lexists(art) and sorted(os.listdir(rootdir)) == ["request", "result", "wake.x", "wake.x.ready"]
+              and open(os.path.join(rootdir, "result")).read() == "wake:x\n",
+              f"the folder a link to one of root's: refused, the link removed, nothing in it touched {r.stdout.strip()!r}")
+        os.rename(art + ".real", art); shutil.rmtree(rootdir); os.unlink(secret); os.unlink(victim)
+
         # wake word sets installed by hand under the short name get the long one at the next start (main.sh, as root)
         b.model("models/echo-de", wake)                     # the same set as echo-de-DE: goes
         b.model("models/alexa-de", {"pryon.manifest": b"a\n"})   # alone: renamed, and the active one: the choice follows
         b.model("models/echo-en", {"pryon.manifest": b"e\n"})    # en comes in several regions: left alone
         b.model("models/computer-it", {"pryon.manifest": b"c\n"}); b.model("models/computer-it-IT", {"pryon.manifest": b"other\n"})
         with open(os.path.join(b.state, "wake_word"), "w") as f: f.write("alexa-de\n")
-        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True)
+        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True,
+                           env=dict(os.environ, READ_AS=""))
         names = sorted(os.listdir(os.path.join(b.data, "models")))
         check(r.returncode == 0 and names == ["alexa-de-DE", "computer-it", "computer-it-IT", "echo-de-DE", "echo-en"]
               and open(os.path.join(b.state, "wake_word")).read().strip() == "alexa-de-DE",
               f"short names migrated (same set: dropped; different: both kept; en: left), active wake word followed: {names} {r.stdout.strip()!r}")
-        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True)
+        r = subprocess.run(["sh", f"{ROOT}/scripts/device/artifact-install.sh", "migrate", b.state, b.data], capture_output=True, text=True,
+                           env=dict(os.environ, READ_AS=""))
         check(r.stdout.strip() == "models: computer-it and computer-it-IT differ, both kept" and sorted(os.listdir(os.path.join(b.data, "models"))) == names,
               "a second start changes nothing")
 

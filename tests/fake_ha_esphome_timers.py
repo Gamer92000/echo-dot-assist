@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py), part two:
 timers ringing and what stops them, a new run after an error, the timer that runs next, encryption provisioned by Home Assistant (key, mDNS,
-refusals, clearing), the time and zone over the keyed link, noise reduction, LED brightness, the light sensor and the
+refusals, clearing), the Sendspin pairing token over the keyed link only, the time and zone over the keyed link, noise reduction, LED brightness, the light sensor and the
 Echo Show's screen brightness (HASSMIC_FAKE_BACKLIGHT: a model with one)."""
-import asyncio, base64, os, re, signal, time
+import asyncio, base64, os, re, signal, subprocess, tempfile, time
 from datetime import datetime
 from aioesphomeapi import NumberInfo, NumberState, SwitchInfo, SwitchState, TextSensorInfo, TextSensorState, BinarySensorInfo, BinarySensorState, SensorInfo, SensorState
 from aioesphomeapi import APIClient, MediaPlayerCommand, VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm, ZERO_NOISE_PSK
 from aioesphomeapi.core import InvalidEncryptionKeyAPIError, RequiresEncryptionAPIError
-from esphome_common import check, until, sync, peak, speech, home_assistant, run
+from aioesphomeapi.model import SendspinPairingTokenStatus
+from esphome_common import ROOT, check, until, sync, peak, speech, home_assistant, run
+from tzdata_file import build as build_tzdata
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 17101, 17102, 17103, 17104, 17105
 
 
 async def main(e):
     proc, state, env, play, mdns, page, conf = e.proc, e.state, e.env, e.play, e.mdns, e.page, e.conf
+    echo_log = e.log                    # (an "except ... as e" below unbinds e)
     ha = await home_assistant(e)
     va = ha.va; started, stopped, mic = va.started, va.stopped, va.mic
     handle_start, handle_stop, handle_audio, handle_finished = va.handle_start, va.handle_stop, va.handle_audio, va.handle_finished
@@ -222,6 +225,8 @@ async def main(e):
     check(ok, "a random key before provisioning: invalid key, server hello names the device")
     prov = APIClient("127.0.0.1", PORT, None, noise_psk=ZERO_NOISE_PSK)
     await asyncio.wait_for(prov.connect(), 5)
+    st = await asyncio.wait_for(prov.sendspin_pairing_token(), 5)
+    check(st.status == SendspinPairingTokenStatus.ENCRYPTION_REQUIRED and st.token == "", f"Sendspin token over the zero PSK, before a key: {st.status!r}")
     check(await asyncio.wait_for(prov.noise_encryption_set_key(key), 5) is True, "key accepted over the zero-PSK connection")
     await prov.disconnect()
     check(open(os.path.join(state, "api_key")).read().strip() == key.decode() and oct(os.stat(os.path.join(state, "api_key")).st_mode & 0o777) == "0o600",
@@ -235,29 +240,73 @@ async def main(e):
         except err: ok = True
         check(ok, f"with a key: {what} connection refused ({err.__name__})")
 
+    open(os.path.join(state, "country"), "w").write("NL\n")           # the Wi-Fi's (apcountry.c's HASSMIC_FAKE_COUNTRY)
     enc = APIClient("127.0.0.1", PORT, None, noise_psk=key.decode(), timezone="Europe/Berlin")
     await asyncio.wait_for(enc.connect(login=True), 5)
     info = await enc.device_info()
     check(info.name == "echo-dot" and info.api_encryption_supported and not info.api_encryption_provisionable, "encrypted: device info, no longer provisionable")
     ent3, _ = await enc.list_entities_services()
     check(len(ent3) == len(entities), "encrypted: entities listed")
+    # the Sendspin token, which Home Assistant hands Music Assistant to pair with: over the keyed link only
+    st = await asyncio.wait_for(enc.sendspin_pairing_token(), 5)
+    want = subprocess.run([f"{ROOT}/build/hassmic-host", "-T"], env=env, capture_output=True, text=True).stdout.strip()
+    check(st.status == SendspinPairingTokenStatus.OK and st.token == want and want.startswith("SP:0"), "encrypted: Sendspin token handed out, the one of `hassmic -T`")
     # the time: asked of Home Assistant over the keyed link only (aioesphomeapi answers it), handed to root
     clock = os.path.join(state, "clock")
     check(not os.path.exists(clock), "no time taken from the plaintext connection before the key")
-    enc.subscribe_states(lambda s: None)
+    # Home Assistant's home location, as HA answers a device's subscription to zone.home's attributes: Cologne; one packet with the states' subscription,
+    # as Home Assistant's manager sends it (the time is asked on that, zone.home's answer comes after it)
+    home = {"latitude": "50.9375", "longitude": "6.9603"}; subs = []
+    def on_sub(entity, attribute):
+        subs.append((entity, attribute))
+        if entity == "zone.home" and attribute in home: enc.send_home_assistant_state(entity, attribute, home[attribute])
+    est = []
+    enc.subscribe_home_assistant_states_and_services(on_state=est.append, on_service_call=lambda c: None, on_state_sub=on_sub, on_state_request=lambda e, a: None)
     for _ in range(30):
         if os.path.exists(clock): break
         await asyncio.sleep(0.1)
+    tok = next(x for x in ent3 if x.object_id == "sendspin_pairing_token")
+    await sync(enc)
+    got = [x.state for x in est if isinstance(x, TextSensorState) and x.key == tok.key]
+    check(got == [want], f"encrypted: the \"Sendspin pairing token\" sensor's state is the token, to this subscriber ({len(got)} states)")
     try: t, at = open(clock).read().split(); t = int(t)
     except (OSError, ValueError): t, at = 0, ""
     boot = time.clock_gettime(time.CLOCK_BOOTTIME)
     check(abs(t - time.time()) <= 2 and re.fullmatch(r"\d+\.\d\d", at) and 0 <= boot - float(at) < 5,
           f"keyed link: Home Assistant's time in state/clock for root, with the boot clock as /proc/uptime words it: {t} {at}")
-    # and its zone, as its rule (the PC has no bionic tzdata: the rule itself; tz_ref.py checks the names)
-    from aioesphomeapi.timezone import iana_to_posix_tz
-    try: tz = open(os.path.join(state, "timezone")).read()
-    except OSError: tz = ""
-    check(tz == iana_to_posix_tz("Europe/Berlin") + "\n", f"keyed link: Home Assistant's time zone in state/timezone for root: {tz!r}")
+    # and its zone, sent as its rule: the zone of that rule in the country of Home Assistant's home (Cologne: DE; the
+    # Wi-Fi's NL is 50 km away, not near: the location wins) of a bionic tzdata built from Python's, for root, and in
+    # state/zone as known, for the language; the page says it (tz_ref.py and geo_ref.py check the names and places)
+    await until(lambda: len(subs) >= 2, 3)
+    check(sorted(a for e_, a in subs if e_ == "zone.home") == ["latitude", "longitude"], f"keyed link: zone.home's latitude and longitude subscribed: {subs}")
+    def read(f):
+        try: return open(os.path.join(state, f)).read()
+        except OSError: return ""
+    await until(lambda: read("zone") == "Europe/Berlin home DE DE NL\n" and read("timezone"), 3)     # clock.c's zone thread writes both
+    check(read("timezone") == "Europe/Berlin\n" and read("zone") == "Europe/Berlin home DE DE NL\n",
+          f"keyed link: Home Assistant's rule as the zone of its home's country, in state/timezone for root and state/zone: {read('timezone')!r} {read('zone')!r}")
+    z = page.state()["zone"]
+    check(z == {"zone": "Europe/Berlin", "how": "home", "country": "DE", "home": "DE", "wifi": "NL", "language": "de"}, f"the page: what Automatic stands on: {z}")
+    check("of the country of Home Assistant's home location, DE" in echo_log() and not any(c in echo_log() for c in ("50.93", "6.96")),
+          "the log names the country, never the home's coordinates")
+    # the first zone written was already the home's (the zone waited for zone.home's answer after the time's): one line
+    check(echo_log().count("time zone: Europe/") == 1 and "Amsterdam" not in echo_log(), f"one zone worked out at the start, not first without the home: {re.findall(r'time zone: Europe/.*', echo_log())}")
+    # moved to Herzogenrath, on the Dutch border: the Wi-Fi's NL is near, and decides
+    def move(lat, lon):
+        home.update(latitude=lat, longitude=lon)
+        for a in ("latitude", "longitude"): enc.send_home_assistant_state("zone.home", a, home[a])
+    move("50.8706", "6.0947")
+    await until(lambda: read("zone") == "Europe/Amsterdam wifi NL DE NL\n", 3)
+    check(read("zone") == "Europe/Amsterdam wifi NL DE NL\n", f"on a border, the Wi-Fi's country there decides: {read('zone')!r}")
+    # no location (0, 0: Home Assistant's when none was set) and no country: the zone known before stays known, though
+    # it is the one a guess gives for that rule
+    open(os.path.join(state, "country"), "w").write("")
+    move("0.0", "0.0"); await asyncio.sleep(1)
+    check(read("zone").startswith("Europe/Amsterdam wifi NL "), f"no location, no country: the zone known before stays: {read('zone')!r}")
+    # the location back, no Wi-Fi country: the home's
+    move("50.9375", "6.9603")
+    await until(lambda: read("zone") == "Europe/Berlin home DE DE -\n", 3)
+    check(read("zone") == "Europe/Berlin home DE DE -\n", f"the location back: its country's zone: {read('zone')!r}")
     started.clear(); mic.clear()
     enc.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio, handle_announcement_finished=handle_finished)
     await sync(enc); proc.send_signal(signal.SIGUSR1)
@@ -275,6 +324,14 @@ async def main(e):
     before = os.path.getsize(play)
     res = await enc.send_voice_assistant_announcement_await_response(f"http://127.0.0.1:{HTTP_PORT}/a.wav", 15, "x")
     check(res.success and os.path.getsize(play) - before == 48000, "encrypted: announcement played")
+    # adb over Wi-Fi (issue #130): no entity, and Home Assistant's key alone does not open it: the settings page does,
+    # with a press of the action button (fake_web.py).  Closing is taken from anyone with the key.
+    adb_req = os.path.join(state, "adb-request")
+    enc.switch_command(22, True); await sync(enc); await asyncio.sleep(0.3)         # KEY_ADB_WIFI, as proto_esphome.c
+    check(not os.path.exists(adb_req), "keyed link: opening adb over Wi-Fi refused, nothing asked of root")
+    enc.switch_command(22, False); await sync(enc)
+    check(open(adb_req).read() == "0\n" if os.path.exists(adb_req) else False, "keyed link: closing adb over Wi-Fi asked of root")
+    os.unlink(adb_req)
 
     check(await asyncio.wait_for(enc.noise_encryption_set_key(b""), 5) is True and not os.path.exists(os.path.join(state, "api_key")),
           "empty key from the keyed connection clears it (Home Assistant deleting the device)")
@@ -337,4 +394,6 @@ async def main(e):
     ps = {x["name"]: x for x in page.state()["settings"]}
     check(all(k in ps for k in ("screen_brightness_auto", "screen_brightness", "screen_brightness_adjust")), "on the settings page")
 
-run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1"})
+TZDATA = tempfile.mktemp(suffix=".tzdata"); build_tzdata(TZDATA)          # bionic's, from Python's tzdata
+try: run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_BACKLIGHT": "1", "HASSMIC_TZDATA": TZDATA}, log=True)
+finally: os.unlink(TZDATA)

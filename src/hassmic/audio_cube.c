@@ -82,6 +82,13 @@ int name##_write(const void*d,size_t n){return write_stream(&name,d,n);} \
 long long name##_queued_us(void){return queued(&name);} \
 void name##_close(void){close_stream(&name,0);}
 STREAM_API(music) STREAM_API(bt) STREAM_API(voip)
+/* This Android helper has no separate micHfp stream. Calls retain the processed
+ * assistant input; do not advertise the Dots' call microphone capability. */
+int callmic_present(void) { return 0; }
+int callmic_open(void) { return -1; }
+int callmic_read(const void **data) { (void)data; return -1; }
+void callmic_close(void) {}
+
 /* Direct AudioTrack playback-head accounting; no OpenSL prefill offset. */
 long long music_prime_us(void) { return 0; }
 void (*audio_earcon_started)(unsigned lead_ms);

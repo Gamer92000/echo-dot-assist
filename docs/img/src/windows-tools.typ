@@ -2,7 +2,8 @@
 #show: fig
 
 // docs/WINDOWS.md: what a Windows PC needs once, before scripts/setup.sh (scripts/lib/setup.sh need_tools on
-// WINDOWS; devices/biscuit/setup.sh step_tools: adb, python3, fastboot, uvx; firebreak's README for the drivers).
+// WINDOWS; the models' step_tools: adb, python3, unzip, curl, sha256sum).  Nothing for the unlock: it is done by hand,
+// as the model's XDA thread says, which names what it needs.
 
 #let tools = (
   ([Git for Windows], [*Git Bash*: the window the setup runs in],
@@ -11,10 +12,6 @@
     "card", [python.org], [installer: tick #text(weight: 700)["Add python.exe to PATH"]]),
   ([Android platform-tools], [*adb* and *fastboot*: talk to the Echo over USB],
     "card", [PowerShell], "winget install Google.PlatformTools"),
-  ([uv], [downloads and runs *firebreak*, the unlock],
-    "card", [PowerShell], "winget install astral-sh.uv"),
-  ([Two USB drivers], [let fastboot see the Echo; without them the ring stays blue],
-    "warn", [PowerShell #linebreak() as administrator], [the commands in section 2, item 5 (from firebreak's README)]),
 )
 
 #canvas(length: px, {

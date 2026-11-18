@@ -35,7 +35,7 @@
  *                    Assistant to run assist_satellite.announce on us (HomeassistantActionRequest, what an ESPHome YAML
  *                    `homeassistant.action` sends).  Home Assistant only runs it with "Allow the device to perform Home
  *                    Assistant actions" ticked in the device's options; otherwise it raises a repair saying so.
- *   debug access     a switch opens adb over Wi-Fi for 30 min (adbwifi.c); only taken over the connection with the key
+ *   debug access     not an entity (the settings page, with the action button); a command may only close it
  *   wifi motion      experimental, off by default: a switch, a motion binary sensor, its sensitivity (wifimotion.c);
  *                    listed only where the Wi-Fi driver can do it
  *   online updates   an update entity with the newest build on the channel picked on the settings page, and an
@@ -48,6 +48,9 @@
  *                    of the network (dropin.c); "Drop In" says idle / calling / ringing / connected, "Drop In with"
  *                    whom, the button "End Drop In" hangs up, the event entity "Drop In result" says what came of each
  *                    call this Echo made (dropin_results).  Listed while the feature is on
+ *   music assistant  DeviceCapabilitiesResponse names our Sendspin client id with PAIRING_TOKEN, and the token goes
+ *                    to Home Assistant on request over the keyed connection: Music Assistant pairs with it by itself
+ *                    (send_device_caps, send_sendspin_token).  The diagnostic text sensor stays for older ones
  *   volumes          the media player's volume is the music's (Home Assistant's media too); with separate volumes the
  *                    numbers "Assistant volume", "Sounds volume", "Timer volume" and "Call volume" (with Drop In) hold
  *                    the others (main.c), each only while that kind has a volume of its own rather than following the
@@ -70,6 +73,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -80,6 +84,7 @@
 #include "settings.h"
 #include "ble.h"
 #include "ring.h"
+#include "ringlive.h"
 #include "screen.h"
 #include "board.h"
 #include "core.h"
@@ -87,6 +92,7 @@
 #include "hash.h"
 #include "https.h"
 #include "noise.h"
+#include "pb.h"
 #include "sendspin.h"
 #include "clock.h"
 #include "update.h"
@@ -113,7 +119,22 @@ enum {
     BLE_RAW_ADV = 93, BLE_SCANNER_STATE = 126, BLE_SCANNER_SET_MODE = 127, LIST_EVENT = 107, EVENT = 108,
     LIST_UPDATE = 116, UPDATE_STATE, UPDATE_COMMAND, LIST_BUTTON = 61, BUTTON_COMMAND = 62,
     LIST_LIGHT = 15, LIGHT_STATE = 24, LIGHT_COMMAND = 32,
+    DEVICE_CAPS_REQ = 149, DEVICE_CAPS_RESP, SENDSPIN_TOKEN_REQ = 159, SENDSPIN_TOKEN_RESP,
 };
+/* The API version we speak: 1.15 is the first with DeviceCapabilitiesRequest, which Home Assistant asks on every
+ * connect from then on (aioesphomeapi device_capabilities_compat; below it the capabilities are made up from
+ * DeviceInfoResponse, with no Sendspin in them).  What else changes from 1.10: 1.11 takes the media player's feature
+ * flags from its ListEntities (MP_FEATURES, the set aioesphomeapi assumed before), 1.13 climate's, 1.14 lets object_id
+ * be left out (we always send it).  1.16 would want acks for proxy subscriptions: stay below it. */
+enum { API_MINOR = 15 };
+/* Media player features, given since 1.11: the ones aioesphomeapi's feature_flags_compat assumed for 1.10, unchanged:
+ * play media, browse, stop, volume set, mute, announce.  No pause: MediaPlayerCommand only stops here. */
+enum { MP_FEATURES = 512 | 131072 | 4096 | 4 | 8 | 1048576 };
+/* Sendspin (DeviceCapabilitiesResponse.sendspin, SendspinPairingTokenResponse): Home Assistant tells Music Assistant the
+ * client ids of devices with PAIRING_TOKEN and hands it the token, which MA pairs with by itself (2.10.9's
+ * hass_auto_pair.py, HA 2026.11).  Statuses as ESPHome's api.proto */
+enum { SS_FEAT_PAIRING_TOKEN = 1 };
+enum { SS_TOKEN_NOT_READY = 0, SS_TOKEN_OK, SS_TOKEN_ENCRYPTION_REQUIRED, SS_TOKEN_DISABLED };
 enum { COLOR_MODE_RGB = 35 };           /* on/off, brightness and RGB: the light ring's one mode */
 enum { UPDATE_CMD_INSTALL = 1, UPDATE_CMD_CHECK = 2 };
 /* Proxy features: passive scan, active connections, remote caching (Home Assistant keeps the GATT database and writes the
@@ -125,6 +146,7 @@ enum { BLE_REQ_CONNECT = 0, BLE_REQ_DISCONNECT, BLE_REQ_PAIR, BLE_REQ_UNPAIR, BL
 enum { EV_ERROR = 0, EV_RUN_START, EV_RUN_END, EV_STT_START, EV_STT_END, EV_INTENT_START, EV_INTENT_END, EV_TTS_START,
        EV_TTS_END, EV_WAKE_START, EV_WAKE_END, EV_VAD_START, EV_VAD_END, EV_TTS_STREAM_START = 98, EV_TTS_STREAM_END = 99, EV_INTENT_PROGRESS = 100 };
 enum { FEAT_VOICE = 1, FEAT_SPEAKER = 2, FEAT_API_AUDIO = 4, FEAT_TIMERS = 8, FEAT_ANNOUNCE = 16, FEAT_START_CONVERSATION = 32 };
+enum { VA_FEATURES = FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION };     /* no SPEAKER: see top */
 /* KEY_NOISE, KEY_MULT, KEY_UPDATE_CHANNEL and KEY_ARB_HANDOFF: retired entities (noise suppression, mic volume
  * multiplier, online updates channel (the settings page's now), arbitration handoff), kept so the others keep their keys */
 enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SENDSPIN_TOKEN, KEY_SOC_TEMP, KEY_CPU_USAGE, KEY_BT_PAIRING,
@@ -135,7 +157,10 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
-       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST };
+       KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST,
+       /* the light ring live (ringlive.h): four actions, the design select, then a light per LED (RING_LEDS_MAX keys:
+        * a new key goes after KEY_LIVE_LED + RING_LEDS_MAX) */
+       KEY_LIVE_FRAME, KEY_LIVE_ANIM, KEY_LIVE_DESIGN_SVC, KEY_LIVE_STOP, KEY_LIVE_DESIGN, KEY_LIVE_LED };
 #ifdef CUBE
 enum { KEY_CUBE_OUTPUT=1000, KEY_CUBE_VOLUME, KEY_TV_VOLUME, KEY_MUSIC_DUCK,
        KEY_TV_STATE, KEY_AUDIO_ACTIVE, KEY_AUDIO_FALLBACK, KEY_TV_EVIDENCE, KEY_AUDIO_SELECTED, KEY_CUBE_END };
@@ -160,49 +185,12 @@ static int stt_run;                     /* lock held: the run asked for starts a
 static char tts_url[1024];              /* lock held: reply URL of the running pipeline (known from RUN_START with streaming TTS) */
 static int announcing, media_playing;   /* lock held */
 static void announce_done(void);
+static void home_subscribe(int c);                   /* zone.home: Home Assistant's home location (below) */
+static void home_state(const char *attr, const char *v);
 static atomic_int media_busy;
 static struct media_job *media_cur;    /* lock held: the job holding media_busy, for cancel() */
 
-/* ---------------------------------------------------------------- protobuf */
-
-struct pb { unsigned char *p; size_t n, cap; };
-
-static void pb_raw(struct pb *b, const void *d, size_t n) { if (b->n + n <= b->cap) { memcpy(b->p + b->n, d, n); b->n += n; } }
-static void pb_varint(struct pb *b, uint64_t v) { unsigned char c; do { c = v & 0x7f; v >>= 7; if (v) c |= 0x80; pb_raw(b, &c, 1); } while (v); }
-static void pb_uint(struct pb *b, int f, uint64_t v) { if (v) { pb_varint(b, f << 3); pb_varint(b, v); } }
-static void pb_bytes(struct pb *b, int f, const void *d, size_t n) { if (n) { pb_varint(b, f << 3 | 2); pb_varint(b, n); pb_raw(b, d, n); } }
-static void pb_str(struct pb *b, int f, const char *s) { pb_bytes(b, f, s, strlen(s)); }
-static void pb_sint(struct pb *b, int f, int32_t v) { pb_uint(b, f, (uint32_t)v << 1 ^ (uint32_t)(v >> 31)); }   /* zigzag */
-static void pb_fixed32(struct pb *b, int f, uint32_t v) { pb_varint(b, f << 3 | 5); pb_raw(b, &v, 4); }      /* little endian host */
-static void pb_float(struct pb *b, int f, float v) { uint32_t u; memcpy(&u, &v, 4); pb_fixed32(b, f, u); }
-
-struct pbf { unsigned field, wire; uint64_t v; const unsigned char *data; size_t len; };
-
-static int pb_next(const unsigned char **p, const unsigned char *end, struct pbf *f)
-{
-    uint64_t k = 0, v = 0; int sh = 0;
-    if (*p >= end) return 0;
-    while (*p < end) { unsigned char c = *(*p)++; k |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; }
-    f->field = k >> 3; f->wire = k & 7; f->v = 0; f->data = NULL; f->len = 0;
-    switch (f->wire) {
-    case 0: for (sh = 0; *p < end;) { unsigned char c = *(*p)++; v |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; } f->v = v; break;
-    case 1: if (end - *p < 8) return 0; *p += 8; break;
-    case 2:
-        for (sh = 0; *p < end;) { unsigned char c = *(*p)++; v |= (uint64_t)(c & 0x7f) << sh; sh += 7; if (!(c & 0x80)) break; }
-        if ((uint64_t)(end - *p) < v) return 0;
-        f->data = *p; f->len = v; *p += v;
-        break;
-    case 5: if (end - *p < 4) return 0; { uint32_t u; memcpy(&u, *p, 4); f->v = u; } *p += 4; break;
-    default: return 0;
-    }
-    return 1;
-}
-
-static void pbf_str(const struct pbf *f, char *out, size_t outsz)
-{
-    size_t n = f->len < outsz - 1 ? f->len : outsz - 1;
-    memcpy(out, f->data, n); out[n] = 0;
-}
+/* ---------------------------------------------------------------- framing (the messages' protobuf: pb.h) */
 
 static int client_of(int fd)            /* lock held */
 {
@@ -210,18 +198,34 @@ static int client_of(int fd)            /* lock held */
     return -1;
 }
 
+/* Header and message in one write: as two (TCP_NODELAY is on, net_accept), every message went out as two TCP
+ * segments, so two Wi-Fi frames and, expected, two wakeups of HA's reader (issue #167: what a device driven through the
+ * Bluetooth proxy waits for; the gain is not measured) */
+static int write2(int fd, const void *h, size_t hn, const void *d, size_t dn)
+{
+    struct iovec v[2] = { { (void *)h, hn }, { (void *)d, dn } }, *p = v;
+    for (int k = dn ? 2 : 1; k; ) {
+        ssize_t w = writev(fd, p, k);
+        if (w < 0) { if (errno == EINTR) continue; return -1; }
+        while (k && (size_t)w >= p->iov_len) { w -= p->iov_len; p++; k--; }
+        if (k) { p->iov_base = (char *)p->iov_base + w; p->iov_len -= w; }
+    }
+    return 0;
+}
+
 /* Noise frame: 0x01, big-endian length, then a handshake message or ciphertext */
 static int write_frame(int fd, const void *data, size_t len)
 {
     unsigned char h[3] = { 1, len >> 8, len & 0xff };
-    return len > 0xffff || write_all(fd, h, 3) < 0 || (len && write_all(fd, data, len) < 0) ? -1 : 0;
+    return len > 0xffff || write2(fd, h, 3, data, len) < 0 ? -1 : 0;
 }
 
 /* lock held */
 static void send_to(int fd, unsigned type, const struct pb *b)
 {
-    unsigned char h[12]; struct pb hb = { h, 0, sizeof h }; size_t n = b ? b->n : 0; int c = client_of(fd), rc;
+    unsigned char h[12]; struct pb hb = { h, 0, sizeof h, 0 }; size_t n = b ? b->n : 0; int c = client_of(fd), rc;
     if (fd < 0) return;
+    if (b && b->over) { fprintf(stderr, "esphome: message %u did not fit its buffer (%zu bytes), not sent\n", type, b->cap); return; }
     if (c >= 0 && clients[c].enc) {                     /* inside: big-endian type and length, then the message */
         static unsigned char pt[4 + 8192], ct[sizeof pt + NOISE_TAG];
         if (4 + n > sizeof pt) { fprintf(stderr, "esphome: message %u too long (%zu)\n", type, n); return; }
@@ -230,7 +234,7 @@ static void send_to(int fd, unsigned type, const struct pb *b)
         rc = write_frame(fd, ct, noise_encrypt(&clients[c].tx, pt, 4 + n, ct));
     } else {
         pb_raw(&hb, "", 1); pb_varint(&hb, n); pb_varint(&hb, type);
-        rc = write_all(fd, h, hb.n) < 0 || (n && write_all(fd, b->p, n) < 0) ? -1 : 0;
+        rc = write2(fd, h, hb.n, n ? b->p : NULL, n);
     }
     if (rc < 0) shutdown(fd, SHUT_RDWR);                /* its reader cleans up */
 }
@@ -242,7 +246,7 @@ static void send_state(unsigned type, const struct pb *b)                       
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].states) send_to(clients[i].fd, type, b);
 }
 
-#define PB(name, size) unsigned char name##_buf[size]; struct pb name = { name##_buf, 0, size }
+#define PB(name, size) unsigned char name##_buf[size]; struct pb name = { name##_buf, 0, size, 0 }
 
 /* ---------------------------------------------------------------- identity */
 
@@ -446,15 +450,27 @@ static void send_setting(int key)       /* lock held */
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_DROPIN_STATE ? dropin_states[st] : peer); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: { PB(t, sizeof last_heard + 16);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_LAST_HEARD ? last_heard : last_reply); send_state(TEXT_SENSOR_STATE, &t); } break;
-    case KEY_LIGHT: {
-        struct ring_light l; ring_light_get(&l);
-        pb_uint(&b, 2, l.on); pb_float(&b, 3, l.brightness); pb_uint(&b, 11, COLOR_MODE_RGB); pb_float(&b, 10, l.color_brightness);
-        pb_float(&b, 4, l.r); pb_float(&b, 5, l.g); pb_float(&b, 6, l.b); pb_str(&b, 9, ring_effects[l.effect]);
-        send_state(LIGHT_STATE, &b);
+    case KEY_LIGHT: {                   /* its own buffer: the longer effect names ("Music beat spin") do not fit 48 */
+        struct ring_light l; ring_light_get(&l); PB(t, 128);
+        pb_fixed32(&t, 1, key);
+        pb_uint(&t, 2, l.on); pb_float(&t, 3, l.brightness); pb_uint(&t, 11, COLOR_MODE_RGB); pb_float(&t, 10, l.color_brightness);
+        pb_float(&t, 4, l.r); pb_float(&t, 5, l.g); pb_float(&t, 6, l.b); pb_str(&t, 9, ring_effects[l.effect]);
+        send_state(LIGHT_STATE, &t);
     } break;
     case KEY_RING_FILL: { struct ring_light l; ring_light_get(&l); pb_float(&b, 2, l.fill); send_state(NUMBER_STATE, &b); } break;
+    case KEY_LIVE_DESIGN: {             /* what of the library plays live; "None" otherwise (Home Assistant's own frames too) */
+        PB(t, RD_NAME + 16); char nm[RD_NAME]; ringlive_playing(nm, sizeof nm);
+        pb_fixed32(&t, 1, key); pb_str(&t, 2, nm[0] && strcmp(nm, "animation") ? nm : "None"); send_state(SELECT_STATE, &t); } break;
     case KEY_RING_ROTATION: pb_float(&b, 2, ring_rotation(-1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_AUTO: if (have_auto) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
+    default:
+        if (key >= KEY_LIVE_LED && key < KEY_LIVE_LED + RING_LEDS_MAX) {     /* each LED of the live ring as a light */
+            struct live_led l; ringlive_led_get(key - KEY_LIVE_LED, &l);
+            pb_uint(&b, 2, l.on); pb_float(&b, 3, l.brightness); pb_uint(&b, 11, COLOR_MODE_RGB); pb_float(&b, 10, 1);
+            pb_float(&b, 4, l.r); pb_float(&b, 5, l.g); pb_float(&b, 6, l.b);
+            send_state(LIGHT_STATE, &b);
+        }
+        break;
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME: case KEY_CALL_VOLUME:     /* VOL_* order */
         pb_float(&b, 2, core_kind_volume(key - KEY_ASSIST_VOLUME, -1)); send_state(NUMBER_STATE, &b); break;
     case KEY_LED_BRIGHTNESS: { int v = core_led_brightness(-1); if (v >= 0) { pb_float(&b, 2, v); send_state(NUMBER_STATE, &b); } } break;
@@ -477,16 +493,20 @@ static void send_setting(int key)       /* lock held */
     }
 }
 
-/* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant.  It is a secret of
- * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default:
- * Home Assistant only records it once the user enables it. */
-static void send_token_state(void)      /* lock held */
+/* The Sendspin pairing token, so that it can be copied from Home Assistant into Music Assistant (older ones: from
+ * Home Assistant 2026.11 and Music Assistant 2.10.9 on, send_sendspin_token pairs without it).  It is a secret of
+ * sorts (whoever has it can pair a server with this player), so the entity is diagnostic and disabled by default, and
+ * its state goes only to the subscriber that asked, over the keyed connection, as the token request does: disabled
+ * in Home Assistant, the state is still sent, and before a key is set every plaintext client would read it.  A client
+ * on the LAN could set a key itself then, but that takes the Echo from Home Assistant, which notices; reading the
+ * token did not.  Without a key the entity has no state: Home Assistant sets one when it adopts the Echo. */
+static void send_token_state(int c)     /* lock held */
 {
     PB(b, 256); char tok[160];
-    if (!core_sendspin_port) return;
+    if (!core_sendspin_port || c < 0 || !clients[c].keyed) return;
     sendspin_pairing_token(tok, sizeof tok);
     pb_fixed32(&b, 1, KEY_SENDSPIN_TOKEN); pb_str(&b, 2, tok);
-    send_state(TEXT_SENSOR_STATE, &b);
+    send_msg(TEXT_SENSOR_STATE, &b);
 }
 
 /* The settings page as this client reached us (http://<address>:28931): diagnostic, enabled, so the address is on the
@@ -560,14 +580,17 @@ static void send_light_states(void)     /* lock held */
     sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
     send_setting(KEY_RING_FILL); send_setting(KEY_RING_ROTATION);
+    for (int i = 0; i < RING_LEDS_MAX; i++) send_setting(KEY_LIVE_LED + i);
+    send_setting(KEY_LIVE_DESIGN);
     send_setting(KEY_SCR_AUTO); send_setting(KEY_SCR_LEVEL); send_setting(KEY_SCR_ADJUST);
 }
 
 static void send_light_entities(void)
 {
     /* Home Assistant's light on the ring (ring.h): a palette made beforehand, so the colour shows as the nearest of
-     * it; the state says what was asked for */
-    if (listed(KEY_LIGHT)) { PB(b, 256); pb_str(&b, 1, "light_ring"); pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
+     * it; the state says what was asked for.  With "Light ring live" on the Echo draws it itself (ringlive.h): the
+     * exact colour, more effects, a fade, under the LEDs' own lights */
+    if (listed(KEY_LIGHT)) { PB(b, 640); pb_str(&b, 1, "light_ring");     /* 17 effects with the live ring's */ pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
       pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
       for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i)) pb_str(&b, 11, ring_effects[i]);
       pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
@@ -582,15 +605,51 @@ static void send_light_entities(void)
     /* LED by LED: esphome.<node>_light_ring_leds with colors ["#ff0000", "", ...] from the fill's start on; the light's
      * own colour or effect from Home Assistant takes the ring back to one colour */
     if (listed(KEY_RING_LEDS)) { PB(b, 256); PB(a, 48); pb_str(&b, 1, "light_ring_leds"); pb_fixed32(&b, 2, KEY_RING_LEDS);
-      pb_str(&a, 1, "colors"); pb_uint(&a, 2, 7); pb_bytes(&b, 3, a.p, a.n);
+      pb_str(&a, 1, "colors"); pb_uint(&a, 2, 7); pb_msg(&b, 3, &a);
       pb_str(&b, 5, "The light ring LED by LED: \"#rrggbb\" each, \"\" for dark, from where its fill starts"); send_msg(LIST_SERVICE, &b); }
+    /* The ring live (ringlive.h, feature "Light ring live"): a light per LED, counted from where the fill starts, and
+     * actions for a whole frame, an animation, a design of the library by name, and stop; the library as a select */
+    for (int i = 0; i < RING_LEDS_MAX; i++) if (listed(KEY_LIVE_LED + i)) {
+        PB(b, 192); char id[32], nm[32];
+        snprintf(id, sizeof id, "light_ring_led_%d", i + 1); snprintf(nm, sizeof nm, "Light ring LED %d", i + 1);
+        pb_str(&b, 1, id); pb_fixed32(&b, 2, KEY_LIVE_LED + i); pb_str(&b, 3, nm);
+        pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
+        pb_str(&b, 14, "mdi:led-on"); send_msg(LIST_LIGHT, &b);
+    }
+    if (listed(KEY_LIVE_FRAME)) {
+        static const struct { const char *id; int key; const char *args[3]; int types[3]; const char *what; } svc[] = {
+            { "light_ring_frame", KEY_LIVE_FRAME, { "colors", "brightness", "timeout" }, { 7, 1, 1 },
+              "Every LED at once: \"#rrggbb\" each from where the fill starts (\"\" dark), brightness 0..255, timeout in s (0: stays)" },
+            { "light_ring_animation", KEY_LIVE_ANIM, { "frames", "repeat", "brightness" }, { 7, 1, 1 },
+              "Frames \"<ms>:RRGGBB,RRGGBB,...\" played on the Echo, repeat times (0: until stopped), brightness 0..255" },
+            { "light_ring_design", KEY_LIVE_DESIGN_SVC, { "name", "repeat", "brightness" }, { 3, 1, 1 },
+              "A design of the settings page's library by its name, repeat times (0: as drawn), brightness 0..255" },
+            { "light_ring_stop", KEY_LIVE_STOP, { NULL }, { 0 }, "The animation stopped and the 12 LED lights off (\"Light ring\" stays as it is)" },
+        };
+        for (size_t k = 0; k < sizeof svc / sizeof svc[0]; k++) {
+            PB(b, 512); pb_str(&b, 1, svc[k].id); pb_fixed32(&b, 2, svc[k].key);
+            for (int a = 0; a < 3 && svc[k].args[a]; a++) { PB(arg, 64); pb_str(&arg, 1, svc[k].args[a]); pb_uint(&arg, 2, svc[k].types[a]); pb_msg(&b, 3, &arg); }
+            pb_str(&b, 5, svc[k].what); send_msg(LIST_SERVICE, &b);
+        }
+    }
+    if (listed(KEY_LIVE_DESIGN)) {
+        static char names[RD_MAX][RD_NAME]; int n = rd_names(names, RD_MAX);
+        PB(b, RD_MAX * (RD_NAME + 2) + 256);
+        pb_str(&b, 1, "light_ring_design"); pb_fixed32(&b, 2, KEY_LIVE_DESIGN); pb_str(&b, 3, "Light ring design");
+        pb_str(&b, 5, "mdi:animation-play"); pb_str(&b, 6, "None");
+        for (int i = 0; i < n; i++) if (strcmp(names[i], "None")) pb_str(&b, 6, names[i]);
+        send_msg(LIST_SELECT, &b);
+    }
     if (listed(KEY_LUX)) { PB(b, 192); pb_str(&b, 1, "illuminance"); pb_fixed32(&b, 2, KEY_LUX); pb_str(&b, 3, "Illuminance"); pb_str(&b, 6, "lx");
           pb_uint(&b, 7, 0); pb_str(&b, 9, "illuminance"); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); }
     if (have_auto) {
         { PB(b, 160); pb_str(&b, 1, "led_auto_brightness"); pb_fixed32(&b, 2, KEY_LED_AUTO); pb_str(&b, 3, "LED auto brightness");
           pb_str(&b, 5, "mdi:brightness-auto"); pb_uint(&b, 8, 1); send_msg(LIST_SWITCH, &b); }
     }
-    if (listed(KEY_LED_BRIGHTNESS)) { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
+#ifdef CUBE
+    if (listed(KEY_LED_BRIGHTNESS))
+#endif
+    { PB(b, 160); pb_str(&b, 1, "led_brightness"); pb_fixed32(&b, 2, KEY_LED_BRIGHTNESS); pb_str(&b, 3, "LED brightness");
       pb_str(&b, 5, "mdi:brightness-6"); pb_float(&b, 6, 0); pb_float(&b, 7, 100); pb_float(&b, 8, 1); pb_uint(&b, 10, 1);
       pb_str(&b, 11, "%"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
     /* the Echo Show's backlight as stock's Display settings: adaptive (Amazon's lux curve, shifted by the adjustment) or
@@ -646,15 +705,20 @@ static int listed(int key)
     case KEY_LED_AUTO: return have_auto;
     case KEY_SCR_AUTO: case KEY_SCR_LEVEL: case KEY_SCR_ADJUST: return settings_find("screen_brightness_auto") != NULL;
     case KEY_LUX: return have_light && settings_on("light_sensor");
-    case KEY_LIGHT: return ring_custom();
-    case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led();
+    case KEY_LIGHT: return ring_custom() || ringlive_enabled();             /* the palette's, or drawn live */
+    case KEY_RING_FILL: case KEY_RING_ROTATION: case KEY_RING_LEDS: return ring_per_led() || ringlive_enabled();
+    case KEY_LIVE_FRAME: case KEY_LIVE_ANIM: case KEY_LIVE_DESIGN_SVC: case KEY_LIVE_STOP: case KEY_LIVE_DESIGN:
+        return ringlive_enabled();
     case KEY_CALL_VOLUME: if (!(dropin_running() && settings_on("drop_in"))) return 0;    /* calls only with Drop In */
         /* fall through */
     case KEY_ASSIST_VOLUME: case KEY_SOUNDS_VOLUME: case KEY_TIMER_VOLUME:       /* one that follows the music has none */
         return settings_on("separate_volumes") && !core_kind_linked(key - KEY_ASSIST_VOLUME, -1);
     case KEY_DROPIN_SERVICE: case KEY_DROPIN_STATE: case KEY_DROPIN_PEER: case KEY_DROPIN_END: case KEY_DROPIN_RESULT:
         return dropin_running() && settings_on("drop_in");
-    default: return 1;
+    default:
+        if (key >= KEY_LIVE_LED && key < KEY_LIVE_LED + RING_LEDS_MAX)
+            return ringlive_enabled() && key - KEY_LIVE_LED < ringlive_leds();
+        return 1;
     }
 }
 
@@ -672,7 +736,11 @@ static void send_setting_entities(void)
 #endif
     static const char *const eq_ids[] = { "equalizer_bass", "equalizer_mid", "equalizer_treble" };
     static const char *const eq_labels[] = { "Equalizer bass", "Equalizer mid", "Equalizer treble" };   /* sort together in HA */
-    for (int i = 0; i < 3; i++) if (listed(KEY_EQ_BASS+i)) {       /* like the Alexa app's sliders */
+    for (int i = 0; i < 3; i++)
+#ifdef CUBE
+    if (listed(KEY_EQ_BASS+i))
+#endif
+    {       /* like the Alexa app's sliders */
         PB(b, 192); pb_str(&b, 1, eq_ids[i]); pb_fixed32(&b, 2, KEY_EQ_BASS + i); pb_str(&b, 3, eq_labels[i]); pb_str(&b, 5, "mdi:tune-vertical");
         pb_float(&b, 6, -6); pb_float(&b, 7, 6); pb_float(&b, 8, 1); pb_str(&b, 11, "dB"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b);
     }
@@ -716,8 +784,8 @@ static void send_setting_entities(void)
         /* the action other Echos hand their network key through: Home Assistant registers it as
          * esphome.<node>_arbitration_key, after the node name we report, whatever the device is called there */
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "arbitration_key"); pb_fixed32(&b, 2, KEY_ARB_SERVICE);
-          pb_str(&a, 1, "network"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
-          a.n = 0; pb_str(&a, 1, "key"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&a, 1, "network"); pb_uint(&a, 2, 3); pb_msg(&b, 3, &a);
+          a.n = 0; a.over = 0; pb_str(&a, 1, "key"); pb_uint(&a, 2, 3); pb_msg(&b, 3, &a);
           pb_str(&b, 5, "Used by other Echos (wake word arbitration), not by people"); send_msg(LIST_SERVICE, &b); }
     }
     if (listed(KEY_ARB_PEERS)) {
@@ -769,7 +837,7 @@ static void send_setting_entities(void)
     /* Drop In (dropin.c): "Drop In with" first, so a trigger on "Drop In" finds it set */
     if (listed(KEY_DROPIN_SERVICE)) {
         { PB(b, 256); PB(a, 48); pb_str(&b, 1, "drop_in"); pb_fixed32(&b, 2, KEY_DROPIN_SERVICE);
-          pb_str(&a, 1, "target"); pb_uint(&a, 2, 3); pb_bytes(&b, 3, a.p, a.n);
+          pb_str(&a, 1, "target"); pb_uint(&a, 2, 3); pb_msg(&b, 3, &a);
           pb_str(&b, 5, "Drop in on another Echo: its name (\"Echo Dot 3 5695c4\", as the device was first named) or node"); send_msg(LIST_SERVICE, &b); }
         { PB(b, 128); pb_str(&b, 1, "drop_in_with"); pb_fixed32(&b, 2, KEY_DROPIN_PEER); pb_str(&b, 3, "Drop In with");
           pb_str(&b, 5, "mdi:account-voice"); send_msg(LIST_TEXT_SENSOR, &b); }
@@ -789,7 +857,10 @@ static void send_setting_entities(void)
     if (core_web_port) { PB(b, 128); pb_str(&b, 1, "web_ui_address"); pb_fixed32(&b, 2, KEY_WEB_URL); pb_str(&b, 3, "Web UI address");
       pb_str(&b, 5, "mdi:web"); pb_uint(&b, 7, 2); send_msg(LIST_TEXT_SENSOR, &b); }
     /* online updates (update.c): the channel is picked on the settings page; the entity says what is new and installs it */
-    if (listed(KEY_UPDATE)) { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
+#ifdef CUBE
+    if (listed(KEY_UPDATE))
+#endif
+    { PB(b, 128); pb_str(&b, 1, "firmware"); pb_fixed32(&b, 2, KEY_UPDATE); pb_str(&b, 3, "Firmware");
       pb_uint(&b, 7, 1); pb_str(&b, 8, "firmware"); send_msg(LIST_UPDATE, &b); }
     /* which Echo is this: a diagnostic button with HA's "identify" class, as ESPHome's own devices offer */
     { PB(b, 128); pb_str(&b, 1, "identify"); pb_fixed32(&b, 2, KEY_IDENTIFY); pb_str(&b, 3, "Identify");
@@ -809,9 +880,17 @@ static void send_setting_entities(void)
     send_light_entities();
 }
 
+/* lock held: the live ring's lights and design select, after something changed them */
+#define LIVE_FADE_MS 250                /* a light's change without a transition from Home Assistant: a short fade, as ESPHome's */
+static void send_live_states(void)
+{
+    for (int i = 0; i < RING_LEDS_MAX; i++) send_setting(KEY_LIVE_LED + i);
+    send_setting(KEY_LIVE_DESIGN);
+}
+
 static void on_setting(unsigned type, const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f; unsigned key = 0; float num = 0; int on = 0; char opt[32] = "";
+    struct pbf f; unsigned key = 0; float num = 0; int on = 0; char opt[RD_NAME + 8] = "";
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) key = f.v;
         else if (f.field == 2 && f.wire == 5) { uint32_t u = f.v; memcpy(&num, &u, 4); }
@@ -827,6 +906,14 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         settings_set(cube_route_names[field],value,error,sizeof error);send_setting(key);return;
     }
 #endif
+    if (type == SELECT_COMMAND && key == KEY_LIVE_DESIGN) {
+        if (!listed(key)) return;
+        char e[120];
+        if (!strcmp(opt, "None")) ringlive_stop();
+        else if (ringlive_design(opt, 0, 1, e, sizeof e)) fprintf(stderr, "light ring live: %s\n", e);
+        else fprintf(stderr, "light ring live: design \"%s\"\n", opt);
+        send_setting(key); return;
+    }
     if (type == SELECT_COMMAND && key == KEY_DENOISE) { for (int i = 0; i < 4; i++) if (!strcmp(opt, denoise_names[i])) core_mic_denoise(i); }
     else if (type == SELECT_COMMAND && key == KEY_BT_LANG) { for (int i = 0; i < bt_lang_count; i++) if (!strcmp(opt, bt_langs[i].name)) settings_bt_lang_index(i); }
     else if (type == NUMBER_COMMAND && key == KEY_MIC_LEVEL) {
@@ -844,11 +931,11 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_ARB_JOIN && arb_running()) { arb_arbitrate(on); send_setting(key); return; }   /* arb.c keeps it */
     else if (type == SWITCH_COMMAND && key == KEY_SS_UNPAIRED && core_sendspin_port) { sendspin_unpaired(on); send_setting(key); return; }  /* sendspin.c keeps it */
     else if (type == SWITCH_COMMAND && key == KEY_ADB_WIFI) {
-        /* Before Home Assistant has set the key anyone on the network gets a connection: that must not be a way to
-         * a root shell.  Closing it is always fine. */
-        int c = client_of(reply_fd);
-        if (!on || (c >= 0 && clients[c].keyed)) adbwifi_ask(on);
-        else fprintf(stderr, "adb over Wi-Fi: refused, the request did not come over the keyed connection\n");
+        /* Not listed since debug access moved to the settings page, where opening takes a press of the action button
+         * (web.c).  Opening from here took the key alone, and the key is in Home Assistant's files and backups: so
+         * only closing, which is always fine (issue #130). */
+        if (!on) adbwifi_ask(0);
+        else fprintf(stderr, "adb over Wi-Fi: refused over ESPHome, open it on the settings page\n");
         send_setting(key); return;
     }
     else if (type == SWITCH_COMMAND && key == KEY_SOUND_DETECTION) { core_sound(on); settings_save(); send_setting(key); return; }
@@ -917,7 +1004,7 @@ static void ring_leds_from(char colors[][16], int n)        /* lock held */
  * blinking for its length and leaves the light as it was */
 static void on_light(const unsigned char *p, const unsigned char *end)      /* lock held */
 {
-    struct pbf f; struct ring_light l; unsigned key = 0, flash = 0; int has[32] = { 0 }; float v[32] = { 0 }; char eff[32] = "";
+    struct pbf f; struct ring_light l; unsigned key = 0, flash = 0, trans = 0; int has[32] = { 0 }; float v[32] = { 0 }; char eff[32] = "";
     ring_light_get(&l);
     while (pb_next(&p, end, &f)) {
         if (f.field >= 32) continue;
@@ -925,8 +1012,23 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
         else if (f.wire == 5) { uint32_t u = (uint32_t)f.v; memcpy(&v[f.field], &u, 4); }
         else if (f.field == 19 && f.data) pbf_str(&f, eff, sizeof eff);
         else if (f.field == 17) flash = (unsigned)f.v;
+        else if (f.field == 15) trans = (unsigned)f.v;          /* transition_length, ms (has_: 14) */
         else if (f.field == 3) v[3] = f.v != 0;
         else has[f.field] = f.v != 0;
+    }
+    if (key >= KEY_LIVE_LED && key < KEY_LIVE_LED + RING_LEDS_MAX && listed(key)) {      /* one LED of the live ring */
+        struct live_led ll; ringlive_led_get((int)(key - KEY_LIVE_LED), &ll);
+        if (has[2]) ll.on = v[3] != 0;
+        if (has[4]) ll.brightness = v[5];
+        if (has[6]) { ll.r = v[7]; ll.g = v[8]; ll.b = v[9]; }
+        if (ll.on && ll.brightness <= 0) ll.brightness = 1;                 /* never set: as a new ESPHome light, full */
+        if (ll.on && ll.r <= 0 && ll.g <= 0 && ll.b <= 0) ll.r = ll.g = ll.b = 1;
+        char nm[RD_NAME]; ringlive_playing(nm, sizeof nm);
+        if (nm[0]) ringlive_stop();                                         /* an LED set by hand shows: no animation over it */
+        ringlive_fade(has[14] ? (int)trans : LIVE_FADE_MS);
+        ringlive_led_set((int)(key - KEY_LIVE_LED), &ll);
+        send_setting(key); if (nm[0]) send_setting(KEY_LIVE_DESIGN);
+        return;
     }
     if (key != KEY_LIGHT || !listed(KEY_LIGHT)) return;
     if (has[2]) l.on = v[3] != 0;
@@ -938,6 +1040,7 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
         if (!strcasecmp(eff, "off")) l.effect = 0;        /* Home Assistant's own name for none */
         for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i) && !strcasecmp(eff, ring_effects[i])) l.effect = i;
     }
+    if (ringlive_enabled() && !(has[16] && flash)) ringlive_fade(has[14] ? (int)trans : LIVE_FADE_MS);   /* drawn live: it fades */
     ring_light_set(&l, has[16] ? flash : 0);
     send_setting(KEY_LIGHT);
 }
@@ -946,7 +1049,10 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
 
 struct media_job {
     char url[2][1024]; int announce, start_conversation, media;     /* media: play_media, at the main volume */
-    int fd, aborted;                    /* lock held.  aborted: its run was cancelled; it plays nothing and touches no state */
+    int fd, aborted;                    /* lock held.  aborted: let go of by cancel() or media_stop_early(), which set
+                                         * the state; the thread queues no more audio (tts_begin refuses, the decoders
+                                         * stop: job_gone) and only calls core_tts_abandoned if its audio had begun */
+    int began;                          /* lock held: its audio is queued (tts_begin) */
 };
 
 static void send_mp_state(void)         /* lock held */
@@ -990,24 +1096,35 @@ static int http_get(const char *url)    /* returns a socket positioned at the bo
     return http_get_host(host, port, path ? path : "/");
 }
 
-static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: cancelled, the reply must not play */
+static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: let go of, it must not play */
 {
     pthread_mutex_lock(&core_lock);
     int ok = !job->aborted;
-    if (ok) core_tts_begin(rate, ch, job->media);
+    if (ok) { job->began = 1; core_tts_begin(rate, ch, job->media); }
     pthread_mutex_unlock(&core_lock);
     return ok ? 0 : -1;
 }
 
-static void feed(const void *pcm, size_t len)       /* queue with back pressure */
+/* Let go of: the decoders stop.  A shut socket still hands over what it had buffered, and play_mp3 decodes what it read
+ * ahead (up to 32 KB), which went into the queue after cancel() and before the next run's reply */
+static int job_gone(struct media_job *job)
 {
-    core_tts_data(pcm, len);
-    while (core_tts_queued() > 256 * 1024 && !core_tts_flushing()) usleep(50000);
+    pthread_mutex_lock(&core_lock); int gone = job->aborted; pthread_mutex_unlock(&core_lock);
+    return gone;
 }
 
+static void feed(struct media_job *job, const void *pcm, size_t len)       /* queue with back pressure */
+{
+    if (job_gone(job)) return;          /* let go of while its read waited */
+    core_tts_data(pcm, len);
+    while (core_tts_queued() > 256 * 1024 && !core_tts_flushing() && !job_gone(job)) usleep(50000);
+}
+
+/* The decoders' buffers are each call's own, never static: a job that was let go of (cancel(), media_stop_early()) can
+ * still be reading what its socket had buffered while the next job's thread decodes */
 static int play_wav(struct media_job *job, int fd, const unsigned char *head, size_t have)
 {
-    unsigned char ck[8], fmt[16]; unsigned rate = 0, ch = 0, bits = 0; static unsigned char buf[8192];
+    unsigned char ck[8], fmt[16], buf[8192]; unsigned rate = 0, ch = 0, bits = 0;
     (void)head; (void)have;                             /* the 12 byte RIFF/WAVE header, already consumed */
     for (;;) {
         if (read_full(fd, ck, 8) != 8) return -1;
@@ -1023,9 +1140,9 @@ static int play_wav(struct media_job *job, int fd, const unsigned char *head, si
     fprintf(stderr, "media: WAV %u Hz x%u\n", rate, ch);
     if (tts_begin(job, rate, ch) < 0) return -1;
     size_t odd = 0;
-    for (ssize_t r; !core_tts_flushing() && (r = read(fd, buf + odd, sizeof buf - odd)) > 0; ) {
+    for (ssize_t r; !core_tts_flushing() && !job_gone(job) && (r = read(fd, buf + odd, sizeof buf - odd)) > 0; ) {
         size_t n = odd + r, use = n & ~(size_t)(2 * ch - 1);        /* whole frames only */
-        feed(buf, use);
+        feed(job, buf, use);
         odd = n - use; memmove(buf, buf + use, odd);
     }
     return 0;
@@ -1035,14 +1152,16 @@ static int play_wav(struct media_job *job, int fd, const unsigned char *head, si
  * voice pipeline has run), so that has to play too. */
 static int play_mp3(struct media_job *job, int fd, const unsigned char *head, size_t have)
 {
-    static unsigned char in[32768]; static mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
-    static mp3dec_t dec; mp3dec_frame_info_t info; size_t n = have; int began = 0, eof = 0;
+    struct { unsigned char in[32768]; mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME]; mp3dec_t dec; } *m = malloc(sizeof *m);
+    mp3dec_frame_info_t info; size_t n = have; int began = 0, eof = 0;
+    if (!m) return -1;
+    unsigned char *in = m->in; mp3d_sample_t *pcm = m->pcm;
     memcpy(in, head, have);
-    mp3dec_init(&dec);
-    while (!core_tts_flushing()) {
-        while (!eof && n < sizeof in) { ssize_t r = read(fd, in + n, sizeof in - n); if (r <= 0) eof = 1; else n += r; }
+    mp3dec_init(&m->dec);
+    while (!core_tts_flushing() && !job_gone(job)) {
+        while (!eof && n < sizeof m->in) { ssize_t r = read(fd, in + n, sizeof m->in - n); if (r <= 0) eof = 1; else n += r; }
         if (!n) break;
-        int samples = mp3dec_decode_frame(&dec, in, n, pcm, &info);
+        int samples = mp3dec_decode_frame(&m->dec, in, n, pcm, &info);
         if (!info.frame_bytes) { if (eof) break; n = 0; continue; }     /* no sync in the whole buffer */
         if (samples > 0) {
             if (!began) {
@@ -1050,10 +1169,11 @@ static int play_mp3(struct media_job *job, int fd, const unsigned char *head, si
                 if (tts_begin(job, info.hz, info.channels) < 0) break;
                 began = 1;
             }
-            feed(pcm, (size_t)samples * info.channels * 2);
+            feed(job, pcm, (size_t)samples * info.channels * 2);
         }
         n -= info.frame_bytes; memmove(in, in + info.frame_bytes, n);
     }
+    free(m);
     if (!began) fprintf(stderr, "media: no MP3 audio found\n");
     return began ? 0 : -1;
 }
@@ -1071,16 +1191,17 @@ static void *media_thread(void *arg)
 {
     struct media_job *job = arg; int ok = 0, began = 0;
     for (int i = 0; i < 2; i++) {
-        if (!job->url[i][0] || core_tts_flushing()) continue;
+        pthread_mutex_lock(&core_lock); int gone = job->aborted; pthread_mutex_unlock(&core_lock);
+        if (!job->url[i][0] || gone || core_tts_flushing()) continue;      /* gone: not the message after its chime either */
         int fd = http_get(job->url[i]);
         if (fd < 0) continue;
-        pthread_mutex_lock(&core_lock); job->fd = fd; int gone = job->aborted; pthread_mutex_unlock(&core_lock);
+        pthread_mutex_lock(&core_lock); job->fd = fd; gone = job->aborted; pthread_mutex_unlock(&core_lock);
         if (!gone && play_url(job, fd) == 0) { began = 1; if (i == 1) ok = 1; }
         pthread_mutex_lock(&core_lock); job->fd = -1; pthread_mutex_unlock(&core_lock);
         close(fd);
     }
     pthread_mutex_lock(&core_lock);
-    if (job->aborted) {                 /* cancel() has let go of it: a new run and its reply may be under way already */
+    if (job->aborted) {                 /* let go of: a new run and its reply, or new media, may be under way already */
         if (began) core_tts_abandoned();
         pthread_mutex_unlock(&core_lock);
         free(job);
@@ -1166,7 +1287,7 @@ static void send_slots(int to_asker)    /* lock held */
 {
     PB(b, 64); uint64_t a[BLE_MAX_CONN]; int n = ble_connections(a);
     pb_uint(&b, 1, BLE_MAX_CONN - n); pb_uint(&b, 2, BLE_MAX_CONN);
-    if (n) { PB(al, 40); for (int i = 0; i < n; i++) pb_varint(&al, a[i]); pb_bytes(&b, 3, al.p, al.n); }    /* packed */
+    if (n) { PB(al, 40); for (int i = 0; i < n; i++) pb_varint(&al, a[i]); pb_msg(&b, 3, &al); }    /* packed */
     if (to_asker) { send_msg(BLE_CONN_FREE, &b); return; }
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].ble_free) send_to(clients[i].fd, BLE_CONN_FREE, &b);
 }
@@ -1182,7 +1303,7 @@ static void ble_connection(uint64_t addr, int connected, unsigned mtu, int error
 
 static void pb_uuid(struct pb *b, int f, const uint64_t u[2])  /* repeated uint64, packed */
 {
-    PB(v, 20); pb_varint(&v, u[0]); pb_varint(&v, u[1]); pb_bytes(b, f, v.p, v.n);
+    PB(v, 20); pb_varint(&v, u[0]); pb_varint(&v, u[1]); pb_msg(b, f, &v);
 }
 
 /* one message per service, like ESPHome: a big database would not fit into one */
@@ -1191,20 +1312,24 @@ static void ble_db(uint64_t addr, const struct ble_db *db)
     static unsigned char buf[8000], sb[7900], cb[1200], db_[64];
     pthread_mutex_lock(&core_lock);
     for (int s = 0; s < db->nsvc; s++) {
-        const struct ble_svc *sv = &db->svc[s]; struct pb m = { buf, 0, sizeof buf }, sm = { sb, 0, sizeof sb };
+        const struct ble_svc *sv = &db->svc[s]; struct pb m = { buf, 0, sizeof buf, 0 }, sm = { sb, 0, sizeof sb, 0 };
         pb_uuid(&sm, 1, sv->uuid); pb_uint(&sm, 2, sv->start);
+        int cut = 0;                    /* what does not fit is left out whole: a field cut off inside would make the
+                                         * message unreadable, and Home Assistant drops a link on that (pb.h) */
         for (int c = sv->first; c < sv->first + sv->n; c++) {
-            const struct ble_chr *ch = &db->chr[c]; struct pb cm = { cb, 0, sizeof cb };
+            const struct ble_chr *ch = &db->chr[c]; struct pb cm = { cb, 0, sizeof cb, 0 };
             pb_uuid(&cm, 1, ch->uuid); pb_uint(&cm, 2, ch->handle); pb_uint(&cm, 3, ch->props);
             for (int d = ch->first; d < ch->first + ch->n; d++) {
-                struct pb dm = { db_, 0, sizeof db_ };
+                struct pb dm = { db_, 0, sizeof db_, 0 };
                 pb_uuid(&dm, 1, db->dsc[d].uuid); pb_uint(&dm, 2, db->dsc[d].handle);
-                pb_bytes(&cm, 4, dm.p, dm.n);
+                if (dm.over || !pb_fits(&cm, 4, dm.n)) { cut = 1; continue; }
+                pb_msg(&cm, 4, &dm);
             }
-            pb_bytes(&sm, 3, cm.p, cm.n);
+            if (cm.over || !pb_fits(&sm, 3, cm.n)) { cut = 1; continue; }
+            pb_msg(&sm, 3, &cm);
         }
-        if (sm.n >= sm.cap - 64) fprintf(stderr, "bluetooth: service %d of %012llx too big, truncated\n", s, (unsigned long long)addr);
-        pb_uint(&m, 1, addr); pb_bytes(&m, 2, sm.p, sm.n);
+        if (cut) fprintf(stderr, "bluetooth: service %d of %012llx too big, truncated\n", s, (unsigned long long)addr);
+        pb_uint(&m, 1, addr); pb_msg(&m, 2, &sm);
         send_gatt(BLE_SERVICES, &m);
     }
     { PB(b, 16); pb_uint(&b, 1, addr); send_gatt(BLE_SERVICES_DONE, &b); }
@@ -1258,9 +1383,9 @@ static void ble_adverts(const struct ble_adv *a, int n)
 {
     PB(b, BLE_BATCH * 64); PB(one, 64);
     for (int i = 0; i < n; i++) {
-        one.n = 0;
+        one.n = 0; one.over = 0;
         pb_uint(&one, 1, a[i].addr); pb_sint(&one, 2, a[i].rssi); pb_uint(&one, 3, a[i].addr_type); pb_bytes(&one, 4, a[i].data, a[i].len);
-        pb_bytes(&b, 1, one.p, one.n);
+        pb_msg(&b, 1, &one);
     }
     pthread_mutex_lock(&core_lock);
     send_ble(BLE_RAW_ADV, &b);
@@ -1298,7 +1423,7 @@ static const struct ble_handler ble_handler = {
 static void pb_map(struct pb *b, int f, const char *k, const char *v)      /* HomeassistantServiceMap */
 {
     PB(e, 400); pb_str(&e, 1, k); pb_str(&e, 2, v);
-    pb_bytes(b, f, e.p, e.n);
+    pb_msg(b, f, &e);
 }
 
 /* The satellite entity is ours by MAC: Home Assistant keys the device on it, entity ids can be renamed.  The name
@@ -1378,7 +1503,7 @@ static void audio(const void *pcm, size_t len)
 {
     static unsigned char buf[4096 + 16];
     for (size_t off = 0; off < len; off += 4096) {
-        struct pb b = { buf, 0, sizeof buf };
+        struct pb b = { buf, 0, sizeof buf, 0 };
         pb_bytes(&b, 1, (const char *)pcm + off, len - off < 4096 ? len - off : 4096);
         send_va(VA_AUDIO, &b);
     }
@@ -1533,6 +1658,25 @@ static void on_announce(const unsigned char *p, const unsigned char *end)
     media_start(pre, media, 1, conv, 0, 0);
 }
 
+/* Lock held.  The media player's stop before the job's audio began (on_mp_command): it is let go of as cancel() does,
+ * and what its failed fetch would have done is done now (announcement not played, player idle, pipeline finished,
+ * media_busy free).  Not left to its thread: http_get returns only once the headers came, which Home Assistant may hold
+ * back while the TTS renders (15 s a read, SO_RCVTIMEO), so there is no socket to shut meanwhile, and media_busy would
+ * refuse what is sent right after the stop.  The thread plays nothing (tts_begin refuses) and touches no state.
+ * A reply's tts_expected stays set until the next run, as after a failed fetch: a TTS_END of this run (the reply was
+ * streamed from INTENT_PROGRESS) must not fetch it again */
+static void media_stop_early(void)
+{
+    struct media_job *job = media_cur;
+    job->aborted = 1;
+    if (job->fd >= 0) shutdown(job->fd, SHUT_RDWR);
+    media_cur = NULL;
+    if (job->announce) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; announce_done(); }
+    media_playing = 0; send_mp_state();
+    core_pipeline_finish();
+    atomic_store(&media_busy, 0);
+}
+
 static void on_mp_command(const unsigned char *p, const unsigned char *end)
 {
     struct pbf f; static char url[1024]; int has_cmd = 0, cmd = 0, has_vol = 0, has_url = 0, announcement = 0; float vol = 0;
@@ -1547,7 +1691,14 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
         case 9: announcement = f.v != 0; break;        /* tts.speak and play_media's announce: speech, not music */
     }
     if (has_vol) core_set_volume((int)(vol * 100 + 0.5f));
-    if (has_cmd && cmd == MP_CMD_STOP && media_playing) core_tts_flush();
+    /* The flush drops what is queued up to the job's Q_STOP, which clears it (main.c playback_thread).  A job whose audio
+     * has not begun (the fetch still waits on Home Assistant rendering the TTS) queues none when it then fails or is MP3
+     * (play_mp3 does not start under a flush): the flush stayed set and dropped every reply, announcement and media
+     * after it until hassmic restarted.  Such a job is let go of instead */
+    if (has_cmd && cmd == MP_CMD_STOP && media_playing) {
+        if (media_cur && !media_cur->began) media_stop_early();
+        else core_tts_flush();
+    }
     if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* as "Stop ringing" does, for automations */
     if (has_url && url[0]) media_start("", url, 0, 0, 0, !announcement);
     if (has_cmd && !has_url) send_mp_state();
@@ -1563,10 +1714,40 @@ static void send_device_info(void)
     pb_str(&b, 12, "Amazon"); pb_str(&b, 13, core_name);
     if (core_web_port) pb_uint(&b, 10, core_web_port); /* webserver_port: HA links the device page to http://<host>:<it> */
     if (bt_proxy()) { pb_uint(&b, 11, 5); pb_uint(&b, 15, BLE_FEATURES); pb_str(&b, 18, ble_mac()); }    /* 11: legacy "active connections" */
-    pb_uint(&b, 17, FEAT_VOICE | FEAT_API_AUDIO | FEAT_TIMERS | FEAT_ANNOUNCE | FEAT_START_CONVERSATION);      /* no SPEAKER: see top */
+    pb_uint(&b, 17, VA_FEATURES);
     pb_uint(&b, 19, 1);                                 /* api_encryption_supported */
     pb_uint(&b, 26, !have_key);                         /* api_encryption_provisionable: Home Assistant sets the key */
     send_msg(DEVICE_INFO_RESP, &b);
+}
+
+/* DeviceCapabilitiesResponse: the proxy's and the voice assistant's flags again, as in send_device_info (Home Assistant
+ * 2026.11 still reads those from there; ESPHome sends both too), and Sendspin's.  The client id is the player id Music
+ * Assistant knows us by; public (every Sendspin hello carries it).  Sendspin off (-z 0): no flags, so Home Assistant
+ * never asks for a token. */
+static void send_device_caps(void)
+{
+    PB(b, 160); PB(s, 80);
+    if (bt_proxy()) { pb_uint(&s, 1, BLE_FEATURES); pb_str(&s, 2, ble_mac()); pb_msg(&b, 1, &s); }
+    s.n = 0; s.over = 0; pb_uint(&s, 1, VA_FEATURES); pb_msg(&b, 2, &s);
+    if (core_sendspin_port) {
+        s.n = 0; s.over = 0; pb_uint(&s, 1, SS_FEAT_PAIRING_TOKEN); pb_str(&s, 2, sendspin_client_id()); pb_msg(&b, 6, &s);
+    }
+    send_msg(DEVICE_CAPS_RESP, &b);
+}
+
+/* SendspinPairingTokenResponse: the token only over the connection with the device key, as ESPHome hands it out only
+ * once a key is in use: whoever has it can pair a server with this player.  No key yet: ENCRYPTION_REQUIRED, Home
+ * Assistant asks again once it has set one (with a key, connections without it are closed before they get here).
+ * Sendspin off (-z 0): DISABLED first, which gives nothing away.  NOT_READY only guards: sendspin_start sets the
+ * client id before the API serves. */
+static void send_sendspin_token(int c)  /* lock held */
+{
+    PB(b, 192); char tok[160];
+    if (!core_sendspin_port) pb_uint(&b, 1, SS_TOKEN_DISABLED);
+    else if (c < 0 || !clients[c].keyed) pb_uint(&b, 1, SS_TOKEN_ENCRYPTION_REQUIRED);
+    else if (!sendspin_client_id()[0]) pb_uint(&b, 1, SS_TOKEN_NOT_READY);
+    else { sendspin_pairing_token(tok, sizeof tok); pb_uint(&b, 1, SS_TOKEN_OK); pb_str(&b, 2, tok); }
+    send_msg(SENDSPIN_TOKEN_RESP, &b);
 }
 
 static void send_entities(void)
@@ -1578,6 +1759,7 @@ static void send_entities(void)
         pb_str(&fmt, 1, "wav"); pb_uint(&fmt, 2, MEDIA_RATE); pb_uint(&fmt, 3, 1); pb_uint(&fmt, 4, purpose); pb_uint(&fmt, 5, 2);
         pb_varint(&b, 9 << 3 | 2); pb_varint(&b, fmt.n); pb_raw(&b, fmt.p, fmt.n);      /* purpose 0 encodes as absent: fine */
     }
+    pb_uint(&b, 11, MP_FEATURES);
     send_msg(LIST_MEDIA_PLAYER, &b);
     send_setting_entities();
     send_msg(LIST_ENTITIES_DONE, NULL);
@@ -1683,15 +1865,17 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         return 0;
     }
     switch (type) {
-    case HELLO_REQ: { PB(b, 128); pb_uint(&b, 1, 1); pb_uint(&b, 2, 10); pb_str(&b, 3, "hassmic " VERSION); pb_str(&b, 4, node_name()); send_msg(HELLO_RESP, &b); } break;
+    case HELLO_REQ: { PB(b, 128); pb_uint(&b, 1, 1); pb_uint(&b, 2, API_MINOR); pb_str(&b, 3, "hassmic " VERSION); pb_str(&b, 4, node_name()); send_msg(HELLO_RESP, &b); } break;
     case CONNECT_REQ:      send_msg(CONNECT_RESP, NULL); break;                 /* no password */
     case DISCONNECT_REQ:   send_msg(DISCONNECT_RESP, NULL); keep = 0; break;
     case PING_REQ:         send_msg(PING_RESP, NULL); ask_time(c, 0); break;
     case DEVICE_INFO_REQ:  send_device_info(); break;
+    case DEVICE_CAPS_REQ:  send_device_caps(); break;
+    case SENDSPIN_TOKEN_REQ: send_sendspin_token(c); break;
     case LIST_ENTITIES_REQ: send_entities(); break;
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
-        send_mp_state(); send_all_settings(); send_token_state(); send_web_state();
+        send_mp_state(); send_all_settings(); send_token_state(c); send_web_state();
         ask_time(c, 1); break;
     case GET_TIME_RESP: {
         uint32_t epoch = 0; char tz[128] = "";
@@ -1720,7 +1904,11 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         else if (cmd == UPDATE_CMD_INSTALL) fprintf(stderr, "update: install refused, the request did not come over the keyed connection\n");
     } break;
     case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
-    case SUBSCRIBE_HA_STATES: if (c >= 0) clients[c].ha_states = 1; break;
+    case SUBSCRIBE_HA_STATES:
+        if (c < 0) break;
+        clients[c].ha_states = 1;
+        if (clients[c].keyed) home_subscribe(c);
+        break;
     case HA_STATE: {
         /* a state we asked for (arb_request): only from Home Assistant itself, the client holding the device key */
         char ent[128] = "", st[300] = "", attr[64] = "";
@@ -1729,22 +1917,48 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (f.field == 2) pbf_str(&f, st, sizeof st);
             else if (f.field == 3) pbf_str(&f, attr, sizeof attr);
         }
-        if (attr[0] || !arb_running() || c < 0 || !clients[c].keyed) break;
+        if (c < 0 || !clients[c].keyed) break;
+        if (!strcmp(ent, "zone.home") && attr[0]) { home_state(attr, st); break; }
+        if (attr[0] || !arb_running()) break;
         arb_ha_state(ent, st);
     } break;
     case EXECUTE_SERVICE: {
-        unsigned key = 0; int argn = 0, nc = 0; char args[2][256] = { "", "" }, colors[RING_LEDS_MAX][16]; struct pbf g;
+        unsigned key = 0; int argn = 0, nc = 0, na = 0, ints[3] = { 0, 0, 0 }; char args[3][256] = { "", "", "" }, colors[RING_LEDS_MAX][16];
+        struct pbf g; char *lines = NULL; size_t nl = 0;        /* a string array whole, one per line (the live ring's frames) */
         while (pb_next(&p, end, &f)) {
             if (f.field == 1) key = (unsigned)f.v;
-            else if (f.field == 2 && f.data && argn < 2) {
+            else if (f.field == 2 && f.data && argn < 3) {
                 const unsigned char *q = f.data;
                 while (pb_next(&q, f.data + f.len, &g)) {
                     if (g.field == 4 && g.data) pbf_str(&g, args[argn], sizeof args[argn]);
-                    else if (g.field == 9 && g.data && nc < RING_LEDS_MAX) pbf_str(&g, colors[nc++], sizeof colors[0]);   /* string array */
+                    else if (g.field == 2 && !g.data) ints[argn] = (int)(int32_t)g.v;                     /* legacy int32 */
+                    else if (g.field == 5 && !g.data) ints[argn] = (int)((uint32_t)g.v >> 1 ^ -(int32_t)(g.v & 1));   /* sint32 */
+                    else if (g.field == 9 && g.data) {                                                   /* string array */
+                        if (nc < RING_LEDS_MAX) pbf_str(&g, colors[nc], sizeof colors[0]);
+                        nc += nc < RING_LEDS_MAX; na++;
+                        char *m = realloc(lines, nl + g.len + 2);                  /* bounded by the message: 64 kB */
+                        if (m) { lines = m; memcpy(lines + nl, g.data, g.len); nl += g.len; lines[nl++] = '\n'; lines[nl] = 0; }
+                    }
                 }
                 argn++;
             }
         }
+        if ((key == KEY_LIVE_FRAME || key == KEY_LIVE_ANIM || key == KEY_LIVE_DESIGN_SVC || key == KEY_LIVE_STOP) && listed(key)) {
+            char e[120] = ""; int rc = 0;
+            float bri = (key == KEY_LIVE_FRAME ? ints[1] : ints[2]) / 255.0f;
+            if (key == KEY_LIVE_FRAME) {
+                if (na > nc || na > ringlive_leds()) { snprintf(e, sizeof e, "%d colours for %d LEDs", na, ringlive_leds()); rc = -1; }
+                else rc = ringlive_frame(colors, nc, bri, ints[2], e, sizeof e);
+            }
+            else if (key == KEY_LIVE_ANIM) rc = ringlive_animate(lines ? lines : "", nl, ints[1], bri, e, sizeof e);
+            else if (key == KEY_LIVE_DESIGN_SVC) rc = ringlive_design(args[0], ints[1], bri, e, sizeof e);
+            else ringlive_clear();
+            if (rc) fprintf(stderr, "light ring live: %s\n", e);
+            send_live_states();
+            free(lines);
+            break;
+        }
+        free(lines);
         if (key == KEY_RING_LEDS && listed(KEY_RING_LEDS)) { ring_leds_from(colors, nc); break; }
         /* Drop In from Home Assistant (an automation, the voice blueprint): it may open another Echo's microphone, so
          * only over the keyed link too */
@@ -1946,6 +2160,28 @@ static int arb_scan(const char *tag_id)
     pb_str(&b, 1, "esphome.tag_scanned"); pb_map(&b, 2, "tag_id", tag_id); pb_uint(&b, 5, 1);
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions && clients[i].keyed) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
     return n ? 0 : -1;
+}
+
+/* Home Assistant's home location, for the time zone's name (clock.c clock_home, geo.c): zone.home's latitude and
+ * longitude, subscribed on each keyed link (no permission needed, as arb_request's), every change sent.  Lock held */
+static double home_at[2] = { NAN, NAN };
+static void home_subscribe(int c)
+{
+    static const char *const attrs[2] = { "latitude", "longitude" };
+    home_at[0] = home_at[1] = NAN;
+    clock_home_expect();
+    for (int i = 0; i < 2; i++) {
+        PB(b, 96); pb_str(&b, 1, "zone.home"); pb_str(&b, 2, attrs[i]);
+        send_to(clients[c].fd, HA_STATE_SUB, &b);
+    }
+}
+static void home_state(const char *attr, const char *v)
+{
+    char *e; double d = strtod(v, &e);
+    int i = !strcmp(attr, "latitude") ? 0 : !strcmp(attr, "longitude") ? 1 : -1;
+    if (i < 0) return;
+    home_at[i] = e != v && !*e ? d : NAN;               /* HA sends str(float); anything else: none */
+    if (!isnan(home_at[0]) && !isnan(home_at[1])) clock_home(home_at[0], home_at[1]);
 }
 
 /* lock held: ask Home Assistant once for an entity's state (needs no permission: HA answers any device) */

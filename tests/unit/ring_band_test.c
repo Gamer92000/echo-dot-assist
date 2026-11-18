@@ -26,6 +26,7 @@ void core_spawn(char *const argv[])
     if (!strcmp(argv[0], "/system/bin/service") && !strcmp(argv[3], "9")) spawns_wake++;
     if (!strcmp(argv[0], "/system/bin/settings")) { spawns_timeout++; last_timeout = atoi(argv[4]); }
 }
+void core_run(char *const argv[], char *out, size_t n) { (void)argv; if (n) out[0] = 0; }   /* (isInteractive: not known) */
 
 static int fails;
 static void check(int ok, const char *what) { printf("%s %s\n", ok ? "ok  " : "FAIL", what); if (!ok) fails++; }

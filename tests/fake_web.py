@@ -3,8 +3,9 @@
 X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assistant (aioesphomeapi) watching the same
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
-a press of its own, revoking; a login left waiting runs out by itself, and a restart clears its ring and names a new start."""
-import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, time
+a press of its own (a request withdrawn by "off" or a revoke), revoking; a login left waiting runs out by itself (asked again,
+a new one waits), and a restart clears its ring and names a new start."""
+import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, threading, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import wait_port, Browser, req
@@ -39,14 +40,15 @@ async def ha_connect():
 async def main():
     state = tempfile.mkdtemp()
     with open(os.path.join(state, "settings"), "w") as f: f.write("2 -22 1 0 0 1 0 de 2 1 -1 1 0 5 0\n")   # the file before names
-    with open(os.path.join(state, "preset"), "w") as f: f.write("# from another Echo's page\ndo_not_disturb=on\nno_such_thing=1\n")   # scripts/setup.sh --preset
+    with open(os.path.join(state, "preset"), "w") as f: f.write("# from another Echo's page\ndo_not_disturb=on\nscreen_adaptive_colour=on\nno_such_thing=1\n")   # scripts/setup.sh --preset
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
                HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_MODELS=os.path.join(state, "models"),
                HASSMIC_FAKE_WHISPER="1", HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),
                HASSMIC_FAKE_SOUND_MODEL=os.path.join(state, "aed-model"),           # which sound model there is (sound_none.c)
                HASSMIC_LOG=os.path.join(state, "log"),                              # boot.log, for the page's viewer
                HASSMIC_CLOCK_SYNCED="0",                                            # stamps: seconds since boot (clock.c)
-               HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"))       # an Echo Dot 2's codec control (spkgain.c)
+               HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"),       # an Echo Dot 2's codec control (spkgain.c)
+               HASSMIC_FAKE_ADAPTIVE_COLOUR=os.path.join(state, "adaptive-colour")) # root's confirmed Binder readback
     with open(os.path.join(state, "speaker-gain"), "w") as f: f.write("6\n")          # stock: what the HAL's speaker path sets
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
@@ -60,7 +62,7 @@ async def main():
               f"the settings file from before names moved to state/config: {c0}")
 
         check(c0.get("do_not_disturb") == "on" and os.path.exists(os.path.join(state, "preset.applied")) and not os.path.exists(os.path.join(state, "preset"))
-              and "preset applied, 1 setting; not taken:" in open(log).read() and "no_such_thing" in open(log).read(),
+              and "preset applied, 2 settings; not taken:" in open(log).read() and "no_such_thing" in open(log).read(),
               "a preset (setup.sh --preset): applied once at start, the unknown line reported, the file kept as preset.applied")
         st, h, body = rq("GET", "/")
         check(st == 200 and h.get("Content-Encoding") == "gzip" and b"<title>Echo settings</title>" in gzip.decompress(body), "the page, gzip'd")
@@ -98,11 +100,68 @@ async def main():
         check({n for n, x in names.items() if x["feature"]} >= {"arbitration", "sound_detection", "whisper_detection"},
               "features: arbitration, sound detection, whisper detection (Bluetooth, Wi-Fi motion: not on this PC)")
 
+        # Adaptive colour (issue #162): root discovers the service beside hassmic and publishes actual readback.
+        colour = os.path.join(state, "adaptive-colour")
+        actual = lambda: next((x for x in b.state()["settings"] if x["name"] == "screen_adaptive_colour"), None)
+        check("screen_adaptive_colour" not in names and cfg().get("screen_adaptive_colour") == "on"
+              and "screen_adaptive_colour: no such setting" not in open(log).read(),
+              "adaptive colour: preset on retained before service discovery, toggle still hidden")
+        check(b.set(screen_adaptive_colour="on").get("applied") == 0, "unavailable adaptive colour: write refused")
+        with open(colour, "w") as f: f.write("0\n")
+        check(actual() is not None and actual()["value"] == 0 and actual()["group"] == "Lights",
+              "service discovered after page load: adaptive colour appears with confirmed off state")
+        r = b.set(screen_adaptive_colour="on")
+        check(r.get("applied") == 1 and cfg().get("screen_adaptive_colour") == "on" and actual()["value"] == 0,
+              "adaptive colour enabled: preference saved; pending or failed Binder write still displays actual off")
+        b.set(mic_level=-22)
+        check(cfg().get("screen_adaptive_colour") == "on", "saving another setting preserves the requested colour while Binder trails")
+        args = proc.args
+        proc.terminate(); proc.wait()
+        proc = subprocess.Popen(args, env=env, stderr=open(log, "a")); wait_port(PORT, WEB)
+        b = Browser(WEB)
+        check(b.login_with_button(proc) and actual()["value"] == 0, "after restart: the toggle still shows confirmed device state")
+        b.set(mic_level=-22)
+        check(cfg().get("screen_adaptive_colour") == "on", "after restart: explicit on preference retained despite off readback")
+        with open(colour, "w") as f: f.write("1\n")
+        check(actual()["value"] == 1, "successful readback: toggle shows on")
+        r = b.set(screen_adaptive_colour="off")
+        check(r.get("applied") == 1 and cfg().get("screen_adaptive_colour") == "off" and actual()["value"] == 1,
+              "adaptive colour disabled: preference saved, toggle waits for readback")
+        os.remove(os.path.join(state, "adaptive-colour-request"))
+        r = b.set(screen_adaptive_colour="off")
+        check(r.get("applied") == 1 and os.path.exists(os.path.join(state, "adaptive-colour-request")),
+              "explicit off again asks root to retry even though the saved preference is unchanged")
+        check("screen_adaptive_colour=off\n" in b.call("GET", "/api/export")[2].decode(),
+              "export keeps the requested colour rather than a temporary device override")
+        with open(colour, "w") as f: f.write("0\n")
+        check(actual()["value"] == 0, "disable readback: toggle shows off")
+        os.remove(colour)
+        b.set(mic_level=-22)
+        check(actual() is None and cfg().get("screen_adaptive_colour") == "off", "service lost: toggle hidden, preference retained")
+        with open(colour, "w") as f: f.write("not a boolean\n")
+        check(actual() is None, "malformed readback: toggle hidden")
+        with open(colour, "w") as f: f.write("0\n")
+
+        # Root can lose the service while one response is serializing its settings. The iteration must stay stable.
+        stop = threading.Event()
+        def flap_colour():
+            while not stop.is_set():
+                os.remove(colour)
+                with open(colour + ".tmp", "w") as f: f.write("0\n")
+                os.replace(colour + ".tmp", colour)
+        flapper = threading.Thread(target=flap_colour); flapper.start()
+        try:
+            snapshots = [[x["name"] for x in b.state()["settings"]] for _ in range(50)]
+            check(all(len(s) == len(set(s)) and "mic_level" in s and "even_volume" in s for s in snapshots),
+                  "service changes during serialization: complete settings snapshots, no duplicates or crash")
+        finally:
+            stop.set(); flapper.join()
+
         # Home Assistant: the lean list, and what the page changes
         ha, by, states = await ha_connect()
         page_only = {"mic_level", "noise_reduction", "sound_detection", "debug_access_adb", "join_arbitration_network", "online_updates",
                      "bluetooth_announcements", "bluetooth_announcement_language", "soc_temperature", "cpu_usage", "wifi_motion_detection",
-                     "speaker_gain"}
+                     "speaker_gain", "screen_adaptive_colour"}
         check(not page_only & set(by) and {"wake_sound", "mute", "do_not_disturb", "firmware", "equalizer_bass", "led_brightness"} <= set(by),
               f"Home Assistant lists the lean set only: {sorted(set(by))}")
         check("sound" in by and "last_request_whispered" in by and "arbitration_peers" in by and "arbitration_key" in by,
@@ -205,6 +264,23 @@ async def main():
         b.call("POST", "/api/adb", b"off"); await asyncio.sleep(0.3)
         check(not os.path.exists(adb_req) or open(adb_req).read().strip() in ("0", "close", ""), "closed again")
         check(x.call("POST", "/api/adb", b"on")[0] == 401, "adb from a browser never approved: refused")
+        # a request that waits goes with "off", and with the login of the browser that asked: the next press opened adb
+        # for 30 minutes all the same, and the page went on saying it waited for the button
+        c = Browser(WEB)
+        check(c.login_with_button(proc), "a second browser logged in")
+        r1, r2 = json.loads(c.call("POST", "/api/adb", b"on")[2]), json.loads(c.call("POST", "/api/adb", b"off")[2])
+        os.remove(adb_req)                                              # "off" asked root to close: taken
+        await until(lambda: "adb request withdrawn" in open(log).read())
+        check(r1["adb"] == "waiting" and r2["adb"] == "closed" and not b.state()["adb"]["waiting"] and "adb request withdrawn" in open(log).read(),
+              "adb asked, then \"off\" before the press: the request withdrawn, the page no longer waits")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: os.path.exists(adb_req), 1)
+        check(not os.path.exists(adb_req), "...and the next press asks root for nothing")
+        r1 = json.loads(c.call("POST", "/api/adb", b"on")[2])
+        r2 = json.loads(b.call("POST", "/api/revoke", c.pub.hex().encode())[2])
+        check(r1["adb"] == "waiting" and r2.get("revoked") is True and not b.state()["adb"]["waiting"],
+              "adb asked, then that browser's login revoked: the request withdrawn as well")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: os.path.exists(adb_req), 1)
+        check(not os.path.exists(adb_req), "...and the next press asks root for nothing")
 
         # export / import
         st, h, text = b.call("GET", "/api/export"); text = text.decode()
@@ -227,6 +303,28 @@ async def main():
         check("Old Name" not in m and "old-node" not in m and re.search(r"friendly_name=Echo Dot 3( [0-9a-f]{6})?<", m)
               and re.search(r"<name>echo-dot-3(-[0-9a-f]{6})?</name>", m), "without -n: the model's name (and the MAC's end), not the old one")
         os.remove(sf("name")); os.remove(sf("node"))
+
+        # the note (issue #153): one line under the name, in the unsigned hello (the login page shows it), set signed
+        hello = lambda: json.loads(rq("GET", "/api/hello")[2])
+        check(hello().get("note") == "" and not os.path.exists(sf("note")), "no note at first: an empty one in hello")
+        check(rq("POST", "/api/note", b"Kitchen")[0] == 401 and hello()["note"] == "", "note: unsigned refused")
+        st, _, body = b.call("POST", "/api/note", '  Kitchen,\n by the "window"\t '.encode())
+        want = 'Kitchen,  by the "window"'
+        check(st == 200 and json.loads(body).get("note") == want and hello()["note"] == want and (b.state() or {}).get("device", {}).get("note") == want
+              and open(sf("note")).read() == want + "\n", f"note set: one line, trimmed, in hello and the state: {body!r}")
+        st, _, body = b.call("POST", "/api/note", ("x" + "ä" * 50).encode())
+        check(st == 200 and hello()["note"] == "x" + "ä" * 39, "a long note: cut at 80 bytes, before the character the limit splits")
+        b.call("POST", "/api/note", "Küche".encode() + b"\xc3")
+        check(hello()["note"] == "Küche", "a body that ends inside a character: that character left out")
+        b.call("POST", "/api/note", "Wohnzimmer, Regal".encode())
+        args = proc.args
+        proc.terminate(); proc.wait()
+        proc = subprocess.Popen(args, env=env, stderr=open(log, "a")); wait_port(PORT, WEB)
+        b = Browser(WEB)
+        check(hello()["note"] == "Wohnzimmer, Regal" and b.login_with_button(proc), "the note after a restart")
+        check(b"Wohnzimmer" not in b.call("GET", "/api/export")[2], "not in the settings file: it is this Echo's")
+        st, _, body = b.call("POST", "/api/note", b"  ")
+        check(st == 200 and json.loads(body).get("note") == "" and hello()["note"] == "" and not os.path.exists(sf("note")), "an empty note clears it")
 
         # identify (main.c core_identify): from the page, and Home Assistant's button
         check(rq("POST", "/api/identify")[0] == 401, "identify: unsigned refused")
@@ -264,6 +362,11 @@ async def main():
         check(y.call("GET", "/api/state")[0] == 401 and z.call("GET", "/api/state")[0] == 401, "and the button approves neither")
 
         # revoke
+        w = Browser(WEB)
+        check(w.login_with_button(proc), "another browser logged in")
+        check(json.loads(b.call("POST", "/api/revoke", w.pub.hex().encode())[2]).get("revoked") is True and w.call("GET", "/api/state")[0] == 401,
+              "revoke another browser: refused from then on")
+        check(w.login() == "waiting", "...and when it asks to log in again, it waits for the button (it was told \"approved\", and kept out)")
         check(json.loads(b.call("POST", "/api/revoke", b.pub.hex().encode())[2]).get("revoked") is True, "revoke this browser")
         check(b.call("GET", "/api/state")[0] == 401, "revoked: refused")
         try: await ha.disconnect()
@@ -298,6 +401,16 @@ async def login_runs_out():
         check("-u authenticated_setup_mode" in lines() and "login ran out without the button" in open(log).read(),
               "the page went away: the login runs out by itself, the ring off, with nothing asking")
         check(b.login() == "refused", "...and the browser is told so when it asks again")
+        check(b.login() == "waiting", "asked once more (the page's Try again): a new login waits (it was refused at once until another key asked)")
+        proc.send_signal(signal.SIGUSR2); await until(lambda: "login approved" in open(log).read())
+        check(b.login() == "approved", "...and the button approves it")
+        check(all(s["name"] != "screen_adaptive_colour" for s in b.state()["settings"]),
+              "device without adaptive colour: no toggle")
+        c = Browser(WEB2)
+        check(c.login() == "waiting", "another browser asks")
+        await until(lambda: open(log).read().count("login ran out without the button") == 2)
+        await asyncio.sleep(3.5)                        # past web.c's REFUSED_MS (3 s) after it ran out, nobody asking meanwhile
+        check(c.login() == "waiting", "asked again long after it ran out (the page opened again): a new login waits, not \"refused\" at once")
         proc.terminate(); proc.wait(); proc = run(); wait_port(PORT2, WEB2)
         again = Browser(WEB2).hello.get("start")
         check(again and first and again != first, f"restarted: /api/hello names another start ({first} -> {again})")

@@ -27,8 +27,8 @@ image boots with a foreign one.
 In the ramdisk:
 - default.prop: ro.secure=0, ro.adb.secure=0, ro.debuggable=1, ro.allow.mock.location=1,
   persist.sys.usb.config=mtp,adb  (the XDA image's changes)
-- init.fosflags.sh: adb on, authentication off, nothing else (the XDA image's file, byte for
-  byte: it ends without a newline)
+- init.fosflags.sh: adb on, authentication off, nothing else (the same two properties the XDA
+  image's file sets; our own words since 2026-11-09, none of the threads' files is copied here)
 - with --sepolicy FILE: sepolicy replaced by FILE (the stock one patched: with ro.secure=0 adbd
   switches itself to its --root_seclabel u:r:su:s0 and dies when the policy refuses, and
   checkers' stock policy has su permissive but no way for adbd into it; devices/checkers/
@@ -36,7 +36,8 @@ In the ramdisk:
 - with --adbd FILE: sbin/adbd replaced by FILE.  8149's own adbd is a user build (no ro.secure
   in it: "adbd cannot run as root in production builds"), which drops to shell whatever
   ro.secure, service.adb.root or the FOS flags say (all three tried on a checkers, 2026-10-10);
-  the XDA image's adbd (CyanogenMod's, static) goes by ro.secure, and with it adb is root in su
+  a userdebug adbd goes by ro.secure, and with it adb is root in su (the XDA image's, CyanogenMod's, until
+  2026-11-09; now Google's Android 7.1.1 emulator image's: scripts/lib/setup.sh adbd_get)
 - init.*.rc: stock's "setprop service.adb.tcp.port 5555" (checkers' init.checkers.rc, on boot) left out, as a
   comment line in its place.  With the changes above it opened a root shell without authentication to the network at
   every boot, until lockdown.sh closed it again; adb over Wi-Fi is hassmic's to open (adb_gate in lockdown.sh).
@@ -58,11 +59,12 @@ PROPS = [  # default.prop, old line -> new line; each must be there exactly once
     (b"ro.debuggable=0", b"ro.debuggable=1"),
     (b"persist.sys.usb.config=none", b"persist.sys.usb.config=mtp,adb"),
 ]
+# init.fosflags.sh, run by init from stock's fosflags.rc: our own two lines, adb on without authentication
 FOSFLAGS = (b"#!/system/bin/sh\n"
+            b"# hassmic (scripts/mkbootroot.py): adb on, without authentication; nothing else\n"
             b"PATH=/sbin:/system/sbin:/system/bin:/system/xbin\n"
-            b"\n"
             b"setprop persist.sys.usb.config mtp,adb\n"
-            b"setprop amazon.fos_flags.noadbauth 1")
+            b"setprop amazon.fos_flags.noadbauth 1\n")
 
 
 class Boot:

@@ -70,6 +70,9 @@ void core_reset(const char *why);
 /* Restart the whole Echo, as a power cycle does: root reboots on state/reboot (main.sh).  why: for the log.  Any thread */
 void core_reboot(const char *why);
 extern int core_local_wake, core_port, core_sendspin_port, core_web_port;
+/* -D: the microphone keeps streaming while a reply plays, for a client with its own barge-in (a realtime agent);
+ * the echo canceller keeps the reply out of it */
+extern int core_duplex;
 
 /* lock held */
 enum state core_state(void);
@@ -129,6 +132,9 @@ void core_speaker(int mode, int pct);            /* not the lock: playing on the
  * picks the active one, and a second one to listen beside it if it likes (its "Wake word 2").  Lock held. */
 #define CORE_WAKE_ACTIVE_MAX 2
 struct core_wake_word { char id[64], name[64], lang[16], manifest[256]; };
+void core_speech_language(char *out, size_t cap);   /* the language spoken here, "ro": the setting, else the time zone's;
+                                                       "".  Not the lock: the setting and state/zone only (screen.c's
+                                                       writer calls it with its own lock held) */
 int  core_wake_words(const struct core_wake_word **list);  /* count */
 int  core_wake_word(int set);                    /* index of the (first) active one; set >= 0 makes it the only one and
                                                     keeps it, -1 reads */
@@ -193,6 +199,9 @@ int    core_timer_next(char *name, size_t cap, unsigned *total, long long *left_
 struct core_timer { char name[64]; unsigned total; int active; long long end_ms, left_ms; };
 int    core_timers_running(struct core_timer *t, int max);
 void   core_alarm_stop(const char *why);                    /* every ringing timer; why: for the log */
+/* Lock held.  A "stop" another Echo heard ends the ring here (ringstop.c): as stop_word would, a run this Echo's own wake
+ * word opened over the ring is dropped (listening) or starts none (its round still runs) */
+void   core_alarm_stop_elsewhere(const char *why);
 int    core_transcript(const char *text);                   /* speech to text's result: 1 if it stopped a ring ("stop",
                                                                or anything with core_timer_stop_any), a Drop In or music
                                                                ("stop"); run cancelled: drop the rest of it */
@@ -217,6 +226,7 @@ void   core_bt_pairing(int on);                             /* the Bluetooth spe
 void   core_dropin(int state, const char *peer, int outgoing);
 void   core_dropin_result(int result, const char *peer, int here);
 void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
+int    core_own_sound(void);                                /* our sounds or a reply play (or are still in the mic): any thread */
 const char *core_dropin_refusal(int incoming);
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its

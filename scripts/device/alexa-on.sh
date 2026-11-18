@@ -17,13 +17,29 @@ if [ -f $DISABLED ]; then
     if [ -n "$left" ]; then printf '%s\n' $left > $DISABLED; else rm -f $DISABLED; fi
 fi
 [ -n "$WAKE_LOCK" ] && echo "$WAKE_LOCK" > /sys/power/wake_unlock 2>/dev/null
-# The settings alexa-off.sh set ("null": there was none)
+# The settings alexa-off.sh set ("null": there was none); "service ambientdisplayinfo <0|1>" is main.sh's adaptive
+# colour (athena), stock's value put back through the service's setAmbientToggle (transaction 1)
 SETTINGS=/data/local/hassmic/alexa-settings
 if [ -f $SETTINGS ]; then
     while read -r ns k v; do
-        if [ "$v" = null ]; then settings delete $ns $k < /dev/null > /dev/null 2>&1; else settings put $ns $k "$v" < /dev/null; fi
+        if [ "$ns" = service ]; then service call $k 1 i32 "$v" < /dev/null > /dev/null 2>&1
+        elif [ "$v" = null ]; then settings delete $ns $k < /dev/null > /dev/null 2>&1; else settings put $ns $k "$v" < /dev/null; fi
     done < $SETTINGS
     rm -f $SETTINGS
+fi
+# The broadcasts main.sh's android_tell sent (device.conf ANDROID_BROADCASTS, booleans in system_server's memory only):
+# stock's are on (the diagnostics ran and bounced the link, checkers 2026-11-11), so each goes again as true.  Only
+# once boot completed: a framework still starting has stock's anyway, and am would wait on it.  Nothing kept to retry:
+# one that does not arrive leaves the diagnostics off only until system_server's next start, which has stock's again.
+if [ -n "$ANDROID_BROADCASTS" ] && command -v am > /dev/null; then
+    if [ "$(getprop sys.boot_completed)" = 1 ]; then
+        to=; command -v timeout > /dev/null && to="timeout 10"
+        for t in $ANDROID_BROADCASTS; do
+            act=${t%%/*} kv=${t#*/}
+            $to am broadcast -a "$act" --ez "${kv%%=*}" true < /dev/null 2>&1 | grep -q 'Broadcast completed' ||
+                { echo "alexa-on: $act not sent"; break; }
+        done
+    else echo "alexa-on: Android still starting, broadcasts left out (a new system_server has stock's)"; fi
 fi
 # the rows hassmic's light band kept for itself (ring_band.c): the whole screen the apps' again
 [ -n "$SCREEN_BAND" ] && wm overscan reset < /dev/null > /dev/null 2>&1

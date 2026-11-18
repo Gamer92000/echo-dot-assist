@@ -218,17 +218,20 @@ function pageForDevice(pg) {
   return { ...pg, nav: pg.nav ? (pg.nav === 'All your Echos' ? 'Your devices' : 'This Cube') : pg.nav, ...(copy[pg.id] || {}) };
 }
 
-const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust'];      // the Show's backlight
+const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust', 'screen_adaptive_colour'];      // the Show's backlight, and its colour where Fire OS has that
 const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
-const MOVED = { light_band: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen',
-  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice' };
+const IDLE = ['screen_sleep_minutes', 'screen_clock'];                             // the screen's timeout, the clock in place of dark
+const MOVED = { light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen',
+  arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice',
+  ring_live: 'lights' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
-          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any']],
+          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any', 'timer_stop_from_others']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Screen', ...BRIGHTNESS]],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Live from Home Assistant', 'ring_live'], ['Screen', ...BRIGHTNESS]],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
@@ -264,6 +267,8 @@ const HELP = {
   timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it. That goes for any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
   music_duck: { help: 'How far the music is turned down from the moment the wake word is heard until the reply has ended, for Music Assistant and for a phone over Bluetooth. Raise it if the Echo has trouble understanding you over loud music or an audiobook (the music is quieter in your voice, so speech-to-text hears you better); 60 is silence. 0 turns ducking off. Default 16 dB.' },
+  timer_stop_from_others: { help: 'While a timer rings on this Echo, "<wake word>, stop" said to any other Echo of the network stops it too. Without it, the ring stops only when this Echo heard you itself: from the next room, or over its own ring, it may not, and another Echo takes the "stop" instead (and pauses its music). The Echos tell each other over the arbitration network, without Home Assistant, so the Echos must be in one arbitration network (Echos page), and the other Echos need this version; set it on the Echos whose rings may be ended that way. It reaches every Echo of the network: a "stop" in the bedroom ends a timer ringing in the kitchen. A "stop" that has something to end where it was heard (a ring, a reply, a call there) ends only that. "Any request stops a ringing timer" stays with the Echo that heard you. Off by default.' },
+  duck_for_others: { help: 'Turns this Echo\'s music down by its own "Music ducking" while another Echo answers a wake word this one heard too, and back up when that Echo is done. Echos that hear you are near you, so their music drowns out the reply and reaches the answering Echo\'s microphones; an Echo in another room never heard the wake word and plays on. The Echos tell each other over the arbitration network, without Home Assistant, so this needs arbitration on (Echos page), on both. Each Echo that heard the wake word also turns its music down from that moment, before they have agreed which one answers. Music Home Assistant plays on the answering Echo (a radio it was asked for) does not hold the others down. If the "done" goes missing, the music comes back after about 7 seconds. Off, the music here drops only once this Echo answers itself, as before. On by default.' },
   speaker_gain: { help: 'Makes the Echo\'s own speaker louder at every volume, for an Echo that is too quiet at full volume. It raises the amplifier stage in front of the speaker, which a stock Echo leaves at +0 dB (an Echo Dot 3\'s amplifier has only 2 dB more to give; an Echo Show 5 goes in steps of 1.5 dB, the nearest one to what you pick). Owners of an Echo Dot 2 heard +6 dB loud and clean at full volume; above that, loud music near full volume can distort, and a speaker that plays distorted for long can be damaged. Raise it a step at a time and turn it down at the first crackle. The 3.5 mm jack and Bluetooth speakers are not affected. An Echo Show 8 (1st gen) is loud already at +0 dB and goes down to −6 dB for that; a 2nd gen goes up to +9 dB, below where its amplifier distorts. Default +0 dB.' },
   even_volume: { help: 'Makes every step of the volume the same: each point is 0.5 dB, each press of the volume buttons 5 dB, from 1 (quiet, about 50 dB under full) to 100 (as loud as before). Without it the Echo plays a volume as a stock Echo does, where most of the change happens at one end: on an Echo Show the bottom half covers more than twice the range of the top half, and a step of one point often does nothing at all. The Echo keeps its own volume setting at the nearest step above, and turns the sound down the rest of the way itself. 0 is silent either way. A Bluetooth speaker that sets its own volume still does. Exported with the settings. On by default.' },
   led_auto_brightness: { ha: true, help: 'The ring dims and brightens with the room, from the Echo\'s light sensor and Amazon\'s own curve, as on a stock Echo.' },
@@ -271,10 +276,14 @@ const HELP = {
   screen_brightness_auto: { ha: true, help: 'The screen dims and brightens with the room, on Amazon\'s own curve from the Echo\'s light sensor, as "Adaptive brightness" on a stock Echo Show does. That curve is dark: under about 5 lux the screen is barely lit, and it is near full brightness only from about 100 lux. If it is too dim for you, raise "Adaptive brightness adjustment", as you would move the slider on a stock Echo Show. Off by default: the screen stays at "Screen brightness".' },
   screen_brightness: { ha: true, help: 'How bright the screen is with adaptive brightness off. Default 47 %, what the Echo ran at before this setting existed. With Kiosk Satellite installed, the Echo switches off the app\'s own adaptive brightness, so these settings set the screen.' },
   screen_brightness_adjust: { ha: true, help: 'With adaptive brightness on: Amazon\'s curve brighter (up to +100) or dimmer (down to −100), as the brightness slider moves it on a stock Echo Show in adaptive mode. At +100 a dark room\'s near-black screen is about as bright as 55 % without adaptive. 0 is Amazon\'s curve as it is.' },
+  screen_adaptive_colour: { help: 'Amazon\'s "Adaptive Color" from a stock Echo Show\'s Display settings: the screen\'s white follows the room\'s light, warmer in lamplight, so at night the whole screen turns yellow. Off by default, so dashboard colours stay constant. The switch shows the device\'s current state; changes can take a few seconds. Amazon switches it off by itself while a video plays and back on after.' },
   ring_rotation: { ha: true, help: 'Where the light ring\'s fill starts. Home Assistant\'s "Light ring fill" lights that share of the ring in the light\'s colour, for a timer\'s or a washing machine\'s progress or a battery; it fills the way the volume does, from where the volume starts. Turn the start by this many LEDs, so it starts where you want it to for how the Echo stands. Only where the Echo has room for each LED\'s own animations (Home Assistant then lists "Light ring fill"). Default 0.' },
   screen_text: { help: 'What you said and the assistant\'s reply in large letters over the screen, above the band: your words smaller and grey, the reply white beside a cyan bar, both as large as they fit (a very long reply is cut at the end of the screen). They show over the face, the music and any app, Kiosk Satellite too, but not over the menu pulled down from the top. They appear as speech-to-text and the reply come in, stay while the Echo answers and for 8 seconds after, then fade; the next request takes them away at once. The screen behind them is darkened, so they stay readable over whatever it shows. A tap takes them away, over an app too (the app gets none of those touches while they show). With Wyoming only your words are shown (it tells no reply text). Off by default: what people say appears only where someone wants it to.' },
   screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
+  screen_clock: { help: 'A screen saver: where the screen would go dark (after Screen sleeps after, or 1 minute with the mic off or in Do not disturb), it shows the time across the whole screen instead, with the date under it. Until then the face shows as always. Mic off and Do not disturb get a line under the clock saying so; music playing shows its bar. A touch on the clock brings the face back (that touch does nothing else), and the timeout starts again; so does anything the Echo does: a request, a timer, a Drop In, the volume, music starting. Uses Home Assistant\'s time zone, 12-hour where the face\'s clock is. Only in place of the face: with an app or the music page in front, the screen goes dark as before. Off by default. Brightness follows the Brightness card: Adaptive brightness dims it at night.' },
+  screen_sleep_minutes: { help: 'How long the screen stays on after the last thing happened (a request, a touch, the volume, a timer), in minutes; then it goes dark, or shows the clock with Clock when idle on. 0: it never does either, the face stays. With the mic off or in Do not disturb it is 1 minute at most, as on a stock Echo Show; 0 keeps the screen on then too. Running timers on the screen keep it on whatever this says. Default 5, as stock.' },
   screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
+  music_on_screen: { help: 'While a track from Music Assistant plays on this Echo, the screen shows the music page (the big cover, title, seek bar and buttons). In place of the face: only where the face is what the screen shows by itself; an app in front (Kiosk Satellite, a dashboard) is left alone. In place of the home app too: also over the app chosen as Home above (or Kiosk Satellite), which comes back when the music stops; other apps are left alone. A request, a call or a ringing timer bring the face as always, and the music page comes back when they are over. It stays until the music stops: a pause keeps it, and so does the gap between two tracks. It goes by itself only if it still shows the Playing tab: browse the library or search on it and it stays, as if opened by hand (Home in the drawer brings the home app back). Pull down the drawer and choose Face or Home, or tap the face button on the music page, and the music page stays away until the music has stopped; a face chosen that way stays as it always has, until Home in the drawer brings the home app back. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
@@ -283,6 +292,7 @@ const HELP = {
   kiosk_internet: { help: 'Kiosk Satellite may reach the internet while this is on: for its own updates and for web pages it shows (iframes, dashboards). Only that app gets out: the Echo\'s own voice satellite stays on your network except for what it needs, and Amazon\'s software stays cut off. Off: it reaches your network only, so it shows Home Assistant but cannot update itself or load outside pages. On by default. Takes effect within seconds.' },
   kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
   kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
+  kiosk_dlna: { help: 'Lets phones and media servers on your network find the Kiosk Satellite app\'s DLNA renderer and play on this Echo, Home Assistant\'s DLNA Digital Media Renderer integration included. Switch the renderer on in the app as well: it is off there by default. The Echo\'s firewall then admits, from private addresses only, the port the app names under Settings > DLNA Renderer > Server port (2326 or so; one you type in works too) while the app listens there, and the network\'s searches for renderers (UDP port 1900, multicast only) while the app alone listens there. The ports close again when the renderer stops, the app goes or this is off. DLNA has no password: while this is on, anyone on your network can play on the Echo. Off by default. Takes effect within seconds.' },
   online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.',
     status: () => updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, 'Checking that this Echo can reach GitHub…'))
       : updCheck.why ? h('div', { class: 'callout bad big' }, icon('warn'), h('div', { class: 'grow' },
@@ -300,7 +310,23 @@ const HELP = {
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
     } },
   wake_word_adaptation: { help: 'The Echo learns from your requests how the wake word sounds here, in your voices, your room and through its microphone. It then finds where the word ends a little more often (in tests 163 of 220 instead of 158, from the sixth request on). What it learns stays on the Echo; it forgets the oldest as new requests come. On by default.' },
-  speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; ...), else from the wake word\'s own language.' },
+  speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Those sounds come for German, English, French, Spanish and Japanese so far; for the other languages the Echo finds the word\'s end as it did before they were listed: by your time zone where it has sounds for that zone\'s language (in Brazil: English), else by the wake word\'s own (English for "Alexa"). The Echo Show also writes the date on its screen in this language. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Romania, Moldova: Romanian; ...), else from the wake word\'s own language. Home Assistant tells the Echo only the zone\'s offset and summer time, which many countries share, so the country comes from Home Assistant\'s home location (its Home zone); near a border, or without a location, from your Wi-Fi router; with neither, only a zone set on the Echo before counts. What Automatic found shows under this row.',
+    status: () => {
+      const z = state.zone; if (!z || settingValue('speech_language') !== 'auto') return null;
+      const lang = CHOICE_NAMES.speech_language[z.language];
+      const from = { home: z.home ? `the country of Home Assistant's home location (${z.country})` : `the country of Home Assistant's home location as it was (${z.country})`,
+        wifi: !z.wifi ? `the country your Wi-Fi router said before (${z.country})`
+          : z.home ? `the country your Wi-Fi router says (${z.country}), as the home is close to it or its own country (${z.home}) has no zone with that time`
+          : `the country your Wi-Fi router says (${z.country}), as Home Assistant has no home location`,
+        kept: 'the zone set on this Echo before', guess: null, rule: null }[z.how];
+      const what = lang ? `Automatic: ${lang}` : 'Automatic: no language found, so the wake word\'s own';
+      const said = [z.home && `Home Assistant's home location is in ${z.home}`, z.wifi && `your Wi-Fi router says ${z.wifi}`].filter(Boolean).join(', ');
+      const why = from ? `, from the time zone ${z.zone}, by ${from}.`
+        : z.how === 'guess' ? `. Home Assistant\'s time zone has the same time as ${z.zone}, but ${said ? said + ', which has no zone with that time' : 'neither its home location nor your Wi-Fi router says which country this is'}.`
+        : z.how === 'rule' ? '. This Echo knows no zone with Home Assistant\'s time zone.' : '. Home Assistant has not told this Echo its time zone yet.';
+      const other = z.wifi && z.country && z.wifi !== z.country ? ` Your Wi-Fi router says ${z.wifi}; if that is right, pick the language above.` : '';
+      return h('p', { class: 'f-model' }, what + why + other);
+    } },
   wake_engine: { get help() { return isCube() ? "Amazon Pryon uses the Alexa model installed on the Cube. microWakeWord uses imported models; Home Assistant mode streams audio to your server for wake detection." : 'Amazon\'s engine is the one the Echo was built around. With microWakeWord, the engine of ESPHome\'s voice satellites, you get wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.'; },
     // the warning, a first model, or Home Assistant's side of it, before the switch; from or to Home Assistant the satellite restarts
     before: (c) => c === 'microwakeword' ? mwwSwitchDialog() : c === 'homeassistant' ? haSwitchDialog() : true,
@@ -407,6 +433,9 @@ const HELP = {
   whisper_detection: { icon: 'whisper', ha: ['Last request whispered'], help: 'Tells whether your last request was whispered, before speech-to-text finishes. Use it in your conversation agent\'s prompt to have it answer quietly.' },
   wifi_motion: { icon: 'wifi', tag: 'Experimental', ha: ['Wi-Fi motion', 'Wi-Fi motion sensitivity'], help: 'A motion sensor without extra hardware. Someone walking between the Echo and your Wi-Fi router changes how the Echo receives the router. It shows motion, not presence, sees best along that path, and other Wi-Fi traffic can set it off.' },
   wifi_motion_sensitivity: { parent: 'wifi_motion', help: 'How much the signal has to change to count as motion. Higher catches more, with more false alarms.' },
+  ring_live: { icon: 'sparkle', ha: ['Light ring LED 1 to 12', 'Light ring design', 'the actions light_ring_frame, light_ring_animation, light_ring_design and light_ring_stop'],
+    help: 'The Echo draws its light ring itself, from Home Assistant: any colour on any LED, up to 30 pictures a second. "Light ring" then shows its exact colour instead of the nearest of a set, fades when it changes, and has more effects: Breathe, Color loop, Comet, Wave, Sparkle, Fire, and six that move with the music the Echo plays (Music beat, spectrum, VU meter, orbit, drums, aurora): the Echo hears the beat, the drums and left and right itself, and keeps time with what you hear. Over it lie twelve lights, one per LED (LED 1 is where the volume starts, turned by "Light ring rotation"), and over those an animation: your own frames from an action, or a design of yours, which "Light ring design" in Home Assistant and "Show on the Echo" here play at once, without Apply. The Echo plays animations itself, so they run smoothly whatever Home Assistant does meanwhile. The Echo\'s own lights always come first: listening, thinking, replies, timers, volume and mute show as set on this page, and your lights come back after them. Never brighter than the Echo\'s own lights at the ring\'s brightness ("LED brightness", auto included).',
+    note: 'Only on an Echo Dot 3, Echo Dot 2, Echo 2 or Echo Dot 5, and only after an update that lets hassmic draw the ring (the Echo restarts it by itself).' },
   light_sensor: { icon: 'sun', ha: ['Illuminance'], help: 'The room\'s light in lux from the Echo\'s light sensor, for automations. With this on, "LED brightness" in Home Assistant also follows the ring while auto brightness moves it, which puts an entry in its logbook every few minutes. Off, auto brightness works the same; Home Assistant only sees the levels you set.' },
   bluetooth_proxy: { icon: 'bt', ha: ['the Bluetooth proxy'], help: 'Home Assistant hears Bluetooth devices near the Echo through it, as through an ESPHome Bluetooth proxy: their advertisements for sensors and trackers, and connections to up to 3 devices at a time. Off, Home Assistant gets no Bluetooth from this Echo and the Echo stops scanning; disabling its Bluetooth entries in Home Assistant does not. Phones, a Bluetooth speaker and the setup from a phone work either way.' },
   bluetooth_audio: { icon: 'phone', ha: ['Bluetooth pairing'], help: 'Phones can pair with the Echo and play music on it (SBC, AAC, aptX). Start pairing with the "Bluetooth pairing" switch in Home Assistant; the ring shows a blue chaser meanwhile. Phones paired before still connect while this is off.' },
@@ -417,6 +446,7 @@ const HELP = {
     warnings: () => [...STAY_WARN, ...STAY_TONE_WARN], before: (v) => v === 'on' ? stayDialog() : true },
   drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two of your Echos, as Alexa\'s Drop In. One Echo calls another (the ones on the Echos page), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo on the Echos page. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.',
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below.' },
+  call_mic: { parent: 'drop_in', help: 'What the other Echo hears from this one in a Drop In. Amazon\'s call processing: the microphones as Amazon\'s own calls sent them, with noise reduction, an even level and its echo canceller for calls; a cleaner, steadier voice, a little duller (little over 4 kHz). The assistant\'s: what speech to text gets, through the Echo\'s own gain; brighter, with more of the room. A call running keeps the one it started with, except that switching to the assistant\'s takes effect at once.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
@@ -448,16 +478,22 @@ const SUB = {
   speaker_gain: 'For an Echo too quiet at full volume',
   even_volume: 'Each volume step as big as the next',
   music_duck: 'How far music drops while the assistant listens or speaks',
+  timer_stop_from_others: '"Stop" said to another Echo stops a ring here too',
+  duck_for_others: 'Music drops here too while another Echo that heard you answers',
   led_auto_brightness: 'Follows the room\'s light, as on a stock Echo',
   led_brightness: 'A fixed level; turns auto brightness off',
   screen_brightness_auto: 'Follows the room\'s light, as on a stock Echo Show',
   screen_brightness: 'The level with adaptive brightness off',
   screen_brightness_adjust: 'Brighter or dimmer than Amazon\'s curve, with adaptive on',
+  screen_adaptive_colour: 'Colours warmer in warm light, yellow at night',
   ring_rotation: 'Where "Light ring fill" starts',
+  music_on_screen: 'The big cover while music plays, in place of the face or the home app',
   light_band: 'Pixels kept for the band along the bottom of the screen',
   screen_text: 'What you said and the reply, in large letters on the screen',
   screen_text_seconds: 'How long the words stay after the reply; 0: until the next request',
   screen_timers: 'Running timers counted down, a ringing one in orange',
+  screen_clock: 'The time and date in place of a dark screen',
+  screen_sleep_minutes: 'Minutes until it goes dark or shows the clock; 0: never',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
@@ -465,10 +501,11 @@ const SUB = {
   kiosk_internet: 'Kiosk Satellite may reach the internet',
   kiosk_mic: 'Kiosk Satellite may use the microphone',
   kiosk_camera: 'Kiosk Satellite may use the camera, also to scan a QR code',
+  kiosk_dlna: 'Phones and media servers may play through Kiosk Satellite (DLNA)',
   online_updates: 'Where new versions come from',
   arbitration: 'Only the Echo that heard you best answers',
   wake_word_adaptation: 'Learns how the wake word sounds in your home',
-  speech_language: 'Helps find where the wake word ends',
+  speech_language: 'Helps find where the wake word ends; the date on the screen',
   wake_engine: 'What listens for the wake word',
   arbitration_mode: 'How the Echos agree on who answers',
   arbitration_offset: 'Evens out the Echo against your tablets',
@@ -480,6 +517,7 @@ const SUB = {
   whisper_detection: 'Tells Home Assistant when a request was whispered',
   wifi_motion: 'A motion sensor from changes in the Wi-Fi signal',
   wifi_motion_sensitivity: 'Higher catches more, with more false alarms',
+  ring_live: 'Any colour on any LED from Home Assistant, your designs at once',
   light_sensor: 'The room\'s light in lux, for automations',
   bluetooth_proxy: 'Home Assistant hears Bluetooth devices near the Echo',
   bluetooth_audio: 'Phones can pair and play music on the Echo',
@@ -489,18 +527,22 @@ const SUB = {
   bluetooth_speaker_stay_connected: 'Switching it on again is quick',
   drop_in: 'Talk between two of your Echos',
   drop_in_answer: 'How a call connects',
+  call_mic: 'What the other Echo hears',
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
-  speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese' },
+  speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese', it: 'Italian',
+    pt: 'Portuguese', nl: 'Dutch', sv: 'Swedish', da: 'Danish', nb: 'Norwegian', fi: 'Finnish', pl: 'Polish', ro: 'Romanian' },
   arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
+  call_mic: { call: 'Amazon\'s call processing', assistant: 'The assistant\'s' },
+  music_on_screen: { off: 'Off', face: 'In place of the face', home: 'In place of the home app too' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
   bluetooth_announcement_language: { en: 'English', de: 'Deutsch', fr: 'Français', es: 'Español', it: 'Italiano', pt: 'Português', nl: 'Nederlands',
-    sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski' },
+    sv: 'Svenska', da: 'Dansk', nb: 'Norsk', fi: 'Suomi', pl: 'Polski', ro: 'Română' },
 };
 const settingValueIndex = (name) => { const s = state.settings.find((x) => x.name === name); return s ? s.value : -1; };
 const settingValue = (name) => { const s = state.settings.find((x) => x.name === name); return s ? (s.type === 'choice' ? s.choices[s.value] : s.value) : undefined; };
@@ -557,7 +599,19 @@ async function start() {
 function showName(d) {
   $('name').textContent = d.name; $('lname').textContent = d.name; $('mname').textContent = d.name;
   $('ident').textContent = `${d.model} · ${d.node}`;
-  document.title = `${d.name} · settings`;
+  // the note (web.c, issue #153): what tells Echos of one model apart, so the login page and the tab say it too
+  const n = d.note || '', el = $('whonote');
+  el.replaceChildren(n || 'Add a note', icon('pen')); el.classList.toggle('no-note', !n);
+  el.setAttribute('aria-label', n ? `Note: ${n}. Edit it` : 'Add a note: where this Echo stands, say');
+  $('lnote').textContent = n; $('lnote').classList.toggle('hidden', !n);
+  $('mname').title = n;
+  setTitle(d);
+}
+// the tab: the page, and the note where there is one (the tabs of several Echos of one model say which is which)
+function setTitle(d = echo && echo.hello) {
+  if (!d) return;
+  const pg = curPage && pages.find((p) => p.id === curPage), who = d.note || d.name;
+  document.title = pg ? `${pg.title} · ${who}` : `${who} · settings`;
 }
 
 function showLogin() { $('login').classList.remove('hidden'); $('app').classList.add('hidden'); }
@@ -643,8 +697,10 @@ async function load() {
   // updated meanwhile (online update, push): this page is the old version's, its header the old number
   if (state.device.version !== echo.hello.version) { location.reload(); return; }
   echo.hello.start = state.device.start;          // restarted meanwhile (Home Assistant's button): waitBack's baseline
-  if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node) {      // renamed (hassmic.conf NAME)
-    echo.hello.name = state.device.name; echo.hello.node = state.device.node; showName(echo.hello);
+  if (state.device.name !== echo.hello.name || state.device.node !== echo.hello.node || (state.device.note || '') !== (echo.hello.note || '')) {
+    // renamed (hassmic.conf NAME), or the note changed in another browser
+    echo.hello.name = state.device.name; echo.hello.node = state.device.node; echo.hello.note = state.device.note || ''; showName(echo.hello);
+    if (load.started) renderDevices();
   }
   $('app').classList.remove('hidden');            // before render(): a hidden page has no widths to place cards by, nothing to scroll to
   render();
@@ -1197,9 +1253,10 @@ const PAGE_BUILD = {
   },
   lights: (el, list) => { el.append(flow(settingCards(list, 'lights'))); buildRing(el); },
   screen: (el, list) => {      // ring.js: the designs and where they show
-    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name));
-    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s)).map(settingRow)),
-      bright.length ? titled('Brightness', bright.map(settingRow)) : null,
+    const bright = list.filter((s) => BRIGHTNESS.includes(s.name)), words = list.filter((s) => WORDS.includes(s.name)), idle = list.filter((s) => IDLE.includes(s.name));
+    el.append(flow([titled(null, h('div', { id: 'home-app' }, homeRow()), list.filter((s) => !bright.includes(s) && !words.includes(s) && !idle.includes(s)).map(settingRow)),
+      idle.length ? titled('When idle', idle.map(settingRow)) : null,
+      bright.length ? titled(bright.some((s) => s.name === 'screen_adaptive_colour') ? 'Brightness and colour' : 'Brightness', bright.map(settingRow)) : null,
       words.length ? titled('Words and timers', words.map(settingRow)) : null].filter(Boolean)));
   },
   media: (el, list) => {
@@ -1257,12 +1314,12 @@ const pageBuilt = (id) => [...document.querySelectorAll('.page')].some((el) => e
 function route() {
   const m = /^#\/([^/]+)(?:\/(.+))?$/.exec(location.hash), part = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };
   const here = !!m && pageBuilt(part(m[1])), id = here ? part(m[1]) : 'overview';   // a bookmark or a link from another model may name a page this Echo has not got
-  const pg = pages.find((p) => p.id === id), changed = id !== curPage;
+  const changed = id !== curPage;
   curPage = id;
   document.querySelectorAll('.page').forEach((el) => el.classList.toggle('hidden', el.dataset.page !== id));
   $('nav').querySelectorAll('a').forEach((a) => { const on = a.dataset.page === id; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (echo) document.title = `${pg.title} · ${echo.hello.name}`;
-  menu(false);
+  setTitle();
+  menu(false); switcher(false);
   reflowPage();
   if (changed) window.scrollTo(0, 0);
   if (changed && echo && state && othersShown()) {
@@ -1292,6 +1349,73 @@ function menu(open) {
   $('menu').setAttribute('aria-expanded', String(open));
 }
 $('menu').onclick = () => menu(true);
+$('whonote').onclick = () => editNote();
+
+// The note (web.c, issue #153): a few words of the owner's under the name.  Not a name: that is Home Assistant's
+async function editNote() {
+  const v = await ask({ title: echo.hello.note ? 'Edit the note' : 'Add a note', ok: 'Save', check: () => null,
+    body: ['A few words to tell this Echo from your others: where it stands, say. They show under its name here, on your other Echos\' pages and on the login page, where anyone on your network can read them.'],
+    input: { label: 'Note (empty removes it)', value: echo.hello.note || '', max: 80 } });
+  if (v === null) return;
+  try {
+    const r = (await echo.call('POST', '/api/note', v)).json();
+    echo.hello.note = r.note; if (state) state.device.note = r.note;
+    showName(echo.hello); renderDevices(); if (noteCtl) noteCtl.paint();
+    toast(r.note ? 'Note saved' : 'Note removed');
+  } catch (e) { toast(errText(e)); }
+}
+
+// The other Echos from the name (issue #153): the same page on another one, without the way round the Echos page.
+// Its list is the Echos page's (others): known from the beacons and the addresses added there, read every round
+const noteOf = (d) => (d.state && d.state.device ? d.state.device.note : d.echo && d.echo.hello.note) || '';
+function switcher(open) {
+  const b = $('switch'), m = $('emenu');
+  if (open === undefined) open = m.classList.contains('hidden');
+  if (open === !m.classList.contains('hidden')) return;
+  m.classList.toggle('hidden', !open); b.setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  drawSwitcher();
+  // the list may be a round old (others are read every 30 s only while a page shows them)
+  if (echo && state && !devRun && Date.now() - lastRound > 30000) refreshDevices().catch(() => {});
+}
+// redrawn as each Echo answers: keepFocus, or the arrow keys lost their place whenever a slow one came in
+function drawSwitcher() {
+  const m = $('emenu');
+  if (m.classList.contains('hidden') || !echo || !state) return;
+  keepFocus(m, () => fillSwitcher(m));
+}
+function fillSwitcher(m) {
+  const hash = location.hash.startsWith('#/') ? location.hash : '';
+  const sub = (...p) => h('span', { class: 'em-s' }, p.filter(Boolean).map((x, i) => [i ? ' · ' : '', x]));
+  // those that answered first: an address nothing answers at is the least likely pick
+  const list = [...others].sort(([, p], [, q]) => !p.echo - !q.echo || echoName(p).localeCompare(echoName(q)));
+  const items = list.map(([base, d]) => {
+    const name = echoName(d), note = noteOf(d), r = arbOf(d.ip);
+    const how = d.error || (!d.echo ? (d.looking ? 'Looking…' : null) : !d.logged ? 'Not logged in' : null);
+    return h('a', { href: base + '/' + hash, 'data-k': 'em ' + base, class: d.error ? 'em-x' : null, title: d.hint || null },
+      h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
+      h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, name), sub(note ? h('b', {}, note) : null, d.echo ? shortAddr(base) : null, how)));
+  });
+  const me = echo.hello;
+  m.replaceChildren(...[
+    h('div', { class: 'em-me', 'aria-current': 'true' }, h('span', { class: 'mini-puck on' }),
+      h('span', { class: 'em-t' }, h('span', { class: 'em-n' }, me.name), sub(me.note ? h('b', {}, me.note) : null, 'This Echo')), icon('check')),
+    ...items,
+    items.length ? null : h('div', { class: 'em-none' }, devRun ? 'Looking for your other Echos…' : 'No other Echo yet.'),
+    h('div', { class: 'em-all' }, h('a', { href: '#/echos', 'data-k': 'em all' }, icon('net'), 'All your Echos'))].filter(Boolean));
+}
+$('switch').onclick = (e) => { e.stopPropagation(); switcher(); };
+$('switch').onkeydown = (e) => {
+  if (e.key !== 'ArrowDown') return;
+  e.preventDefault(); switcher(true); const f = $('emenu').querySelector('a'); if (f) f.focus();
+};
+$('emenu').onkeydown = (e) => {
+  const l = [...$('emenu').querySelectorAll('a')], i = l.indexOf(document.activeElement);
+  if (e.key === 'Escape') { e.preventDefault(); switcher(false); $('switch').focus(); }
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = l[(i + (e.key === 'ArrowDown' ? 1 : l.length - 1)) % l.length]; if (n) n.focus(); }
+};
+document.addEventListener('click', (e) => { if (!$('emenu').contains(e.target)) switcher(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('emenu').classList.contains('hidden')) { switcher(false); $('switch').focus(); } });
 $('scrim').onclick = () => menu(false);
 $('identify').onclick = () => identify(echo, echo.hello.name);
 
@@ -1321,6 +1445,7 @@ const FINDABLE = [
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
   ['Debug access', 'system', 'debug', 'adb root shell'],
+  ['Note', 'system', 'note', 'description location room label where which echo'],
   ['Restart', 'system', 'restart', 'reboot'],
   ['Factory reset', 'system', 'factory-reset', 'erase forget'],
   ['Approved browsers', 'system', 'browsers', 'login revoke log out'],
@@ -1547,10 +1672,10 @@ function drawOvEchos() {
     h('div', {}, h(href ? 'a' : 'div', { class: 'ov-name', href }, name), h('div', { class: 'mx-sub' }, sub))), h('div', { class: 'ctl' }, badge, btn));
   const list = [...others.values()].sort((a, b) => echoName(a).localeCompare(echoName(b)));
   ovEchos.replaceChildren(...[h('div', { class: 'sub-head' }, 'Your Echos'),
-    line(true, echo.hello.name, 'This Echo', null, idButton(echo, echo.hello.name)),
+    line(true, echo.hello.name, [echo.hello.note, 'This Echo'].filter(Boolean).join(' · '), null, idButton(echo, echo.hello.name)),
     ...list.map((d) => {
       const name = echoName(d);
-      return line(false, name, d.echo ? shortAddr(d.echo.base) : d.ip, d.error ? h('span', { class: 'badge bad', title: d.hint }, d.error)
+      return line(false, name, [noteOf(d), d.echo ? shortAddr(d.echo.base) : d.ip].filter(Boolean).join(' · '), d.error ? h('span', { class: 'badge bad', title: d.hint }, d.error)
         : !d.echo ? h('span', { class: 'badge' }, 'Looking…') : !d.logged ? h('a', { class: 'badge', href: '#/echos' }, 'Not logged in')
           : d.diff.length ? h('a', { class: 'badge warn', href: '#/compare' }, `${d.diff.length} differ${d.diff.length === 1 ? 's' : ''}`) : h('span', { class: 'badge ok' }, icon('check'), 'Same'),
       d.echo && d.logged && !d.error ? idButton(d.echo, name) : null, d.echo ? d.echo.base + '/' : null);
@@ -1967,6 +2092,11 @@ async function probe(base) {
       const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
       if (hello.pub === echo.hello.pub) { others.delete(base); selfAt.add(base); return; }
       d.echo = new Echo(base, hello);
+    } else if (!d.logged) {
+      // its note comes only from hello where this browser cannot read its state (issue #153): read it again, or a note
+      // changed there showed here until a reload
+      const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
+      if (hello.pub === d.echo.hello.pub) d.echo.hello.note = hello.note;
     }
     d.error = null;
     const read = async () => {
@@ -2027,13 +2157,13 @@ const noOthers = (where) => (state.arbitration ? `Echos running hassmic on the s
 const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error).sort((a, b) => a.echo.hello.name.localeCompare(b.echo.hello.name));
 const shortAddr = (base) => base.replace('http://', '').replace(`:${echoPort()}`, '');
 
-function renderDevices() { if (devBox) keepFocus(devBox, drawDevices); }
+function renderDevices() { drawSwitcher(); if (devBox) keepFocus(devBox, drawDevices); }
 function drawDevices() {
   scanMark.classList.toggle('hidden', !devRun);
   devBox.innerHTML = '';
   const a = state.arbitration;
   devBox.append(h('div', { class: 'echo me' }, h('span', { class: 'mini-puck on' }),
-    h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), h('div', { class: 'echo-addr' }, location.host)),
+    h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), echo.hello.note ? h('div', { class: 'echo-note' }, echo.hello.note) : null, h('div', { class: 'echo-addr' }, location.host)),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
         : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null,
         state.dropin && state.dropin.state !== 'idle' ? h('span', { class: 'badge ok' }, icon('talk'), `Drop In ${DROPIN_WORDS[state.dropin.state]} ${state.dropin.peer}`) : null),
@@ -2053,7 +2183,7 @@ function drawDevices() {
     const login = d.echo && d.logged && !d.error ? h('div', { class: 'echo-acts' }, idButton(d.echo, name))
       : d.echo && !d.logged && !d.error ? h('button', { class: 'small primary', disabled: !!d.asking, onclick: () => loginOther(d) }, icon('key'), d.asking ? 'Press its button…' : 'Log in') : null;
     devBox.append(h('div', { class: 'echo' }, h('span', { class: 'mini-puck' + (r && r.member ? ' on' : '') }),
-      h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, name), h('div', { class: 'echo-addr' }, shortAddr(base))),
+      h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, name), noteOf(d) ? h('div', { class: 'echo-note' }, noteOf(d)) : null, h('div', { class: 'echo-addr' }, shortAddr(base))),
         h('div', { class: 'echo-meta' }, meta), login, dropButton(r, name, d.echo && d.echo.hello)),
       h('a', { class: 'echo-go', href: base + '/' + (location.hash.startsWith('#/') ? location.hash : ''), title: `${name}: its settings page`, 'aria-label': `Open the settings page of ${name}` }, icon('ext'))));
   }
@@ -2852,7 +2982,7 @@ async function loadModels(arts) {
 
 // ---------------------------------------------------------------- System: settings file, debug access, browsers
 
-let adbBox, clientsBox, importMsg, nameCtl, wifiCtl;
+let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl;
 
 // The name: the model and the end of its MAC address (main.c name_make), never set here.  What people call it is the name
 // given in Home Assistant when the Echo was added.
@@ -2863,6 +2993,14 @@ function nameRow() {
   } };
   return infoRow('Name', 'Made from the model and its MAC address', 'Made from the model and the end of its MAC address, so no two Echos share it and a reset keeps it. Name it in Home Assistant: on the device\'s page there (the pencil), which is where everything else picks names up from.',
     null, null, now);
+}
+
+// The note (web.c, issue #153), as in the menu's head: there for the search, and for whoever looks for it here
+function noteRow() {
+  const now = h('div', { class: 'row-val' });
+  noteCtl = { paint: () => now.replaceChildren(echo.hello.note || h('span', { class: 'help' }, 'None')) };
+  return infoRow('Note', 'A few words of your own to tell it from your other Echos', 'A few words to tell this Echo from your others, where it stands say: they show under its name at the top of the menu, on your other Echos\' pages and on the login page. Also there: click the line under the name. Anyone on your network can read it, as the name. It stays with this Echo: not in the settings file, gone after a factory reset.',
+    h('button', { onclick: editNote }, icon('pen'), 'Edit…'), null, now);
 }
 
 // A dialog of the page's own, as the Wi-Fi one: title, a body that scrolls, a foot for its buttons.  cls names it for
@@ -3224,7 +3362,7 @@ function buildSystem(el, list) {
   clientsBox = h('div');
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
-    titled(isCube() ? 'This Cube' : 'This Echo', nameRow(), !isCube() && state.wifi !== undefined ? named('wifi', wifiRow()) : null,
+    titled(isCube() ? 'This Cube' : 'This Echo', nameRow(), named('note', noteRow()), !isCube() && state.wifi !== undefined ? named('wifi', wifiRow()) : null,
       list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
     titled('When something is wrong', named('log', logRow()),
       named('debug', isCube() ? infoRow('Debug access', 'Use Fire TV Developer options', 'Manage ADB in Fire TV Settings.', null) : infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
@@ -3268,6 +3406,7 @@ async function factoryReset() {
 function renderSystem() {
   if (!adbBox) return;
   if (nameCtl) nameCtl.paint();
+  if (noteCtl) noteCtl.paint();
   if (wifiCtl) wifiCtl.paint();
   const s = state.adb;
   const status = s.waiting ? h('span', { class: 'badge acc' }, act('Waiting for the action button…'))

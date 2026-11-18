@@ -28,6 +28,7 @@ def build(sdk,java,stock):
         else: os.environ['JAVA_HOME']=env_java
     make=(ROOT/'Makefile').read_text(encoding='utf8')
     assets=re.search(r'^WEB := (.+)$',make,re.M).group(1).split()
+    run([os.sys.executable,ROOT/'tools/geo/embed.py',ROOT/'build/geo_data.c',ROOT/'geo/borders.bin'])
     run([os.sys.executable,ROOT/'tools/embed.py',ROOT/'build/web_assets.c',*assets])
     make=(ROOT/'Makefile').read_text(encoding='utf8');section=make.split('HASSMIC :=',1)[1].split('\nHASSMIC_H',1)[0]
     # The shared Makefile now selects ring.c/ring_band.c through $(RING).

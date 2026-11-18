@@ -29,6 +29,10 @@ H=/system/hassmic
 RC=/system/etc/init/hassmic.rc
 LR=/system/etc/led-resources
 LSTOCK=/system/etc/layer_config_common.json.pre-hassmic
+# Binary animations (the Echo Dot 5, ring.c "ACS"): ours are "<index>.hassmic_<name>.animation_bin", and the index files
+# are rewritten with them; stock's are kept as /system/etc/<file>.pre-hassmic, as the layer config is
+ACSIDX="acs_animation_list.txt acs_animation_count.txt acs_animation_name_list.txt acs_auto_stop_conf.txt layer_config_common.txt"
+ours_in() { if [ -f "$1/acs_animation_list.txt" ] && ls "$1"/*.hassmic_*.animation_bin > /dev/null 2>&1; then ls "$1"/*.hassmic_*.animation_bin; else ls "$1"/hassmic_*.animation 2>/dev/null; fi; }
 SYSLABEL=u:object_r:system_file:s0
 say() { echo "sysinstall $MODE: $*"; }
 case "$MODE" in install|factory|uninstall|leds) ;; *) say "usage: sysinstall.sh install|factory|uninstall|leds SRC [DIR]"; exit 2;; esac
@@ -39,11 +43,16 @@ if [ "$MODE" = leds ]; then
     L=$3
     [ -s "$L/digest" ] && [ -s "$L/layer_config_common.json" ] || { say "no animation set in $L, nothing written"; exit 1; }
     [ -f $LSTOCK ] || ! grep -q hassmic_ $LR/layer_config_common.json || { say "stock's layer config is gone, nothing written"; exit 1; }
+    ACS=; [ -f "$L/acs_animation_list.txt" ] && ACS=1
+    for f in $ACSIDX; do
+        [ -z "$ACS" ] || [ -s "$L/$f" ] || { say "no $f in $L, nothing written"; exit 1; }
+        [ -z "$ACS" ] || [ -f /system/etc/$f.pre-hassmic ] || ! grep -q hassmic_ $LR/$f || { say "stock's $f is gone, nothing written"; exit 1; }
+    done
     # Designs from the settings page make the set as large as people draw them (ring.c caps them at 3 MB): room for it
     # on the partition, counting ours it replaces, and half a megabyte to spare
     need=$(du -sk "$L" | { read -r k _; echo "$k"; })
     have=$(df -k /system | { read -r _; read -r _ _ _ a _; echo "$a"; })
-    mine=$(du -ck $LR/hassmic_*.animation 2>/dev/null | { t=0; while read -r k w; do [ "$w" = total ] && t=$k; done; echo $t; })
+    mine=$(du -ck $(ours_in $LR) /dev/null 2>/dev/null | { t=0; while read -r k w; do [ "$w" = total ] && t=$k; done; echo $t; })
     case "$need$have$mine" in
     *[!0-9]*|'') say "cannot tell the set's size or the system partition's room, nothing written"; exit 1;;
     *) [ $need -lt $((have + mine - 512)) ] || { say "the system partition has room for $((have + mine - 512)) kB, the set is $need kB: nothing written"; exit 1; };;
@@ -63,6 +72,16 @@ fi
 # (athena: /vendor/etc/selinux/precompiled_sepolicy, a partition of its own).  The installed device.conf serves where SRC
 # has none (uninstall); tested before it is sourced: a missing file ends the subshell with ".", the fallback never ran.
 conf_get() { c=$SRC/device.conf; [ -f "$c" ] || c=$H/device.conf; [ -f "$c" ] && (. "$c"; eval "echo \"\${$1}\""); }
+# Cannoli's root is immutable SquashFS; only /system has a writable overlay.
+# Its init imports /init.hassmic.rc before that overlay exists. A factory update
+# must retain this boot contract, not install a second rc in the auto-scan path.
+KEEP_INIT=
+if [ "$(conf_get INSTALL)" = cannoli-ubi ]; then
+    case "$MODE" in factory|leds) ;; *) say "Cannoli firmware changes require the TWRP ZIP"; exit 1;; esac
+    [ "$MODE" = leds ] || cmp -s "$SRC/hassmic.rc" /init.hassmic.rc ||
+        { say "Cannoli boot integration changed; install a matching TWRP ZIP first"; exit 1; }
+    KEEP_INIT=1
+fi
 POLICY=$(conf_get SEPOLICY_FILE); POLICY=${POLICY:-/sepolicy}
 PVOL=; case "$POLICY" in /vendor/*) PVOL=/vendor;; esac       # the partition the policy is on, when it is not /system's
 # that partition writable only when the policy is written: a factory copy (every promoted update) or leds never touch it
@@ -77,6 +96,7 @@ trap '"$SRC/otatool" remount ro /system > /dev/null || say "partition still writ
       [ -z "$PVOL" ] || "$SRC/otatool" remount ro $PVOL > /dev/null || say "$PVOL still writable, the next boot mounts it read-only"' EXIT
 
 # new DEST from FILE with MODE OWNER LABEL: written beside DEST as DEST.new; nothing if DEST already has that content.
+# One that fails takes the .new files staged before it along (a whole aligner set is 2.5 MB) and ends the run.
 # A file for / is made in /system and renamed to /: created in / it would get the label of /, rootfs, and SELinux
 # refuses that on this ext4 partition (no "rootfs labeledfs:filesystem associate"; checked for the file's label, so the
 # permissive su domain does not help; issue #2).  The rename keeps /system's label; relabelling to rootfs is refused the
@@ -88,7 +108,7 @@ new() {
     rm -f "$1.new" "$tmp"
     cp "$2" "$tmp" && chown "$4" "$tmp" && chmod "$3" "$tmp" && chcon "$5" "$tmp" &&
         { [ "$tmp" = "$1.new" ] || mv "$tmp" "$1.new"; } ||
-        { say "cannot write $1.new"; rm -f "$1.new" "$tmp"; exit 1; }
+        { say "cannot write $1.new"; rm -f "$1.new" "$tmp"; for s in $staged; do rm -f "$s.new"; done; exit 1; }
     staged="$staged $1"
 }
 commit() {
@@ -100,18 +120,21 @@ commit() {
 
 if [ "$MODE" = leds ]; then
     [ -f $LSTOCK ] || new $LSTOCK $LR/layer_config_common.json 644 0:0 $SYSLABEL       # stock's, before ours replaces it
+    for f in $ACSIDX; do [ -z "$ACS" ] || [ -f /system/etc/$f.pre-hassmic ] || new /system/etc/$f.pre-hassmic $LR/$f 644 0:0 $SYSLABEL; done
     # Ours are files of their own, ~2400 of them (most are the LEDs' own, issue #57): in bulk, as one at a time takes
     # minutes, and over the old ones.  The digest goes first: a copy cut half way leaves old and new files mixed, and without a digest the next start
     # writes the whole set again (with the old one it would take the set for installed)
     rm -f /system/etc/hassmic-leds.digest; sync
-    cp "$L"/hassmic_*.animation $LR/ && chmod 644 $LR/hassmic_*.animation && chcon $SYSLABEL $LR/hassmic_*.animation ||
+    new_files=$(ours_in "$L")
+    [ -n "$new_files" ] && cp $new_files $LR/ && (cd $LR && for f in $new_files; do chmod 644 "${f##*/}" && chcon $SYSLABEL "${f##*/}" || exit 1; done) ||
         { say "cannot write the animations"; exit 1; }
     new $LR/layer_config_common.json "$L/layer_config_common.json" 644 0:0 $SYSLABEL
+    for f in $ACSIDX; do [ -z "$ACS" ] || new $LR/$f "$L/$f" 644 0:0 $SYSLABEL; done
     commit
     # files of an earlier set only once the config naming them is gone: a cut before this leaves a config whose files exist
-    for f in $LR/hassmic_*.animation; do [ -e "$L/${f##*/}" ] || rm -f "$f"; done
+    for f in $(ours_in $LR); do [ -e "$L/${f##*/}" ] || rm -f "$f"; done
     staged=; new /system/etc/hassmic-leds.digest "$L/digest" 644 0:0 $SYSLABEL; commit
-    say "light ring: $(ls $LR/hassmic_*.animation | wc -l) animations of ours"
+    say "light ring: $(ours_in $LR | wc -l) animations of ours"
     exit 0
 fi
 
@@ -147,27 +170,48 @@ if [ "$MODE" = uninstall ]; then
     if [ -f $LSTOCK ]; then
         staged=; new $LR/layer_config_common.json $LSTOCK 644 0:0 $SYSLABEL; commit; rm $LSTOCK
     fi
-    rm -f $LR/hassmic_*.animation /system/etc/hassmic-leds.digest
+    for f in $ACSIDX; do
+        [ -f /system/etc/$f.pre-hassmic ] && { staged=; new $LR/$f /system/etc/$f.pre-hassmic 644 0:0 $SYSLABEL; commit; rm /system/etc/$f.pre-hassmic; }
+    done
+    rm -f $LR/hassmic_*.animation $LR/*.hassmic_*.animation_bin /system/etc/hassmic-leds.digest
     rm -rf $H $RC $HOMEDIR; sync
     say "hassmic removed from the system partition"
     exit 0
 fi
 
 mkdir -p $H; chown 0:2000 $H; chmod 755 $H; chcon $SYSLABEL $H
-# The wake word aligners (*.wa a word, *.was a language: 2.5 MB; hassmic reads them next to itself) only where the
-# partition has room for them beside what is there, and a megabyte to spare: without them hassmic finds the word's end
-# by the level.  What an older install left of them goes: other names (a file per word and locale, 6.6 MB, before the
-# .was files), or all of them where these do not fit
-wa=$(du -ck "$SRC"/*.wa "$SRC"/*.was 2>/dev/null | { t=0; while read -r k w; do [ "$w" = total ] && t=$k; done; echo $t; })
+# The wake word aligners (*.wa a word, *.was a language: 2.5 MB; hassmic reads them next to itself) are written only
+# where the partition has room for them beside everything else this run writes, and a megabyte to spare: without them
+# hassmic finds the word's end by the level.  Counted as new() writes: a file the same as its destination takes nothing,
+# any other its whole size, beside the old one until commit().  Held against the aligners alone, the room could take
+# them and then fail on a first install's other files; and an update counted the aligners it kept against the room they
+# took already, so a nearly full partition lost them and got them back the time after.  (new() also rewrites a file of
+# the same content whose mode or owner differ, counted here as nothing: only after someone changed it by hand.)
+home=$(. "$SRC/device.conf" 2>/dev/null && echo "$HOME_APK")
+kb=0
+cost() {        # cost FILE DEST: kb + what FILE takes on /system written as DEST
+    [ -f "$1" ] || return 0
+    [ -f "$2" ] && cmp -s "$1" "$2" && return 0
+    k=$(du -k "$1"); k=${k%%[!0-9]*}; kb=$((kb + ${k:-0}))
+}
+wa=
+for f in "$SRC"/*; do
+    n=${f##*/}
+    case "$n" in
+    sepolicy) [ "$MODE" = install ] && [ -z "$PVOL" ] || continue      # athena's goes onto /vendor
+              [ -f $POLICY.pre-hassmic ] || cost $POLICY $POLICY.pre-hassmic
+              cost "$f" $POLICY;;
+    hassmic.rc) [ -n "$KEEP_INIT" ] || cost "$f" $RC;;
+    update.pub) [ "$MODE" = install ] && cost "$f" $H/$n;;
+    *.wa|*.was) k0=$kb; cost "$f" $H/$n; [ $kb = $k0 ] || wa=1;;    # wa: one of them to write
+    *) cost "$f" $H/$n;;
+    esac
+done
+[ -z "$home" ] || cost "$SRC/$home" $HOMEDIR/HassmicHome.apk
 room=$(df -k /system | { read -r _; read -r _ _ _ a _; echo "$a"; })
-case "$wa$room" in *[!0-9]*|'') wa_fit=0;; *) [ $wa -lt $((room - 1024)) ] && wa_fit=1 || wa_fit=0;; esac
-[ "$wa" = 0 ] || [ $wa_fit = 1 ] || say "the system partition has no room for the wake word aligners ($wa kB, $room kB free): left out"
-if [ "$SRC" != $H ]; then
-    for f in $H/*.wa $H/*.was; do
-        [ -e "$f" ] || continue
-        [ $wa_fit = 1 ] && [ -e "$SRC/${f##*/}" ] || rm -f "$f"
-    done
-fi
+case "$room" in *[!0-9]*|'') room= wa_fit=0;; *) [ $kb -lt $((room - 1024)) ] && wa_fit=1 || wa_fit=0;; esac
+[ -z "$wa" ] || [ $wa_fit = 1 ] ||
+    say "the system partition has no room for the wake word aligners: $kb kB to write with them, ${room:-unknown} kB free; left out"
 for f in "$SRC"/*; do
     n=${f##*/}
     [ -d "$f" ] && continue                 # oat/: what ART leaves beside a dex it loaded (ringbar.dex, wifictl.dex)
@@ -180,8 +224,7 @@ for f in "$SRC"/*; do
     esac
     new $H/$n "$f" $m 0:2000 $SYSLABEL
 done
-new $RC "$SRC/hassmic.rc" 644 0:0 $SYSLABEL
-home=$(. "$SRC/device.conf" 2>/dev/null && echo "$HOME_APK")
+[ -n "$KEEP_INIT" ] || new $RC "$SRC/hassmic.rc" 644 0:0 $SYSLABEL
 if [ -n "$home" ] && [ -s "$SRC/$home" ]; then
     mkdir -p $HOMEDIR; chown 0:0 $HOMEDIR; chmod 755 $HOMEDIR; chcon $SYSLABEL $HOMEDIR
     new $HOMEDIR/HassmicHome.apk "$SRC/$home" 644 0:0 $SYSLABEL
@@ -192,7 +235,39 @@ if [ "$MODE" = install ] && [ -f "$SRC/sepolicy" ]; then
     [ -f $POLICY.pre-hassmic ] || new $POLICY.pre-hassmic $POLICY 644 0:0 $PLABEL
     new $POLICY "$SRC/sepolicy" 644 0:0 $PLABEL
 fi
+# Where the factory copy has nothing of its own to fall back to (device.conf ROLLBACK: cannoli's is in the overlay on
+# /data, and every promotion overwrites it), the copy being replaced is kept for the boot's starter (prepare.sh) to put
+# back: only one that was reached from the network since it was written (main.sh reach_check wrote its version into
+# ROLLBACK/reached), so a copy that never was cannot push out one that was.  Taken before commit(): the .new files
+# staged beside the old ones are left out; written and synced as previous.new, then the old one to previous.old and the
+# new one into place (a power cut between those two renames: prepare.sh takes previous.new).
+RB=$(conf_get ROLLBACK)
+if [ "$MODE" = factory ] && [ -n "$RB" ] && [ -d "$RB" ] && [ ! -L "$RB" ]; then
+    v=$(cat $H/VERSION 2>/dev/null); kept=$(cat "$RB/previous/VERSION" 2>/dev/null)
+    if [ -n "$v" ] && grep -qxF "$v" "$RB/reached" 2>/dev/null; then
+        rm -rf "$RB/previous.new" "$RB/previous.old"
+        if cp -a $H "$RB/previous.new" && rm -f "$RB/previous.new"/*.new && sync &&
+           { [ ! -d "$RB/previous" ] || mv "$RB/previous" "$RB/previous.old"; } && mv "$RB/previous.new" "$RB/previous"; then
+            rm -rf "$RB/previous.old"; say "$v kept to roll back to"
+        else
+            rm -rf "$RB/previous.new"; [ -d "$RB/previous" ] || mv "$RB/previous.old" "$RB/previous" 2>/dev/null
+            say "!! cannot keep $v to roll back to: ${kept:-nothing} stays"
+        fi
+    else
+        say "${v:-the factory copy} was never reached from the network: not kept to roll back to, ${kept:-nothing} stays"
+    fi
+    sync
+fi
 commit
+# Aligners on the partition that are not the run's own go once it is in place (a write that failed left them as they
+# were): an older install's other names (a file per word and locale, 6.6 MB, before the .was files), and older
+# versions there was no room to replace.  The run's own stay, written now or the same already, also where the rest
+# left no room for new ones: a word file whose .was is gone or another is refused by its checks, never read wrong
+if [ "$SRC" != $H ]; then
+    for f in $H/*.wa $H/*.was; do
+        [ -e "$f" ] && ! cmp -s "$f" "$SRC/${f##*/}" && rm -f "$f"
+    done
+fi
 stock_apps "$(. "$SRC/device.conf" 2>/dev/null && echo "$STOCK_APPS_OUT")"
 if [ "$MODE" = install ]; then
     for f in $H/*; do

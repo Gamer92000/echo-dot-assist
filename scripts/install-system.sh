@@ -17,6 +17,7 @@
 set -e
 cd "$(dirname "$0")/.."
 . scripts/lib/device.sh; device_load adb
+[ "$INSTALL" != cannoli-ubi ] || die "Cannoli uses a UBI/SquashFS firmware ZIP: see devices/cannoli/README.md. This ext4 installer cannot install or uninstall it."
 . scripts/lib/build.sh
 [ "$INSTALL" = boot ] && exec sh scripts/install-boot.sh "$@"         # checkers: no A/B, the policy in boot.img
 case "$INSTALL" in twrp-ab|running) ;; *) die "$DEVICE installs with INSTALL=$INSTALL, which this script does not do ($DDIR/README.md)";; esac
@@ -30,7 +31,7 @@ TWRP=; [ "$1" = --twrp ] && { TWRP=1; shift; }
 
 if [ "$1" != --uninstall ]; then
     # before anything is touched: without it the policy patch below fails with no word of why (issue #10)
-    [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: unzip $FW/boot-root.zip -d $FW/boot-root ($DDIR/README.md)"
+    [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: lib/armeabi-v7a/libmagiskpolicy.so of Magisk v30.7's APK ($DDIR/README.md; scripts/setup.sh fetches it)"
     [ "$(adb get-state 2>/dev/null)" = device ] && device_check_firmware
     build_binaries                      # built here or this commit's release build (PREBUILT, scripts/lib/build.sh)
     # Signing key for push updates.  The public half goes onto the read-only system partition and is what the device trusts.
@@ -46,12 +47,22 @@ if [ "$1" != --uninstall ]; then
         t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
         t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.
-        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null && adb push $DDIR/sepolicy.rules /data/local/tmp/ >/dev/null ||
-            die "could not copy $SEPOLICY_TOOL and $DDIR/sepolicy.rules to the Echo, nothing changed"
-        t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.new
-           ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.new >/dev/null 2>&1
-           [ -s sepolicy.new ] && ./mp --load sepolicy.new --print-rules 2>/dev/null | grep -q '^allow init su process'" ||
-            { echo "sepolicy patch failed, nothing changed"; exit 1; }
+        # The model's rules, then hassmic's own domain (scripts/system/sepolicy-hassmic.rules) with what other domains
+        # may do to su copied over to it, from the policy as it is by then (sepolicy-mirror.sh).  magiskpolicy exits 0
+        # when a rule names a type the policy does not have and silently skips it, so both applies keep their output
+        # (mp.err) and any "does not exist" in it fails the patch.
+        adb push $SEPOLICY_TOOL /data/local/tmp/mp >/dev/null && adb push $DDIR/sepolicy.rules scripts/system/sepolicy-hassmic.rules \
+            scripts/system/sepolicy-mirror.sh /data/local/tmp/ >/dev/null ||
+            die "could not copy $SEPOLICY_TOOL and the policy rules to the Echo, nothing changed"
+        t "cd /data/local/tmp; chmod 755 mp; rm -f sepolicy.mid sepolicy.new mp.err
+           ./mp --load $BASEF --apply sepolicy.rules --save sepolicy.mid >>mp.err 2>&1 &&
+           ./mp --load sepolicy.mid --print-rules > sepolicy.mid.txt 2>/dev/null && sh sepolicy-mirror.sh sepolicy.mid.txt > sepolicy-mirror.rules &&
+           ./mp --load sepolicy.mid --apply sepolicy-hassmic.rules --apply sepolicy-mirror.rules --save sepolicy.new >>mp.err 2>&1 &&
+           [ -s sepolicy.new ] && ! grep -q 'does not exist' mp.err &&
+           ./mp --load sepolicy.new --print-rules > sepolicy.new.txt 2>/dev/null &&
+           grep -q '^allow init su process' sepolicy.new.txt && grep -q '^type hassmic ' sepolicy.new.txt &&
+           ! grep -q '^allow hassmic [^ ]* property_service' sepolicy.new.txt && ! grep -qx 'permissive hassmic' sepolicy.new.txt" ||
+            { echo "sepolicy patch failed, nothing changed"; t "cat mp.err 2>/dev/null"; exit 1; }
         adb pull /data/local/tmp/sepolicy.new $OUT/sepolicy.hassmic >/dev/null
         md5sum device-logs/backup/sepolicy.boot-root > $OUT/sepolicy.hassmic.base
     fi
@@ -67,6 +78,9 @@ FILES="$OUT/hassmic $OUT/runas $(ls $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OU
 [ -n "$ANDROID" ] && FILES="$FILES scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} ${HOME_APK:+scripts/device/$HOME_APK}"
 # the screen's UI where the model has one (device.mk SCREEN: the build made libhmui.so), as bundle.sh ships it
 [ ! -f $OUT/libhmui.so ] || FILES="$FILES $OUT/libhmui.so scripts/device/screen.dex"
+# the wake word aligners, as bundle.sh ships them: hassmic reads them next to itself (sysinstall.sh leaves them out
+# where the partition has no room for them; TWRP's way has no such check)
+FILES="$FILES $(echo wakealign/*.wa wakealign/*.was)"
 
 if [ -z "$TWRP" ]; then
     t "rm -rf $STAGE; mkdir -p $STAGE"
@@ -133,7 +147,7 @@ echo "sepolicy patched"
 t "rm -rf $MNT/system/hassmic; mkdir -p $MNT/system/hassmic"
 adb push $FILES $MNT/system/hassmic/ >/dev/null
 adb push $DDIR/hassmic.rc $MNT/system/etc/init/hassmic.rc >/dev/null
-t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/update.pub $MNT/system/hassmic/release.pub $MNT/system/hassmic/device.conf
+t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/update.pub $MNT/system/hassmic/release.pub $MNT/system/hassmic/device.conf $MNT/system/hassmic/*.wa $MNT/system/hassmic/*.was
    chown 0:0 $MNT/system/etc/init/hassmic.rc; chmod 644 $MNT/system/etc/init/hassmic.rc
    chcon -R u:object_r:system_file:s0 $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy.pre-hassmic
    ls -lZ $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy $MNT/system/etc/init/fosflags.rc

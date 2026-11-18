@@ -27,5 +27,10 @@ cp $T/c.bundle $T/bad.bundle; printf X | dd of=$T/bad.bundle bs=1 seek=40 conv=n
 printf '\n \tws\n' > $T/ws; $PY pack $T/c.sec 1 $T/ws.bundle $T/ws:644 $T/a.txt:644 >/dev/null
 $C install $T/c.pub $T/ws.bundle $T/ws.bundle.sig $T/ws-c >/dev/null && cmp -s $T/ws $T/ws-c/ws && cmp -s $T/a.txt $T/ws-c/a.txt
 ok $? "install: a file starting with whitespace"
+# chgrp (the device side's, main.sh's light ring live): a file's group by number; never 0, a name or what is not a file
+: > $T/frame; $C chgrp $(id -g) $T/frame && [ "$(stat -c %g $T/frame)" = "$(id -g)" ]; ok $? "chgrp: a file's group by number"
+! $C chgrp 0 $T/frame 2>/dev/null; ok $? "chgrp: never group 0"
+! $C chgrp users $T/frame 2>/dev/null; ok $? "chgrp: a number only"
+! $C chgrp $(id -g) $T 2>/dev/null; ok $? "chgrp: a file only"
 rm -rf $T
 [ $fail = 0 ] && echo "all good" || { echo FAILED; exit 1; }

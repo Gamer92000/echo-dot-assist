@@ -25,6 +25,7 @@
  * to a Bluetooth speaker" below.
  */
 #include "a2dp.h"
+#include "musiclight.h"
 #include <errno.h>
 #include <math.h>
 #include <fcntl.h>
@@ -40,6 +41,7 @@
 #include "ble.h"
 #include "btout.h"
 #include "core.h"
+#include "duck.h"
 #include "hci.h"
 #include "settings.h"
 #include "a2dp_codec.h"
@@ -603,9 +605,10 @@ static void *player(void *arg)
             if (bt_open(rr, 2)) { usleep(200000); continue; }
             open = 1; rate = rr; fprintf(stderr, "a2dp: output open, %u Hz\n", rr);
         }
-        music_duck(buf, out, rr, &duck_g, core_state() != IDLE ? settings_duck_gain() : 1);       /* under the voice assistant */
+        music_duck(buf, out, rr, &duck_g, duck_active() ? settings_duck_gain() : 1);       /* under the voice assistant, ours or another Echo's (duck.c) */
         while (bt_queued_us() > MIXER_US) usleep(5000);
         for (size_t i = 0; i < 2 * out; i++) { int v = buf[i] < 0 ? -buf[i] : buf[i]; if (v > peak) peak = v; }
+        musiclight_feed(buf, out, 2, rr, bt_queued_us());          /* the ring's music effects (ringlive.c), as heard */
         if (out && bt_write(buf, out * 4) < 0) fprintf(stderr, "a2dp: mixer write failed\n");   /* 0: a frame or two held back */
         if (ms() - stat > 60000 && atomic_load(&streaming)) {     /* peak: whether the source sends more than silence */
             stat = ms();

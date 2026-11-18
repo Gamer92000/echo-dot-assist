@@ -110,7 +110,7 @@ make unit-cube_audio
 
 `node tests/cube_web.js` checks both Cube and Echo page builders without a device. Eight installer tests use a fake device. The Cube audio unit test checks the common volume/AFE interface, listening messages, unchanged capture samples and earcon callback against a local fake helper, without playing or recording audio. Keep device recordings, pairing keys and firmware out of distributions.
 
-The port is based on upstream main `28ff81c812e3f86911ec5ce30767fb4b4494f4df`. All eight Echo ARM daemon link builds pass with public vendor symbol stubs; these are compile/link checks, not Echo hardware tests. Host Sendspin, wake alignment, volumes, web, remote follow-up and remote barge-in tests pass, along with Cube routing, settings and installer checks.
+The port is based on upstream main `d71209987fdacc152c49bb40fbc0c83c9ee03c7e`. The compatibility matrix includes all nine current Echo targets, including Echo Dot 5 (`cannoli`); these are compile/link checks with public vendor symbol stubs, not Echo hardware tests. Host Sendspin, wake alignment, volumes, web, remote follow-up and remote barge-in tests pass, along with Cube routing, settings and installer checks.
 
 On a Cube 3 with the supported firmware, the routing build passed TV-to-Cube-to-TV music handoff, Assist replies, ducking, both bars and reboot persistence. The 9 November update incorporating upstream's resampler passed TV radio playback, spoken replies, ducking/recovery and both bars. HA/Sendspin pairings and the checked routing settings survived installation unchanged. The initial 200 ms buffer stalled playback; the corrected 96 ms buffer advanced normally with no additional AudioTrack underruns in a short steady observation. Long-duration glitch testing, a cold power-cycle, multi-device arbitration and quantitative AEC/wake-sensitivity comparisons remain outstanding.
 
@@ -147,3 +147,18 @@ power evidence; a cable or cached HDCP state alone is not proof that the TV is o
 Wake alignment data is bundled with its CC BY 4.0 attribution from wakealign/.
 The installer retains existing HA/Sendspin credentials, routing settings and the
 receiver profile, and backs up the previous installation before updating.
+
+## November 18 upstream refresh
+
+The source tracks EDA `v2026.11.18.004106-beta` / main `d712099`. Its geographic
+lookup data is embedded by the Cube build and included in corresponding source,
+with the Natural Earth attribution in `geo/README.md`. The shared ESPHome API
+retains upstream automatic Sendspin pairing and time-zone/location handling.
+
+The new dedicated call-microphone API explicitly reports unavailable on Cube;
+calls continue to use the existing processed assistant microphone. Cube music
+still uses the helper's complete-reply ducking, so the upstream **Duck for other
+Echos** receiving control is not exposed here. Echo builds retain that feature.
+Live ring effects remain unavailable on Cube; its existing TV and physical bars
+are unchanged. The updated source requires a fresh hardware listening/routing
+check; the November 9 and 10 installation results above describe the earlier build.

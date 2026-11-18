@@ -7,12 +7,12 @@ What protects an Echo running hassmic, and where that ends. Nobody has audited a
 
 | Direction | What gets through |
 |---|---|
-| **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out. `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. On the screen models the Kiosk Satellite app too, while "Kiosk Satellite internet access" is on (default; one rule for that app's uid, nothing else of Amazon's or the system's gets out through it). |
-| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only |
-| **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port) |
+| **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out (so Amazon's names may still be looked up; on the Android models Android's captive portal test, which looked two of them up every few minutes, is set to off: measured on the Echo Show 5, not yet on the others, issue #189). `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. On the screen models the Kiosk Satellite app too, while "Kiosk Satellite internet access" is on (default; one rule for that app's uid, nothing else of Amazon's or the system's gets out through it). |
+| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only; with "Kiosk Satellite DLNA renderer" on (off by default), also its DLNA renderer's port (the one the app's own setting names, so any the app picks), from private addresses only and only while the app listens there; the renderer has no login (DLNA has none) |
+| **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port); with "Kiosk Satellite DLNA renderer" on, 1900 (SSDP searches to 239.255.255.250, from private addresses) while the Kiosk Satellite app holds that port and nothing else on the Echo does (looked at every 5 s) |
 | **In, ICMP** | ping (echo request) from private and link-local addresses only; answers to the Echo's own traffic |
 
-**Kiosk Satellite**, where you install it, is an app you trust like adb. Its update helper runs the app's own code as the shell user, every few minutes, so the app and each update of it can do what an adb shell can, `pm grant` included. It also gets storage and location without asking. The "microphone" and "camera" switches are Android's permissions, no wall against the app itself. Setup and `scripts/kiosk-install.sh` check who signed the APK against a pinned certificate on the PC, before it reaches the Echo; a copy you install by hand and the app's own updates are not checked by this project. The helper's provider is exported with no manifest permission, so another app on the Echo might reach it: install nothing else you do not trust. Ports 2324 and 6053 are open only while the app is installed. Its page on 2324 asks for a login once the app's remote admin password is set (seen on 2026.10.45): set one. Beyond that its pages are the app's own, and this project has not reviewed them.
+**Kiosk Satellite**, where you install it, is an app you trust like adb. Its update helper runs the app's own code as the shell user, every few minutes, so the app and each update of it can do what an adb shell can, `pm grant` included. It also gets storage and location without asking. The "microphone" and "camera" switches are Android's permissions, no wall against the app itself. Setup and `scripts/kiosk-install.sh` check who signed the APK against a pinned certificate on the PC, before it reaches the Echo; a copy you install by hand and the app's own updates are not checked by this project. The helper's provider is exported with no manifest permission, so another app on the Echo might reach it: install nothing else you do not trust. Ports 2324 and 6053 are open only while the app is installed, its DLNA renderer's only while you switch that on and the renderer listens. Its page on 2324 asks for a login once the app's remote admin password is set (seen on 2026.10.45): set one. Beyond that its pages are the app's own, and this project has not reviewed them.
 
 Put the Echo on a network without internet as a second layer.
 
@@ -52,8 +52,47 @@ its network listener and the firewall drops port 5555. The [ways to open it](GUI
 approved browser plus a press of the action button for that one request, a fresh challenge signed with your update key
 (a recorded exchange does not work twice), or `ADB_WIFI=1` in root's `hassmic.conf`.
 
-While it is open, anyone on the network has root. USB always works: physical access is root access anyway. Without
-`hassmic.conf` (stock behaviour, or before the install) it is open, as stock leaves it.
+While it is open, anyone on the network has root; nothing on the Echo but root does: the firewall drops every other
+user's connections to adb's port, so a hassmic taken over cannot open adb and use it. USB always works: physical
+access is root access anyway. Without `hassmic.conf` (stock behaviour, or before the install) it is open, as stock
+leaves it.
+
+## hassmic and root
+
+hassmic runs as a user of its own, not as root, so that a flaw in it does not hand over the whole Echo. Root acts on its
+requests (updates, models, Wi-Fi, the light ring, adb, restarts, the clock) only through files in hassmic's folder and
+treats them as hostile. It moves each request into a folder of its own before it looks at it, and takes it only as a
+plain file with no other name (no link, no FIFO, no hard link to a file of root's); models are read as hassmic's user.
+The update and model folders are checked to be hassmic's own, not a link to elsewhere. Root writes its answers in its
+own folder and then moves them over, or writes them as hassmic's user, never through a name hassmic could have made a
+link. The settings file it reads in place only switches things on or off and sets numbers. Until 2026-11-12 several
+of these went through such names (issue #130): code running as hassmic could have had root write a file of root's and
+give it to hassmic, its start-up configuration included.
+
+hassmic also runs in an SELinux domain of its own (`u:r:hassmic:s0`), not in root's `su`, which the unlock leaves
+permissive: there any process may set any property, adb's port and the start of any service included, and hassmic
+could (checked on a Dot 2). Its domain may do what su may, but set no property, enter no domain but the few su
+enters on exec (Amazon's own, enforcing), ptrace no process, relabel no file, and register no binder service. An Echo installed before 2026-11-12 gets it only by running `scripts/install-system.sh` again (updates do
+not change the policy); until then hassmic's log says "runas: no SELinux domain" and it runs in `su` as before, able
+to set properties. The firewall lets no process on the Echo but root's connect to adb's port, so no process acting
+for hassmic can use an open adb.
+
+On an Echo Dot 5 "Light ring live" needs nothing new from root: its frames go through the same socket into Amazon's
+ring program as Home Assistant's light already does (only animations of hassmic's own, checked there), at the
+brightness Amazon's program sets. Through it hassmic can also read what the LEDs show, nothing more.
+
+On an Echo Dot 3, an Echo Dot 2 and an Echo 2 root also gives hassmic one file of the LED driver at each start, the ring's frame
+(the colours of its 12 LEDs, for "Light ring live"), through a group only hassmic has. Nothing else of the driver: the
+LEDs' current, their calibration, the start-up ring and the Dot 3's mute button light stay Amazon's ring program's
+and root's. Root also copies the ring's brightness table (Amazon's, read-only for hassmic on the Dot 2 and Echo 2) into its own
+folder, where hassmic may read it and not write. On the Dot 3 the driver scales and bounds every value by the unit's
+calibration; the Dot 2's and the Echo 2's take what they are given, so a hassmic taken over could drive its LEDs up to FF where Amazon's
+brightest is DF, at the current Amazon's program set. Either way the worst it could do is show wrong colours on the
+ring, mute's red ring included, which it could already through the ring's own patterns; the hardware mute switch
+does not depend on any of it.
+
+What stays: hassmic is what sees the action button and checks the signed challenge, so code that took hassmic over
+can open adb over Wi-Fi for someone else on the network, though not use it itself.
 
 ## Drop In
 
@@ -63,6 +102,17 @@ an approved browser. Each call gets its own key from a fresh key exchange betwee
 closed even to someone who gets the network key later. The audio goes straight between the two Echos and nowhere else.
 Do not disturb and the microphone switches refuse calls; "Drop In answers: after the action button" makes every call
 wait for a press on the Echo called; "Drop In" off stops calls both ways.
+
+## Music Assistant (Sendspin)
+
+Only a Sendspin server paired with the Echo's token plays on it (unless "Music Assistant without pairing" is on): an
+unpaired connection is encrypted under a key everyone knows. Whoever has the token can pair a server. Over the ESPHome
+API the Echo gives the token only over the connection with the key, never over plaintext nor before Home Assistant has
+set its key (it does so when you adopt the Echo): both the pairing-token request (what Home Assistant asks for and
+hands to Music Assistant, which then pairs by itself) and the older "Sendspin pairing token" text sensor, which has no
+state until then. Before adoption someone on the network could set a key first and then ask, but that takes the Echo
+from Home Assistant, which you would notice. The token is also in the Echo's log, read over adb, and at the end of
+`scripts/setup.sh`. The settings page never shows it, and its log viewer blanks it.
 
 ## Arbitration between Echos
 

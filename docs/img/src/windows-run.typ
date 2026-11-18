@@ -1,19 +1,20 @@
 #import "theme.typ": *
 #show: fig
 
-// docs/WINDOWS.md: scripts/setup.sh's steps for an Echo Dot 2 under Git Bash (devices/biscuit/setup.sh STEPS),
-// and what each asks of you there.  udev is marked done on Windows; firebreak (unlock_firebreak) ends where the
-// firmware and root steps end, so those only check its result.
+// docs/WINDOWS.md: scripts/setup.sh's steps for an Echo Dot 2 under Git Bash (devices/biscuit/setup.sh STEPS), with
+// the Echo unlocked by hand already (scripts/setup.sh stops at the start on Windows without it on adb), and what each
+// asks of you there.  udev is marked done on Windows; the unlock step only checks (twrp_or_unlocked); the root step is
+// boot-root by hand, as the XDA thread says (root_thread).
 
 // kind, title, what happens / what you do
 #let steps = (
-  ("auto", [Tools on this PC], [checks the five tools; says which are missing]),
-  ("you", [Downloads], [save #raw("boot-root.zip") from the XDA thread into #raw("Downloads"): it picks it up from there]),
+  ("auto", [Tools on this PC], [checks the tools; says which are missing]),
+  ("you", [Downloads], [save the firmware into #raw("Downloads"): it picks it up from there]),
   ("skip", [USB access for the unlock], [skipped on Windows]),
-  ("you", [Micro-USB cable], [Echo into the PC with a data cable; its power adapter stays unplugged]),
-  ("danger", [Unlock, boot TWRP], [firebreak: hold #text(weight: 700)[•], plug in, let go at green. About 10 min. #text(weight: 700)[Never unplug.]]),
-  ("auto", [Stock firmware into both slots], [done by firebreak in step 5; only checked]),
-  ("auto", [Root], [done by firebreak in step 5; only checked]),
+  ("auto", [Micro-USB cable], [on USB already since the unlock; checked]),
+  ("auto", [Unlock, boot TWRP], [done by hand before, as the XDA thread says; only checked, TWRP started]),
+  ("auto", [Stock firmware into both slots], [wipes the Echo, writes the firmware into both slots]),
+  ("you", [Root], [install #raw("boot-root.zip") by hand, as the XDA thread says; then Enter: it checks]),
   ("auto", [Build], [downloads GitHub's build of your copy and checks its signature]),
   ("you", [Lock down, join Wi-Fi], [type your Wi-Fi's name and password]),
   ("you", [Install], [press Enter at "Settings to start with"; the Echo restarts]),
@@ -31,7 +32,7 @@
 
   // legend
   let lx = 0
-  for k in ("you", "auto", "danger", "skip") {
+  for k in ("you", "auto", "skip") {
     let (kind, name) = look.at(k)
     let (fill, edge, tcol) = kinds.at(kind)
     rect(P(lx, 6), P(lx + 16, 22), radius: 4, fill: fill, stroke: 1.2pt + edge)

@@ -27,6 +27,7 @@
  *               steered by the error: resample.h)
  */
 #include "sendspin.h"
+#include "musiclight.h"
 #include <ctype.h>
 #include <math.h>
 #include <pthread.h>
@@ -45,6 +46,7 @@
 #include "board.h"
 #include "btout.h"
 #include "core.h"
+#include "duck.h"
 #include "hash.h"
 #include "settings.h"
 #include "netio.h"
@@ -299,11 +301,12 @@ static void *player_thread(void *arg)
         }
         n = rs_run(&rs, (const int16_t *)pcm, frames, step, out);
         if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
-        #ifndef CUBE
-        else music_duck(out, n, RATE, &duck_g, core_state() != IDLE ? settings_duck_gain() : 1);
+#ifndef CUBE
+        else music_duck(out, n, RATE, &duck_g, duck_active() ? settings_duck_gain() : 1);
 #else
         (void)duck_g; /* CubeRouting owns the gain envelope. */
-#endif          /* under the voice assistant */
+#endif
+        musiclight_feed(out, n, CHANNELS, RATE, music_queued_us());   /* the ring's music effects (ringlive.c), as heard */
         music_write(out, n * FRAME);
         rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {

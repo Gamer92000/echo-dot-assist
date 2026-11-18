@@ -64,6 +64,7 @@ one() {     # id locale word
 }
 
 # pt-BR: MFA's portuguese_mfa is a 2.0 model with position-dependent phones and no phone table to map them by
+# a new language: main.c align_lang too
 LOCALES="de-DE en-US en-GB fr-FR es-ES ja-JP en-IN es-MX"
 all() {
     for loc in $LOCALES; do for w in alexa echo computer amazon ziggy; do echo "$w-$loc $loc $w"; done; done

@@ -15,10 +15,13 @@ python3 scripts/otatool.py pack "$1" "$2" $OUT/hassmic.bundle \
     $(for k in $OUT/*.ko; do [ -f "$k" ] && echo "$k:644"; done) $RELEASE_PUB:644 \
     $(for k in wakealign/*.wa wakealign/*.was; do echo "$k:644"; done) \
     scripts/system/main.sh scripts/system/boot.sh scripts/system/sysinstall.sh $DDIR/hassmic.rc:644 \
+    $([ ! -f "$DDIR/prepare.sh" ] || echo "$DDIR/prepare.sh") \
     scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh \
     $([ -z "$HOME_APK" ] || echo scripts/device/$HOME_APK:644) \
     $([ -n "$ANDROID" ] && echo scripts/device/wifictl.dex:644) $([ -n "$SCREEN_BAND" ] && echo scripts/device/ringbar.dex:644) \
-    $([ ! -f $OUT/libhmui.so ] || echo $OUT/libhmui.so:644 scripts/device/screen.dex:644)
+    $([ ! -f $OUT/libhmui.so ] || echo $OUT/libhmui.so:644 scripts/device/screen.dex:644) \
+    $([ ! -f $OUT/libhmled.so ] || echo $OUT/libhmled.so:644)
 # wifictl: WifiService's client (wifi.sh), Android models only (device.conf ANDROID); ringbar: the light band's renderer
 # (ring_band.c, SCREEN_BAND); HOME_APK: the home screen (sysinstall.sh); libhmui.so + screen.dex: the screen's UI
-# (screen.c), where the model has one (device.mk SCREEN)
+# (screen.c), where the model has one (device.mk SCREEN); libhmled.so: the shim root preloads into ledcontroller (the
+# Echo Dot 5, device.mk LEDSHIM: src/ledshim/ledshim.c)

@@ -35,6 +35,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/moved"):            # Home Assistant behind a proxy that redirects
             self.send_response(302); self.send_header("Location", "/a.wav"); self.send_header("Content-Length", "0"); self.end_headers(); return
+        if "slow" in self.path:                         # TTS still rendering: not even a status line for a while
+            time.sleep(1.5)
+        if "missing" in self.path:                      # and then none (a TTS engine that failed, a file gone)
+            self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
         body = wav_bytes(48000, 3.0 if "s=3" in self.path else 0.5)
         if self.path.endswith(".mp3"):                  # what Home Assistant sends for a TTS announcement before any pipeline ran
             # 1 s of 440 Hz, 24 kHz mono: ffmpeg -bitexact -f lavfi -i sine=frequency=440:duration=1 -ar 24000 -ac 1
@@ -184,6 +188,7 @@ class Echo:
                    HASSMIC_FAKE_WIFI=os.path.join(state, "rx_stat"),            # what the Wi-Fi driver answers RX_STAT (wifimotion.c)
                    HASSMIC_CLOCK_SYNCED="0",                                    # an Echo whose clock nobody set (clock.c)
                    HASSMIC_FAKE_ADDRS=os.path.join(state, "addrs"),             # the Echo's addresses (netaddr.c)
+                   HASSMIC_FAKE_COUNTRY=os.path.join(state, "country"),         # the Wi-Fi's country (apcountry.c): none
                    HASSMIC_ANNOUNCE_TIMES="3 6")                                # mDNS again after 3 s without a client (100 s)
         env.update(extra_env or {})
         with open(env["HASSMIC_FAKE_ADDRS"], "w") as f: f.write("127.0.0.1\n")
@@ -206,7 +211,10 @@ class Echo:
         self.httpsd, self.selfd = https_server(self.HTTPS_PORT, self.srv_pem), https_server(self.SELF_PORT, self.self_pem)
 
     def keyev(self, code, value): os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, value))     # struct input_event, EV_KEY
-    def rx_stat(self, rcpi): open(self.env["HASSMIC_FAKE_WIFI"], "w").write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
+    def rx_stat(self, rcpi):                   # whole or not at all: the Wi-Fi poller reads it every 100 ms
+        p = self.env["HASSMIC_FAKE_WIFI"]
+        with open(p + ".new", "w") as f: f.write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
+        os.replace(p + ".new", p)
     def wake(self): self.proc.send_signal(signal.SIGUSR1)          # the PC's stand-in for the wake word
     def log(self): return open(self.logpath, errors="replace").read() if self.logpath else ""
 

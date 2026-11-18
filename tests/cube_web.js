@@ -17,11 +17,11 @@ function run(codename,platform){
   for(const word of ['Cube and TV light bars','Listening','Thinking','Speaking','Microphones off','Setup / approval','Devices and arbitration','Audio routing'])assert.ok(text.includes(word)||nav.includes(word),word);
   assert.equal((text.match(/cube-bar-preview/g)||[]).length,8);assert.ok(!text.includes('original-echo-ring'));
  }else {assert.ok(text.includes('original-echo-ring'));assert.ok(!text.includes('cube-bar-preview'));assert.ok(text.includes('The equalizer is Amazon'));}
- c.titled=(...x)=>node('card',{},...x);c.nameRow=()=>node('name');c.wifiRow=()=>node('wifi-control');c.settingRow=x=>x;c.logRow=()=>node('logs');c.infoRow=(...x)=>node('row',{},...x);c.exportFile=()=>{};c.restartEcho=()=>{};c.factoryReset=()=>{};c.HELP={restart:{help:'Echo restart'}};c.act=x=>x;c.el=node('section');
+ c.titled=(...x)=>node('card',{},...x);c.nameRow=()=>node('name');c.noteRow=()=>node('note');c.wifiRow=()=>node('wifi-control');c.settingRow=x=>x;c.logRow=()=>node('logs');c.infoRow=(...x)=>node('row',{},...x);c.exportFile=()=>{};c.restartEcho=()=>{};c.factoryReset=()=>{};c.HELP={restart:{help:'Echo restart'}};c.act=x=>x;c.el=node('section');
  vm.runInContext(fn(app,'buildSystem')+'\nbuildSystem(el,[]);',c);const sys=JSON.stringify(c.el);
  if(platform==='fire_tv'){assert.ok(!sys.includes('wifi-control'));assert.ok(!sys.includes('root shell over Wi-Fi'));assert.ok(sys.includes('Reset Cube Assist'));assert.ok(sys.includes('Fire TV apps, settings and Wi-Fi are unchanged'));}
  else {assert.ok(sys.includes('wifi-control'));assert.ok(sys.includes('root shell over Wi-Fi'));assert.ok(sys.includes('Factory reset'));}
 }
-for(const name of ['donut','biscuit','radar','checkers','crown','cronos','athena','cupcake','gazelle'])run(name,undefined);
+for(const name of ['donut','biscuit','radar','checkers','crown','cronos','athena','cupcake','cannoli','gazelle'])run(name,undefined);
 run('gazelle','fire_tv');
 console.log('PASS: current page navigation, Echo defaults, Cube routing/bar pages, safe system controls');

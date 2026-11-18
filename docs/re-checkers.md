@@ -56,7 +56,9 @@ Applying the same changes to 8149's own image is not enough either:
 - 8149's own `adbd` is a user build (first device, 2026-10-10): `ro.secure=0`, `service.adb.root=1` and `fastboot oem
   flags 61` all leave adb a shell in `u:r:shell:s0` (`adb root` says "restarting adbd as root" and it comes back as
   shell). The XDA image's `sbin/adbd` (CyanogenMod's, static) goes by `ro.secure`; with it in 8149's ramdisk, adb is
-  root in `u:r:su:s0` (`mkbootroot.py --adbd`).
+  root in `u:r:su:s0` (`mkbootroot.py --adbd`). Since 2026-11-09 the install takes no file of the XDA threads (their author's wish,
+  DEVELOPMENT.md): the userdebug adbd is Google's, from its Android 7.1.1 emulator image (`adbd_get`), not tried on a
+  device yet.
 
 ### Building the boot images by hand
 

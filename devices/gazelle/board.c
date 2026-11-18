@@ -109,7 +109,7 @@ const struct board board = {
     .volume_curve=cube_volume_curve,
     .model="Fire TV Cube 3 (gazelle)", .project="cube-assist.fire-tv-cube-3",
     .product="Fire TV Cube 3 (Cube Assist)", .default_name="Fire TV Cube 3",
-    .codename="gazelle", .fire_tv=1, .keypad="/dev/input/event6",
+    .codename="gazelle", .keypad="/dev/input/event6",
     .privacy_state="/sys/devices/platform/gpio-privacy/state",
     .privacy_input="/dev/input/event4", .privacy_latch=1,
     /* The Fire TV Bluetooth stack keeps ownership of the remote/controller. */

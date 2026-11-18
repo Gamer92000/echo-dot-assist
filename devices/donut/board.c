@@ -23,11 +23,16 @@ const struct board board = {
     .thermal_type = "mtktscpu",
     .light_sensor = { "/sys/bus/i2c/devices/0-0039/iio:device0/calibrated_lux" },  /* TSL2572 (IIO), als_donut_puffin_facade */
     .volume_steps = 30,
+    /* ISSI IS31FL3236 at I2C 0-003f: 12 x RRGGBB text, scaled by the unit's calibration in the driver (PLAN.md "Light
+     * ring live", 2026-11-12) */
+    .ring_frame = "/sys/bus/i2c/devices/0-003f/frame",
     /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
     .volume_curve = board_vol_dot2,
     /* TI TAS2770 amplifier at 2-0044: AMP_LEVEL (reg 0x03), 0..20 = 11..21 dBV full-scale output in 0.5 dB steps.  16 from
      * boot on, never written by the firmware (2026-10-11, spkgain.c): +2 dB is all it has */
     .speaker_gain = "DAC Playback Volume",
+    /* micHfp in call mode: speech -20 dBFS against -43 in its pauses, where micAsr had -48/-65 (2026-11-13) */
+    .call_mic = 1,
     .speaker_gain_stock = 16,
     .speaker_gain_steps = 2,
 };

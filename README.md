@@ -29,19 +29,21 @@ as an ESPHome device, with no YAML and no add-on.
 | ✅ | Echo Show 5 2nd gen (2021)   | C76N8S | [`cronos`](devices/cronos/README.md)     | micro-USB, no soldering; as checkers |
 | ✅ | Echo Show 8 2nd gen (2021)   | A8H3N2 | [`athena`](devices/athena/README.md)     | micro-USB, no soldering (a serial-port unlock); the ring as a band on screen |
 | ✅ | Echo Input (2018)            | C1125P | [`cupcake`](devices/cupcake/README.md)   | micro-USB, no soldering; no speaker (jack or Bluetooth), one LED |
+| 🚧 | Echo Dot 5th gen (2022)      | C2N6L4 | [`cannoli`](devices/cannoli/README.md)   | open the case, solder USB to test pads; manual install only, no guided setup yet |
 
 Each model needs exactly the firmware its page names (`donut`: Fire OS 6574.1 only). A Dot 3 from 2019–2020 (C78MP8) or
 with a clock (36EBT3) is another model, and not supported. Every other Echo, and which are being worked on:
 [all models](devices/MODELS.md); how to add one: [`devices/`](devices/README.md).
-✅ works, tried on one Echo of that model · 🧪 untested: builds and installs on paper, never run on a device
+✅ works, tried on one Echo of that model · 🧪 untested: builds and installs on paper, never run on a device · 🚧 works, but manual install only (no guided setup)
 
 > [!IMPORTANT]
 > **Getting into the Echo is [R0rt1z2](https://github.com/R0rt1z2)'s work, not this project's.** Every model above
 > unlocks with their exploits for MediaTek's chips ([amonet](https://github.com/R0rt1z2/amonet),
 > [kamakiri](https://github.com/R0rt1z2/kamakiri), saiyaku), their bootloader payload
 > [kaeru](https://github.com/R0rt1z2/kaeru) and TWRP as they ported it to each model, and their XDA threads walk
-> through the unlock and root.
-> The setup runs the packages you download from those threads. Without them none of this would run on an Echo.
+> through the unlock and root. Without them none of this would run on an Echo.
+> The unlock and boot-root you do by hand, as the model's thread says: R0rt1z2 asks that they are never run from an
+> installer or a script, so the setup sends you to the thread, waits, and checks the Echo before it goes on.
 
 ## What you get
 
@@ -105,10 +107,9 @@ by side to copy settings and wake words between them, the log. A press of the ac
   USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
   about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
   GitHub's build (8 for an Echo Input). On a live USB stick the session's own disk is RAM: keep the repository on a drive.
-  The setup offers to install what is missing. An **Echo Dot 2**, or any Echo that is **unlocked already**, can also
-  be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb` (platform-tools) and
-  `python3`; for the Dot 2's unlock also `fastboot`, [uv](https://docs.astral.sh/uv/) and
-  [firebreak's two USB drivers](https://github.com/bboe/firebreak#windows).
+  The setup offers to install what is missing. An Echo that is **unlocked already** (by hand, as its XDA thread
+  says) can also be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb`
+  (platform-tools) and `python3`.
 - **Home Assistant** with a working Assist pipeline (speech to text, conversation agent, text to speech). Try it in the
   app first. Optional: Music Assistant (tested with 2.10.4).
 - **Wi-Fi** with a WPA2 password or none (no captive portal, no enterprise login) that reaches Home Assistant.
@@ -124,8 +125,9 @@ scripts/setup.sh
   <img alt="The setup's steps: on your PC (tools, downloads, USB access), into the Echo (USB cable, unlock, stock firmware, root; this wipes it and is skipped on a rooted Echo), build (or GitHub's build), onto your network (lock down and join Wi-Fi, install). Then add it in Home Assistant." src="docs/img/install-light.svg">
 </picture>
 
-One guided run for every supported model. It does everything itself and stops only when you have to act: download a
-file (it picks it up from `~/Downloads`), plug a cable or solder, hold a button, type the Wi-Fi password. It wipes the
+One guided run for every supported model. It does everything itself but the unlock, which you do by hand as the
+model's XDA thread says (it shows you the thread and checks the Echo afterwards), and stops only when you have to act:
+download a file (it picks it up from `~/Downloads`), plug a cable or solder, unlock, type the Wi-Fi password. It wipes the
 Echo, so it asks for a typed `yes` first.
 
 - **Stopped?** Ctrl-C any time; the next run continues where it left off. When a step fails it shows why and offers to
@@ -133,10 +135,9 @@ Echo, so it asks for a typed `yes` first.
 - **Nothing to compile** on a commit GitHub has built (every push to `main` and `release`): the setup takes that build,
   checked against the project's key, and skips the 1 GB Android NDK.
 - **Already rooted** on the right firmware? It offers a shortcut: no unlock, no wipe.
-- **Windows**: run `scripts/setup.sh` in Git Bash, with GitHub's build of a published commit. An Echo Dot 2 it
-  unlocks there too, with [firebreak](https://github.com/bboe/firebreak); other models it takes unlocked already (on
-  adb, in Fire OS or TWRP) and does everything after the unlock. **New to command lines? [Echo Dot 2 from Windows,
-  step by step](docs/WINDOWS.md)**, every command to paste and what each step asks of you.
+- **Windows**: run `scripts/setup.sh` in Git Bash, with GitHub's build of a published commit. It takes an Echo
+  unlocked already (on adb, in Fire OS or TWRP) and does everything after the unlock. **New to command lines? [An Echo
+  from Windows, step by step](docs/WINDOWS.md)**, every command to paste and what each step asks of you.
 - **More Echos**: `--restart` starts over for the next one, `--preset hassmic-settings.conf` gives it the settings
   exported from another.
 - `--dry-run` shows every command without running one; `--from <step>` skips ahead.
@@ -231,7 +232,8 @@ install only with a valid signature. The whole model, including what it does not
 [MIT](LICENSE), for everything written here. `src/third_party/` keeps its own licences, stated in each file: monocypher
 (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0), `rnnoise/` (BSD-3-Clause,
 `COPYING` beside it), `freeaptx.c`/`.h` (LGPL-2.1-or-later; linked statically, and everything needed to rebuild and
-relink it is in this repository).
+relink it is in this repository). `wakealign/` is CC BY 4.0 (its README); `geo/` is made from Natural Earth's public
+domain borders.
 
 Nothing of Amazon's is in this repository or covered by this licence: firmware, libraries and wake word models come
 from your own device and stay Amazon's. Not affiliated with or endorsed by Amazon, Home Assistant or Music Assistant;

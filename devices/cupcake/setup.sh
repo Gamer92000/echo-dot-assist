@@ -1,17 +1,14 @@
 # Guided installation for the Echo Input (cupcake), run by scripts/setup.sh (bash, from the repository root, with
 # device.conf loaded and the helpers of scripts/lib/setup.sh).  The same steps, written out: README.md next to this file.
-# donut's steps (kamakiri's bootrom unlock and TWRP, the firmware into both A/B slots, donut's boot-root, the install
-# from the running OS), without the soldering: the Echo Input's micro-USB socket carries data, and powers it.
+# donut's steps (the unlock by hand as the XDA thread says, kamakiri and TWRP, the firmware into both A/B slots, donut's
+# boot-root, the install from the running OS), without the soldering: the Echo Input's micro-USB socket carries data,
+# and powers it.
 # Each step_<id> returns non-zero when it did not finish; the runner then offers retry, skip or quit.  A step checks
 # first whether its result is there already, so a rerun (or work done by hand) passes through quietly.
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-input-2018-cupcake.4797603/
 XDA_DONUT=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.cupcake.android.os/675ff746519090e1cbd2366a92132d55-13323244164-fire-os-6-5-7-5-ns6575-8338-2026-10-14/
-KAMAKIRI=kamakiri-cupcake-v1.0.0.zip
-KAMAKIRI_SHA256=bb76e4a86c90015ac80b5bd2aacb5e75b4caa3919f900f202ef480708cf6616f
-BOOTROOT=boot-root.zip                      # donut's: its system-as-root path fits this firmware (docs/re-cupcake.md)
-BOOTROOT_SHA256=de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0
 NDK=toolchain/android-ndk-r21e
 NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
 
@@ -39,10 +36,9 @@ slot() { ashell bcbtool get_active | tr -d " \n"; }
 step_tools() {
     command -v curl > /dev/null || need_tools curl || return 1
     build_mode || return 1
-    local unlock="fastboot python3 pyusb"
-    { rooted_already || [ -n "$WINDOWS" ]; } && unlock=python3      # no unlock here: python3 only for otatool.py
-    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip curl sha256sum || return 1; return 0; fi
-    need_tools adb $unlock make cc unzip debugfs curl sha256sum bc xz || return 1
+    # python3 for otatool.py; what the unlock needs on this PC is the XDA thread's to say (step_unlock)
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb python3 unzip curl sha256sum || return 1; return 0; fi
+    need_tools adb python3 make cc unzip debugfs curl sha256sum bc xz || return 1
     space_ahead 3000
 }
 
@@ -50,8 +46,8 @@ step_files() {
     local need=()
     rooted_already && { [ "$BUILD_MODE" = prebuilt ] || [ -d $FW/rootfs/system/lib ]; } ||
         need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID: $FTVDB")
-    rooted_already || [ -n "$WINDOWS" ] || need+=($FW/$KAMAKIRI $KAMAKIRI_SHA256 "attachment in $XDA")
-    need_files "${need[@]}" $FW/$BOOTROOT $BOOTROOT_SHA256 "attachment in the Echo Dot 3's thread, $XDA_DONUT" || return 1
+    # the unlock's files are not asked for here: the XDA thread says which (step_unlock)
+    need_files "${need[@]}" || return 1
     [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
     if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
         mkdir -p toolchain
@@ -65,36 +61,14 @@ step_files() {
 # lets the unlock reach the Echo without sudo, and keeps ModemManager from probing the bootrom's serial port mid-handshake
 step_udev() { udev_rules; }      # scripts/lib/setup.sh
 
+# the Echo Input runs from its micro-USB socket: from the unlock on the PC's port powers it (USB 2: 0.5 A, less than its
+# own adapter), which may restart it or drop adb in the later steps
 step_unlock() {
-    [ -z "$DRY" ] && adb_is recovery && { ok "TWRP is running already"; return 0; }
-    # Fire OS on adb: unlocked before (stock has no adb), and the unlock left TWRP in swdl
-    if [ -z "$DRY" ] && adb_is device; then
-        ok "unlocked already"
-        task "Restarting into TWRP" adb reboot recovery || return 1
-        wait_adb recovery; return
-    fi
+    twrp_or_unlocked; case $? in 0) return 0;; 2) return 1;; esac
     [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
-    local kdir
-    [ -d $FW/kamakiri ] || task "Unpacking kamakiri" unzip -q $FW/$KAMAKIRI -d $FW/kamakiri || return 1
-    # the zip may keep its scripts in a folder of their own: run them from wherever bootrom-step.sh landed
-    kdir=$(find $FW/kamakiri -name bootrom-step.sh -print -quit 2>/dev/null); kdir=${kdir%/*}
-    [ -n "$kdir" ] || [ -n "$DRY" ] || { fail "no bootrom-step.sh in $FW/kamakiri; delete that folder and try again"; return 1; }
-    # the Echo Input runs from its micro-USB socket: the PC's cable powers it and carries the bootrom's USB
-    tell "Put the Echo into its bootrom" \
-        "1. Unplug the Echo's power adapter; the micro-USB cable from this PC not in the Echo yet." \
-        "2. Hold the action button (•)." \
-        "3. Keep holding it and plug the micro-USB cable from this PC into the Echo." \
-        "4. Keep holding until this asks you to press Enter, then release the button and press Enter." \
-        "The light stays dark meanwhile: the Echo is in its bootrom. It lights up? It booted normally: unplug, try again." \
-        "From here on the PC's port powers it (USB 2: 0.5 A, less than its own adapter): restarts or adb dropping out" \
-        "in the later steps? A powered USB hub between them."
-    # in the foreground: kamakiri waits for Enter after the handshake (donut's setup.sh says why)
-    live "Unlocking with kamakiri" in_dir "$kdir" env PYTHONUNBUFFERED=1 \
-        bash -o pipefail -c "./bootrom-step.sh 2>&1 | tee -a '$LOG'" || return 1
-    waitfor "Waiting for hacked fastboot (rainbow light)|Hacked fastboot" '[ -n "$(fastboot devices)" ]' \
-        "No rainbow? Unplug everything and try this step again." || return 1
-    task "Flashing TWRP" in_dir "$kdir" ./fastboot-step.sh || return 1
-    wait_adb recovery
+    unlock_thread kamakiri-cupcake "TWRP is running on the Echo" \
+        "Restarts, or adb dropping out, with the Echo powered from this PC's USB port? A powered USB hub between them." || return 1
+    [ -n "$DRY" ] || twrp_or_unlocked
 }
 
 step_flash() {
@@ -116,14 +90,9 @@ step_flash() {
 }
 
 step_root() {
-    [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
-    wait_adb recovery || return 1
-    task "Installing boot-root" sh -c "adb push $FW/$BOOTROOT /sdcard/ && adb shell twrp install /sdcard/$BOOTROOT" || return 1
-    task "Rebooting into Fire OS" adb reboot || return 1
-    [ -n "$DRY" ] || sleep 5
-    wait_adb device || return 1
-    [ -n "$DRY" ] || [ "$(ashell id -u)" = 0 ] || { fail "adb shell is not root"; return 1; }
-    ok "root adb"
+    # its system-as-root path fits this firmware (docs/re-cupcake.md)
+    { [ -n "$DRY" ] || ! root_adb; } && info "The Echo Input takes the Echo Dot 3's boot-root.zip: that is the thread below."
+    root_thread $XDA_DONUT "" || return 1
     # online with Amazon it would update itself, and an update can close the hole the unlock uses
     warn "Do not set the Echo up with the Alexa app."
 }
@@ -136,7 +105,7 @@ step_build() {
             python3 tools/payload_dump.py $FW/payload.bin $FW/images && mkdir -p $FW/rootfs &&
             debugfs -R 'rdump / $FW/rootfs' $FW/images/system.img && [ -d $FW/rootfs/system/lib ]" || return 1
     fi
-    bootroot_unpack || return 1
+    magiskpolicy_get || return 1
     if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1
     else task "Building" build_binaries || return 1; fi
     wait_adb device || return 1
@@ -156,6 +125,6 @@ step_network() {
 }
 
 step_install() {
-    bootroot_unpack || return 1        # again: the build step may have been skipped
+    magiskpolicy_get || return 1        # again: the build step may have been skipped
     install_satellite
 }

@@ -52,6 +52,9 @@ int main(void) {
     assert(vol_read(VOL_MUTE, 1) == 0 && vol_read((enum vol)99, 27) == 27);
     assert(audio_a2dp_route(1, 0, "test") == -1 && audio_a2dp_route(0, 0, "test") == 0);
     assert(audio_a2dp_lost(0) == 1 && audio_a2dp_aipc() == 0); audio_a2dp_reset();
+    const void *call_data = NULL;
+    assert(!callmic_present() && callmic_open() == -1 && callmic_read(&call_data) == -1);
+    callmic_close();
     char json[16] = "old";
     assert(afe_arbitration(0, 1, json, sizeof json) == 0 && !json[0]);
     assert(afe_eq_get(json, sizeof json) == 0); afe_eq_set("{}"); afe_stream_stopped();

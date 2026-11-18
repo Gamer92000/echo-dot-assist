@@ -30,16 +30,19 @@ Echo on 7806 (2026-11-01): boot, wake word, voice assistant start, and Kiosk Sat
 
 ## Unlock and root (public: saiyaku-athena)
 
-saiyaku-athena, a serial-port exploit for the MT8183 and not this project's work, unlocks it; [`unlock.md`](unlock.md)
-has its steps, and the guided setup (`scripts/setup.sh athena`, below) runs them for you. Files into `firmware/athena/`
-(not in git):
+saiyaku-athena, a serial-port exploit for the MT8183 and not this project's work, unlocks it, by hand, as its [XDA
+thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-2nd-gen-2021-athena.4804958/) says:
+[`unlock.md`](unlock.md). The guided setup (`scripts/setup.sh athena`, below) does not run it: it names the thread,
+waits for Enter, then checks for the Echo on adb. The same for the root that follows, boot-root installed from TWRP as
+the thread says: the setup waits for Enter and checks for root adb. The unlock's and the root's own files
+(`boot-root.zip`) are the thread's: it says which, kept current with its procedure, and nothing here downloads or reads
+them. The file of this project's steps goes into `firmware/athena/` (not in git):
 
 | File | Source | sha256 |
 |---|---|---|
-| `saiyaku-athena-v1.0.0.zip` | [the XDA thread](https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-show-8-2nd-gen-2021-athena.4804958/) | `6d48b4b253fa6cbecb9166c87c0177be09c8a02e5f2efd2bc0d0aec939626218` |
-| `boot-root.zip` | the XDA thread; unzipped into `firmware/athena/boot-root/`, its `patch/magiskpolicy32` is the tool the install patches the policy with, on the Echo | `741d904f7e2616c70be2c10f3466efb515769632779546a869f5591a6a9c827a` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`): the tool the install patches the policy with, on the Echo; the guided setup fetches it. Until 2026-11-09 the one in the thread's `boot-root.zip` (not compared byte for byte with this one; Magisk's is not tried on an athena yet) | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 
-`boot-root.zip`, flashed in TWRP, makes adb root *by patching the running system in place*: `ro.secure=0`, a patched
+`boot-root.zip`, installed in TWRP, makes adb root *by patching the running system in place*: `ro.secure=0`, a patched
 `adbd`, `su` and `adbd` permissive in the SELinux policy it rewrites in `/vendor/etc/selinux/precompiled_sepolicy`, OTA
 blocked (`otacerts.zip` emptied, `softwareupdates.amazon.com` pointed at localhost). dm-verity is off
 (`ro.boot.veritymode=disabled`).
@@ -49,7 +52,8 @@ blocked (`otacerts.zip` emptied, `softwareupdates.amazon.com` pointed at localho
 The guided setup: `scripts/setup.sh athena` (`--dry-run` walks the steps without running any). By hand, with the Echo
 rooted and on adb:
 
-1. **Unpack the firmware** (below), build: `make DEVICE=athena`.
+1. **Unpack the firmware** (below), build: `make DEVICE=athena`; magiskpolicy into `firmware/athena/magiskpolicy32`
+   (the table above; the commands as in [checkers' README](../checkers/README.md#2-unpack-the-firmware-on-the-pc)).
 2. **Lock down, switch Alexa off**: `scripts/deploy.sh`, then on the Echo `sh /data/local/hassmic/lockdown.sh` and
    `sh /data/local/hassmic/alexa-off.sh`.
 3. **Install**: `scripts/install-system.sh` (`INSTALL=running`). It writes `/system/hassmic/`,
@@ -115,8 +119,8 @@ allows it. See `docs/re-athena.md`.
 | `kconfig` | the Echo's own `/proc/config.gz` (4.4.146, ARM), stack protector off, LOCALVERSION `+` |
 | `Module.symvers` | the kernel's CRCs of what the module uses (`CONFIG_MODVERSIONS`), read out of boot.img's Image |
 | `probe.md5`, `stubs/` | from the pinned firmware |
-| `setup.sh` | the guided steps, unlock (saiyaku's `meta-step.sh`) and root (boot-root in TWRP) included |
-| `unlock.md` | the unlock and root by hand (saiyaku-athena) |
+| `setup.sh` | the guided steps: the unlock and root (boot-root) by the XDA thread, each checked afterwards |
+| `unlock.md` | the unlock and root by the XDA thread |
 
 ## Unpack the firmware
 

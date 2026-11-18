@@ -100,6 +100,8 @@ static void answer(const char *l)
 
 static int sent_has(const char *l) { for (int i = 0; i < nsent; i++) if (!strcmp(sent[i], l)) return 1; return 0; }
 static int sent_prefix(const char *l) { for (int i = 0; i < nsent; i++) if (!strncmp(sent[i], l, strlen(l))) return 1; return 0; }
+/* the last "front" the UI said since nsent = 0: 1, 0, or -1 none */
+static int front_last(void) { int f = -1; for (int i = 0; i < nsent; i++) if (!strncmp(sent[i], "front ", 6)) f = atoi(sent[i] + 6); return f; }
 
 static double secs(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
 static int frames, drawn_px; static double t_inc, t_full, worst;
@@ -260,7 +262,74 @@ int main(int argc, char **argv)
     msg("p- call_incoming"); msg("p+ call_connected"); run(300);
     tap((int)(0.75f * W), (int)(0.8f * H)); assert(sent_has("dropin hangup"));
     msg("p- call_connected"); msg("p+ call_connected_end"); run(1600);
+
+    /* the screen saver (ck): the face until the screen's timeout (a minute here), then the clock in place of dark, with
+     * no frames for blinks or glances while it shows; a touch only wakes the face (nothing sent) and the timeout starts
+     * again; a request brings the face at once; mic off counts as something that happened, then its own minute; a
+     * ringing timer has the face and its Stop button; 0 minutes: the face stays; off: the eyes blink again */
+    msg("ck 1 1"); run(500); assert(!S->saver_on);
+    run(30000); assert(!S->saver_on);                           /* half the timeout: still the face */
+    run(31000); assert(S->saver_on); ppm("clock", inc);
+    f0 = frames; run(20000);
+    printf("clock: %d frames in 20 s\n", frames - f0);
+    assert(frames - f0 <= 2);                                   /* a minute's turn at most, not a blink every few s */
+    nsent = 0; tap(W / 2, (int)(0.5f * H)); run(300);
+    assert(!S->saver_on && nsent == 1 && sent_has("log screen saver: the face again: the clock touched"));   /* the face
+                                                                   back, said why, and the touch did nothing else */
+    nsent = 0; run(61000); assert(S->saver_on && sent_has("log screen saver: the clock, nothing for 1 min"));
+    nsent = 0; msg("p+ active-start"); run(400); assert(!S->saver_on); ppm("clock_listening", inc);
+    assert(nsent == 1 && sent_has("log screen saver: the face again: the pattern active-start"));   /* once, not each frame;
+                                                                   no "front": a request keeps the UI's count */
+    nsent = 0; msg("p- active-start"); msg("p+ active-end"); run(1000); assert(!S->saver_on && front_last() == -1);
+    run(61000); assert(S->saver_on);
+    msg("mute 1"); msg("p+ mics-off_on"); run(500); assert(!S->saver_on);
+    run(61000); assert(S->saver_on); ppm("clock_muted", inc);
+    msg("mute 0"); msg("p- mics-off_on"); run(300); assert(!S->saver_on);
+    msg("timers tea, 5 min"); msg("p+ ready-timer"); run(600); assert(!S->saver_on);
+    nsent = 0; tap((int)(0.72f * W), (int)(0.8f * H)); assert(sent_has("timer stop"));
+    msg("timers "); msg("p- ready-timer"); run(300);
+    run(61000); assert(S->saver_on);                            /* music's state told again (a new Sendspin session):  */
+    msg("mp 0 0 0 1000"); msg("mp 2 0 0 1000"); run(300); assert(S->saver_on);   /* stopped, paused: the clock stays */
+    msg("mp 1 0 0 1000"); run(300); assert(!S->saver_on);       /* playing: the face */
+    msg("mp 0 0 0 1000"); run(300);
+    /* the clock only takes the face's place: the music page (left paused, or opened by hand) and the setup screen keep
+     * the screen's own timeout ("front 0"), or they would never go dark; the face again: the UI's, counted from then */
+    nsent = 0; music_show(S, 0); run(300); assert(S->view == V_MUSIC && front_last() == 0);
+    run(70000); assert(!S->saver_on);
+    nsent = 0; go_home(S, V_FACE); run(300); assert(S->view == V_FACE && front_last() == 1);
+    run(59000); assert(!S->saver_on);                           /* (the count from the face's return, not from before) */
+    run(2000); assert(S->saver_on);
+    nsent = 0; scene_top(S, "org.example.app03", now); run(300);  /* an app over the clock: said, the timeout Android's */
+    assert(front_last() == 0 && sent_has("log screen saver: the face again: org.example.app03 in front"));
+    nsent = 0; scene_top(S, UI_HOME_PKG, now); run(300); assert(front_last() == 1 && !S->saver_on);
+    nsent = 0; msg("oobe 1"); run(300); assert(front_last() == 0);
+    run(70000); assert(!S->saver_on);                           /* (the setup screen: never the clock either) */
+    nsent = 0; msg("oobe 0"); run(300); assert(front_last() == 1);
+    msg("ck 1 0"); run(70000); assert(!S->saver_on);           /* never sleeps: the face stays */
+    msg("ck 0 5"); run(500);
+    f0 = frames; run(10000); assert(frames - f0 > 2);          /* the eyes blink again */
     msg("oobe 1"); run(2000); msg("oobe 0");
+
+    /* the date in the language spoken at home (lang.c, "lg"): each of settings.c's speech_langs but Japanese (no kanji
+     * in the firmware's font) has its own words; none, "-" or one not known: English */
+    {
+        struct tm tm; memset(&tm, 0, sizeof tm); tm.tm_wday = 3; tm.tm_mday = 11; tm.tm_mon = 10; char d[64], en[64];
+        ui_date(en, sizeof en, &tm, NULL); assert(!strcmp(en, "Wednesday, 11 November"));
+        ui_date(d, sizeof d, &tm, "ro"); assert(!strcmp(d, "Miercuri, 11 noiembrie"));
+        ui_date(d, sizeof d, &tm, "de"); assert(!strcmp(d, "Mittwoch, 11. November"));
+        ui_date(d, sizeof d, &tm, "pl"); assert(!strcmp(d, "Środa, 11 listopada"));
+        tm.tm_wday = 0; tm.tm_mday = 1; tm.tm_mon = 0;
+        ui_date(d, sizeof d, &tm, "es"); assert(!strcmp(d, "Domingo, 1 de enero"));
+        ui_date(en, sizeof en, &tm, "en");
+        static const char *const codes[] = { "de", "fr", "es", "it", "pt", "nl", "sv", "da", "nb", "fi", "pl", "ro" };
+        for (size_t i = 0; i < sizeof codes / sizeof *codes; i++) { ui_date(d, sizeof d, &tm, codes[i]); assert(strcmp(d, en)); }
+        ui_date(d, sizeof d, &tm, "xx"); assert(!strcmp(d, en));
+        ui_date(d, 8, &tm, "ro"); assert(strlen(d) == 7);      /* cut, never past the end */
+        msg("lg ro"); assert(!strcmp(S->lang, "ro"));
+        msg("ck 1 1"); run(61500); assert(S->saver_on); ppm("clock_ro", inc);
+        msg("lg -"); assert(!S->lang[0]);
+        msg("ck 0 5"); run(500);
+    }
 
     /* Sendspin's music: the face's bottom line, then the music's own page */
     msg("mc 35 0 play,pause,next,previous,volume,mute,seek,shuffle,unshuffle,repeat_off,repeat_one,repeat_all off 0");
@@ -1062,6 +1131,96 @@ int main(int argc, char **argv)
         #undef CACHED
         #undef TEXT_IS
     }
+
+    /* setting music_on_screen: the Playing tab in place of the face while a track plays, until it stops */
+    FRESH(); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(1000);
+    assert(S->view == V_FACE);                                    /* (off: the face, as always) */
+    msg("mpage 1"); run(300); assert(S->view == V_MUSIC && S->mp_auto);
+    msg("p+ active-start"); run(300); assert(S->view == V_FACE);  /* a request: the face, as always */
+    run(2000); assert(S->view == V_FACE);                         /* (listening still) */
+    msg("p- active-start"); run(300); assert(S->view == V_MUSIC); /* and the page is back once it is over */
+    msg("mp 0 0 200000 1000"); run(2000); assert(S->view == V_MUSIC);   /* a gap between two tracks: no stop */
+    msg("mp 1 0 200000 1000"); run(5000); assert(S->view == V_MUSIC);
+    msg("mp 2 1000 200000 1000"); run(8000); assert(S->view == V_MUSIC);   /* paused: still the page, its play button at hand */
+    msg("mp 0 0 200000 1000"); run(6000); assert(S->view == V_FACE && !S->mp_auto);   /* stopped: the face */
+    msg("mp 1 0 200000 1000"); run(300); assert(S->view == V_MUSIC);       /* the next track: the page again */
+    tap(46, 60); run(300);                                        /* (the face button above the tabs: by hand) */
+    assert(S->view == V_FACE);                                    /* (the tap found it) */
+    {
+        assert(S->mp_off); msg("mp 1 5000 200000 1000"); run(3000); assert(S->view == V_FACE);   /* left by hand: held off */
+        msg("mx"); run(6000); assert(!S->mp_off);                 /* until the music is gone */
+        msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); assert(S->view == V_MUSIC);
+    }
+    msg("mp 1 0 200000 1000"); run(300); assert(S->view == V_MUSIC && S->mp_auto);   /* browsed: left by hand */
+    S->m.tab = 2;                                                 /* (T_LIBRARY: someone looks for the next one) */
+    msg("mp 0 0 200000 1000"); run(7000); assert(S->view == V_MUSIC && !S->mp_auto);
+    msg("mpage 0"); run(300); assert(S->view == V_MUSIC);         /* (and switched off: still theirs) */
+    FRESH(); msg("mpage 1"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); assert(S->view == V_MUSIC);
+    msg("mpage 0"); run(300); assert(S->view == V_FACE && !S->mp_auto);     /* switched off: what came by itself goes */
+    FRESH(); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); music_show(S, 0); run(300);   /* opened by hand: left by hand */
+    msg("mpage 1"); msg("mp 0 0 200000 1000"); run(7000); assert(S->view == V_MUSIC && !S->mp_auto);
+
+    /* in place of the face only: an app as home, in front, left alone; and our face up while that app is away (broken,
+     * on its way back) is no face to replace: own_asked untouched, so its retries go on */
+    FRESH(); msg("home org.example.kiosk"); run(100); scene_top(S, "org.example.kiosk", now); run(300);
+    { int nl = nlaunched;
+      msg("mpage 1"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(1000);
+      assert(nlaunched == nl && !S->mp_auto && !scene_visible(S));
+      scene_top(S, UI_HOME_PKG, now); run(50);                    /* (it ended: brought back, as always) */
+      assert(nlaunched == nl + 1 && !strcmp(launched[nl], "org.example.kiosk/"));
+      assert(S->view == V_FACE && !S->mp_auto && !S->own_asked); }
+
+    /* in place of the home app too: our screen over it while the track plays, the app back when it stops */
+    FRESH(); msg("home org.example.kiosk"); run(100); scene_top(S, "org.example.kiosk", now); run(300);
+    { int nl = nlaunched;
+      msg("mpage 2"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300);
+      assert(nlaunched == nl + 1 && !strcmp(launched[nl], "HOME/") && S->view == V_MUSIC && S->mp_auto && S->own_asked);
+      assert(!strcmp(S->mp_app, "org.example.kiosk") && scene_visible(S));
+      scene_top(S, UI_HOME_PKG, now); run(1000); assert(nlaunched == nl + 1);   /* ours in front: the app not brought back over it */
+      msg("p+ active-start"); run(300); assert(S->view == V_FACE);  /* a request: the face */
+      msg("p- active-start"); run(300); assert(S->view == V_MUSIC && nlaunched == nl + 1);   /* the page again, no app */
+      msg("mp 0 0 200000 1000"); run(2000); assert(S->view == V_MUSIC && nlaunched == nl + 1);   /* (a gap) */
+      run(4000); assert(nlaunched == nl + 2 && !strcmp(launched[nl + 1], "org.example.kiosk/"));   /* stopped: the app back */
+      assert(!S->mp_auto && !S->own_asked && S->view == V_MUSIC);   /* (the page's frame held meanwhile) */
+      scene_top(S, "org.example.kiosk", now); run(300); assert(S->view == V_FACE && !S->mp_gave);   /* (the face under it) */
+      /* the next track: again; the app taking the screen back (Back, Home in the drawer, by itself) keeps it till the stop */
+      nl = nlaunched; msg("mp 1 0 200000 1000"); run(300); assert(nlaunched == nl + 1 && S->mp_auto);
+      scene_top(S, UI_HOME_PKG, now); run(300);
+      scene_top(S, "org.example.kiosk", now); run(5000); assert(S->mp_off && !S->mp_auto && nlaunched == nl + 1 && !S->own_asked);
+      msg("mp 0 0 200000 1000"); run(6000); assert(!S->mp_off && nlaunched == nl + 1);   /* (stopped: nothing to give back) */
+      /* another app in front: left alone */
+      msg("mp 1 0 200000 1000"); scene_top(S, "org.example.other", now); run(1000); assert(nlaunched == nl + 1 && !S->mp_auto);
+      /* back to "in place of the face" while over the home app: the app back at once */
+      scene_top(S, "org.example.kiosk", now); run(300); assert(nlaunched == nl + 2 && S->mp_auto);
+      scene_top(S, UI_HOME_PKG, now); run(300);
+      msg("mpage 1"); run(300); assert(nlaunched == nl + 3 && !strcmp(launched[nl + 2], "org.example.kiosk/") && !S->mp_auto && !S->own_asked); }
+    /* an app takes the screen from the page (face as home): the face under it, no stopped page when ours comes back */
+    FRESH(); msg("mpage 1"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); assert(S->view == V_MUSIC);
+    scene_top(S, "org.example.other", now); run(300); assert(S->mp_off && S->view == V_FACE);
+    scene_top(S, UI_HOME_PKG, now); run(300); assert(S->view == V_FACE);   /* (held off: the rest of the track) */
+    msg("mp 0 0 200000 1000"); run(6000); assert(S->view == V_FACE && !S->mp_off);
+    /* over the home app, Home changed to the face on the page meanwhile: the old app not given back at the stop */
+    FRESH(); msg("home org.example.kiosk"); run(100); scene_top(S, "org.example.kiosk", now); run(300);
+    { int nl = nlaunched;
+      msg("mpage 2"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); scene_top(S, UI_HOME_PKG, now); run(300);
+      assert(S->view == V_MUSIC && !strcmp(S->mp_app, "org.example.kiosk"));
+      msg("home -"); run(300); assert(!S->mp_app[0] && !S->own_asked);
+      msg("mp 0 0 200000 1000"); run(6000); assert(nlaunched == nl + 1 && S->view == V_FACE && !S->mp_auto); }
+    /* over the home app, ours never comes (3 s): held, own_asked as it was, so the app's comings back go on */
+    FRESH(); msg("home org.example.kiosk"); run(100); scene_top(S, "org.example.kiosk", now); run(300);
+    msg("mpage 2"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); assert(S->mp_auto && S->own_asked);
+    run(3500); assert(!scene_visible(S) && S->mp_off && !S->mp_auto && !S->own_asked && S->view == V_FACE);
+    /* given back, the app does not start: the face, not a stopped page */
+    FRESH(); msg("home org.example.kiosk"); run(100); scene_top(S, "org.example.kiosk", now); run(300);
+    msg("mpage 2"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); scene_top(S, UI_HOME_PKG, now); run(300);
+    msg("mp 0 0 200000 1000"); run(6000); assert(S->mp_gave && S->view == V_MUSIC);
+    scene_launch_failed(S, "org.example.kiosk", now); run(300); assert(!S->mp_gave && S->view == V_FACE && !S->own_asked);
+    /* browsed over the home app: left there, and theirs (own_asked kept: no home retry takes it from them) */
+    FRESH(); msg("home org.example.kiosk"); run(100); scene_top(S, "org.example.kiosk", now); run(300);
+    { int nl = nlaunched;
+      msg("mpage 2"); msg("mt Song\tArtist\tAlbum"); msg("mp 1 0 200000 1000"); run(300); scene_top(S, UI_HOME_PKG, now); run(300);
+      S->m.tab = 2; msg("mp 0 0 200000 1000"); run(6000);
+      assert(nlaunched == nl + 1 && S->view == V_MUSIC && !S->mp_auto && S->own_asked && !S->mp_app[0]); }
 
     printf("frames %d, dirty %.0f px a frame on average; drawing dirty-only %.3f ms a frame (worst %.3f), whole %.3f ms\n",
            frames, (double)drawn_px / frames, t_inc / frames * 1000, worst * 1000, t_full / frames * 1000);

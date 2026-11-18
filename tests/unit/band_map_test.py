@@ -21,6 +21,7 @@ int core_muted(void) { return 0; }
 int core_dnd(int set) { (void)set; return 0; }
 int core_led_brightness(int set) { (void)set; return 100; }
 void core_spawn(char *const argv[]) { (void)argv; }
+void core_run(char *const argv[], char *out, size_t n) { (void)argv; if (n) out[0] = 0; }
 int main(void)
 {
     int s = slot_of(P_THINK), c; static struct rgb row[%d]; struct rgb led[LEDS];
@@ -37,7 +38,7 @@ int main(void)
 with tempfile.TemporaryDirectory() as tmp:
     src, exe = os.path.join(tmp, "band_map.c"), os.path.join(tmp, "band_map")
     open(src, "w").write(harness)
-    subprocess.run(["cc", "-O2", "-w", f"-I{ROOT}/src/hassmic", src, f"{ROOT}/src/hassmic/ringdesign.c", f"{ROOT}/src/hassmic/statefile.c", f"{ROOT}/src/hassmic/screen_none.c",
+    subprocess.run(["cc", "-O2", "-w", f"-I{ROOT}/src/hassmic", src, f"{ROOT}/src/hassmic/ringdesign.c", f"{ROOT}/src/hassmic/statefile.c", f"{ROOT}/src/hassmic/afe_parcel.c", f"{ROOT}/src/hassmic/screen_none.c",
                     "-lm", "-lpthread", "-o", exe], check=True)
     out = subprocess.run([exe], input=" ".join(str(v) for d in designs for c in d for v in c), capture_output=True, text=True, check=True).stdout
 c_rows = [list(map(int, l.split())) for l in out.split("\n") if l]

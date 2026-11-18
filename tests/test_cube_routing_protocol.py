@@ -69,6 +69,9 @@ async def test(home,proc):
         await expect('cube_output_volume',78)
         settings={s['name']:s for s in browser.state()['settings']}
         assert settings['audio_output']['value']==1,settings['audio_output']
+        # Keep new upstream controls off hardware that cannot implement them.
+        assert 'call_mic' not in settings and 'duck_for_others' not in settings
+        assert 'music_duck' not in settings and 'music_duck_percent' in settings
         print('PASS: real HA entity discovery, select/number commands, independent saved levels, live/stale diagnostics, signed web changes')
     finally:await client.disconnect()
 def main():

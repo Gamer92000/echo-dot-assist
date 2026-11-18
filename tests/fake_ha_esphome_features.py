@@ -2,7 +2,7 @@
 """Home Assistant's side of the ESPHome native API against build/hassmic-host (tests/esphome_common.py), part three:
 features switched on the settings page, each closing the link so Home Assistant lists entities again: sound
 detection (windows of 3 s here, HASSMIC_FAKE_SOUND_WINDOW: the model's are 10 s), Wi-Fi motion."""
-import asyncio, random
+import asyncio, os, random
 from aioesphomeapi import NumberInfo, NumberState, EventInfo, BinarySensorInfo, BinarySensorState
 from aioesphomeapi import APIClient
 from aioesphomeapi.model import Event
@@ -78,6 +78,39 @@ async def main(e):
     rx_stat(112)
     await until(lambda: wstate().state is False, 10)
     check(wstate().state is False, "motion clears after the hold")
+    # the kernel module's readings carry a frame counter; stuck (Android reloaded the Wi-Fi driver under the hook), the
+    # sensor goes unknown after a while (3 s in the PC build, 60 s on the Echo) and comes back with the frames
+    frames = 100
+    def module(rcpi, step, hooked=1):
+        nonlocal frames; frames += step
+        path = e.env["HASSMIC_FAKE_WIFI"]       # whole or not at all: a counter read half written would count as a frame
+        with open(path + ".new", "w") as f: f.write(f"RCPI RX0 = {rcpi}\nAGE = 12\nFRAMES = {frames}\nKIND = 5\nHOOKED = {hooked}\n")
+        os.replace(path + ".new", path)
+    for _ in range(12): module(112, 1); await asyncio.sleep(0.1)
+    check(wstate().state is False and not wstate().missing_state, "the module's readings, counted up: still")
+    module(112, 0, 0)
+    stuck = "wifi motion: no frame from the access point for 3 s (the Wi-Fi driver is unloaded or was not hooked again"
+    await until(lambda: wstate().missing_state and stuck in e.log(), 8)
+    check(wstate().missing_state and stuck in e.log(), "the counter stuck, the driver not hooked: unknown, and the log says why")
+    for _ in range(12): module(112, 1); await asyncio.sleep(0.1)
+    await until(lambda: not wstate().missing_state and "wifi motion: frames again" in e.log(), 5)
+    check(not wstate().missing_state and wstate().state is False and "wifi motion: frames again" in e.log(), "frames again: a reading again, still")
+    # stuck with the driver hooked: no frames for another reason (Wi-Fi down), worded so
+    module(112, 0, 1)
+    down = "wifi motion: no frame from the access point for 3 s (Wi-Fi down?)"
+    await until(lambda: wstate().missing_state and down in e.log(), 8)
+    check(wstate().missing_state and down in e.log(), "the counter stuck, the driver hooked: unknown, Wi-Fi down?")
+    for _ in range(12): module(112, 1); await asyncio.sleep(0.1)
+    await until(lambda: not wstate().missing_state and e.log().count("wifi motion: frames again") == 2, 5)
+    check(not wstate().missing_state and e.log().count("wifi motion: frames again") == 2, "frames again after that too")
+    # no frame yet, and the driver not hooked: the "no readings" line says so instead of "not loaded yet?"
+    path = e.env["HASSMIC_FAKE_WIFI"]
+    with open(path + ".new", "w") as f: f.write("ERROR = no frame yet\nHOOKED = 0\n")
+    os.replace(path + ".new", path)
+    unhooked = "wifi motion: no readings for 5 s (the Wi-Fi driver is unloaded or was not hooked"
+    await until(lambda: unhooked in e.log(), 9)
+    check(unhooked in e.log(), "no frame yet, not hooked: the log says so")
+    rx_stat(112)
     c.number_command(wsn.key, 8)
     await until(lambda: last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8")
     check(last3(wsn.key, NumberState) == 8 and conf().get("wifi_motion_sensitivity") == "8", "sensitivity set and kept")
@@ -85,4 +118,4 @@ async def main(e):
     c, cby, st3 = await relist(c)
     check("wifi_motion" not in cby and conf().get("wifi_motion") == "off", "switched off again: the entities gone")
 
-run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_SOUND_WINDOW": "3000"})
+run(main, (PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT), {"HASSMIC_FAKE_SOUND_WINDOW": "3000"}, log=True)

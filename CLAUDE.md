@@ -25,7 +25,7 @@ without them only the host targets build. Extraction steps: `devices/donut/READM
 
 ```sh
 make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool;
-                         # libhmui.so where device.mk has SCREEN)
+                         # libhmui.so where device.mk has SCREEN, libhmled.so where it has LEDSHIM)
 make DEVICE=donut STUBS=1  # same, without firmware/: links against stand-ins from devices/<codename>/stubs/*.syms (byte-identical)
 make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake, SIGTTOU a near miss; board.c of DEVICE),
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
@@ -74,6 +74,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
+.venv/bin/python tests/fake_talk_duplex.py    # -D over Wyoming (a realtime client with its own barge-in): the mic through
+                                             # a reply, a wake word then left to the client, the button still cuts it,
+                                             # -D under ESPHome ignored
 .venv/bin/python tests/fake_ma_sendspin.py [--legacy]  # Sendspin, as Music Assistant 2.10.8 (aiosendspin 10.2.1, Sendspin 1.0;
                                              # --legacy: 9.1.1 of MA <= 2.10.6, build/aiosendspin-9.1.1 from --setup),
                                              # strict: a deviation MA would only log fails; the output's clock
@@ -112,6 +115,13 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # as a WAV, uploads within each sound's length, Play, the wake word, restart
 .venv/bin/python tests/fake_ha_ring.py        # light ring: the animation set from stand-in stock files, HA's light,
                                              # the Echo's own patterns first, the listening ring turned by the beam
+.venv/bin/python tests/fake_ha_ring_live.py   # the light ring live: LEDs, frames, animations, designs into a stand-in
+                                             # frame file (HASSMIC_FAKE_FRAME), the Echo's own first, "Light ring" vs live
+.venv/bin/python tests/fake_ha_ring_acs.py    # the same on binary animations (the Echo Dot 5): the set with stock's
+                                             # index files, the light drawn into its two slots through a stand-in shim
+                                             # (one client at a time: hassmic keeps one connection), drawn again after ledcontroller
+.venv/bin/python tests/fake_ha_ring_live_acs.py # the light ring live there: frames into hassmic_live through the shim,
+                                             # set once, unset for the Echo's own and mute, set again after ledcontroller
 .venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
                                              # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
@@ -153,6 +163,11 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   `main.sh` (`factory()`, only if that version is installed and its hassmic is what runs) has `sysinstall.sh` write it to
   `/system/hassmic` as the factory copy, bootstrap included (`boot.sh`, `otatool`, `hassmic.rc`, `release.pub`; never
   `update.pub` or `/sepolicy`). Works from older installs: the pushed update brings the code.
+  Where the factory copy is in an overlay on /data (device.conf `ROLLBACK`: cannoli), `sysinstall.sh` keeps the copy it
+  replaces in `ROLLBACK/previous` (only one `main.sh` `reach_check` saw reached from the network: a connection from
+  another address to a port of ours), and the flashed `prepare.sh` steps back after two boots without being reached
+  (`ROLLBACK/boots`; main.sh excuses a boot before set-up or without an address, for a version reached before): the unpromoted update, else the
+  factory copy to `previous`, else to the flashed copy; each version taken out into `ota/refused`, never installed again.
 - The light ring's own animations: `main.sh` installs them itself at satellite start when they are not this build's
   (none where `/system/etc/led-resources` is missing: checkers)
   (`sysinstall.sh leds`, ledcontroller restarted); `install-system.sh --uninstall` puts stock's layer config back.
@@ -198,11 +213,21 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
 - `device.conf`: shell vars (product/firmware id, probe files, `INSTALL` method, daemon user/groups, stock service
   names). Sourced by PC scripts and shipped to the Echo next to `main.sh`/`lockdown.sh`/`alexa-off.sh`; push bundles
   carry it, and `main.sh` refuses a bundle whose `PRODUCT` is not the Echo's.
-- `hassmic.rc`, `sepolicy.rules`: installed by `install-system.sh`.
+- `hassmic.rc`, `sepolicy.rules`: installed by `install-system.sh`.  After the model's rules every install adds
+  hassmic's own SELinux domain (`scripts/system/sepolicy-hassmic.rules`: enforcing, `allow hassmic * * *` less property
+  writes, domain changes, ptrace; `sepolicy-mirror.sh` copies to it what other domains may do to su, from the policy
+  being patched); `runas -Z u:r:hassmic:s0` (main.sh) enters it by its own context, not the exec's (/data is nosuid).
+  The services stay in su, which the unlock makes permissive: there any process may set any property (issue #130).
 - `stubs/*.syms`: what our binaries need of each stock library (`tools/mkstubs.sh`), for `make STUBS=1` / CI.
 - `README.md` (model facts + install steps by hand) and `setup.sh` (same steps for the guided `scripts/setup.sh`:
   `STEPS` list + `step_<id>` functions using `scripts/lib/setup.sh`; `--dry-run` walks them without running). Keep
-  the two in step.
+  the two in step.  The unlock and boot-root are never run, installed, wrapped or retold by either: they are
+  R0rt1z2's, who asks that they are only run by hand as his XDA thread says (kamakiri-donut v1.1.0's LICENSE);
+  `step_unlock` names the thread (`unlock_thread`), waits for Enter and checks for TWRP on adb (`twrp_or_unlocked`),
+  `step_root` the same for boot-root (`root_thread`, root adb); the README links the thread.  No file of the threads
+  is downloaded, read or copied either: magiskpolicy comes from Magisk v30.7's APK (`magiskpolicy_get`, byte for byte
+  boot-root's old one), the Shows' userdebug adbd from Google's Android 7.1.1 emulator image (`adbd_get`, its ramdisk
+  only, `scripts/zipmember.py`).  Removed 2026-11-09 at his request; do not add any of it back.
 No model `#ifdef`s in shared code: new differences become a board field, a `device.conf` variable or a backend.
 
 ## Architecture
@@ -264,8 +289,12 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   PC or where a HAL drops the bits (then level only). `core_lock` guards state and client socket writes; `core.h`
   documents per function whether the lock is held.
 - **Protocols (`struct proto` in `core.h`)**: `proto_esphome.c` (ESPHome native API incl. Noise encryption provisioned
-  by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages) and `proto_wyoming.c` +
-  `wyoming.c`. Selected with `-P`. The core calls `start/audio/stop/played/...` on the active proto with lock held.
+  by HA, voice assistant, media player, timers, settings entities, Bluetooth proxy messages, API 1.15's device
+  capabilities with Sendspin's client id and the pairing token (request and text sensor: keyed link only), so Music
+  Assistant pairs through HA; its protobuf in `pb.h`,
+  header-only for `tests/unit/pb_test.c` under UBSan; a message that did not fit its buffer (`over`, carried out of
+  inner messages by `pb_msg`) is never sent: HA drops the link on a cut one and connects again, over and over) and `proto_wyoming.c` + `wyoming.c`. Selected with `-P`. The
+  core calls `start/audio/stop/played/...` on the active proto with lock held.
 - **Audio backend (`audio.h`)**: `audio_mixer.c` on device (mixer C API: capture, voice/TTS, music, Bluetooth and
   earcon streams mixed by the mixer); `audio_android.c` where there is no mixer (checkers, Echo Show 5; cronos, its 2nd gen; athena, Echo Show 8 2nd gen; cupcake, Echo Input: OpenSL ES over
   AudioRecord/AudioTrack, the front end inside the audio HAL; device.mk `SYSLIBS` links
@@ -280,8 +309,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `<sound>.wav`), `/api/sound-pack`, page `packsCard`, a `.soundpack` file = a tar of `pack.json` + WAVs (`web/tar.js`).
   A pack is a whole set; 16 packs, 30 MB, 32 MB left on the partition (`HASSMIC_SOUNDPACK_MAX`, `_FREE_MIN` for tests).
 - **Whisper detection (`whisper.h`)**: `whisper_pryon.c` (libpryon `WhisperApi_*`, one detector per request fed from the
-  start of streaming, end of utterance on HA's VAD end (`core_mic_off`), result into the ESPHome binary sensor "Last
-  request whispered" before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
+  ring at the request's start as HA gets it (`main.c` `whisper_from`: the wake word's tail end; live with `-w remote`),
+  end of utterance on HA's VAD end (`core_mic_off`), finished in a thread at once, cut-off 500, result into the ESPHome
+  binary sensor "Last request whispered" (unknown from each run's start) before STT ends, for the agent's prompt template; `docs/re-whisper.md`) or `whisper_none.c` (host
   build, `HASSMIC_FAKE_WHISPER`). Model from DAVS only, installed by `scripts/artifacts.sh` into
   `/data/local/hassmic/whisper` (not `models/`: it carries a stray `pryon.manifest`); without it, no sensor.
 - **Wake word (`wake.h`)**: `wake_pryon.c` (stock `libpryon.so`, headers in `src/include/pryon_api.h`) or `wake_none.c`
@@ -343,6 +373,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   starts, ~137 ms on the Show 5, which the queue leaves out; the A2DP sink resamples through resample.c too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg
   loaded with dlopen, aptX/aptX HD via `freeaptx`) with AVRCP. Only one music source plays at a time (newest wins). "<wake word>, stop" pauses it when nothing else was
   stopped (`stop_word`, a bare "stop" transcript in `core_transcript`; issue #51), the action button resumes.
+  Ducked (`duck.c` `duck_active()`, issue #165): our own run, our own round from the wake word on, or another member
+  answering a wake word we claimed too (its 2-byte `T_MSG` "on" every 2 s / "off" to every member, `arb_tell(NULL)`,
+  `hooks->message` `all`: never Drop In's; sent only for runs a won round started, bridged over a follow-up's restart,
+  `duck_follow`; HA's media is no run, `speak_media`; taken only from members that claimed in our round,
+  `arb_round_claimed`, up to 4, each held 6.5 s past its last "on"); setting `duck_for_others` (on) gates the last two.
+  A ring on another Echo (`ringstop.c`, issue #161, setting `timer_stop_from_others` on the ringing Echo, off): it
+  broadcasts `T_MSG` 0x41 on/off while it rings; a "stop" (keyword or bare transcript) that ends nothing here sends
+  0x42 to all, the ringer stops, and here the music stays and the wake word's run is dropped.
   A "stop" that ended what its wake word cut (ring, Drop In, reply, THINKING run) drops that wake word's run: after the
   round `stop: pipeline dropped` (`wake_cut_ms`), during it `trigger` starts none (`stop_cut`, `stopped_now`).
   Setting `stop_ends_listening` (Voice, page only, off): any "stop" within 4 s of the last detection (`heard_ms`,
@@ -355,7 +393,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
   `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
   unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream
-  (front end's call mode); mic = micAsr through the pipeline's gain, then a gate (open only while this side talks:
+  (front end's call mode); mic = micHfp where the backend has it (Call audio, below), else micAsr through the pipeline's gain, then a gate (open only while this side talks:
   9 dB over the room and over -58 dBFS, `NEAR_MIN_DB`, or an empty room's noise goes out with the speech gain; echo
   estimate peak-held against the far end's level held after it stops), listening mode only while this side talks
   (`core_dropin_listen`); the far end talks when it plays over -55 dBFS and 25 dB over its own floor (`far_voice`). Core side in `main.c` (`core_dropin`: call LED animations, comms sounds, ringtones via
@@ -372,6 +410,24 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `automation.trigger`, since ServiceNotFound would end the conversation's run with "Done"; the reply from "Drop In
   result" where the Echo has it, else from the timing of the "Drop In" sensor). Keep the entities' states, event
   types, icons and the action's name stable: released blueprints rely on them; a new result is a new event type.
+- **Call audio** (`call.c`, `call.h`): Drop In's audio moved out of `dropin.c` unchanged: the mic gate, echo
+  suppressor and gain (`call_mic` from the capture thread, the owner's `send` per encoded 20 ms frame), the jitter
+  buffer and playout on the Voip stream (`call_rx`, its thread), Opus 16 kHz; `call_begin`/`call_end` the media's
+  generation. Lock order: call.c's `tx_mu` (one sender at a time; `send` and `core_dropin_listen` run under it) before
+  `core_lock` and `dl`, `dl` before call.c's `ml`; nobody calls `call_mic` holding `core_lock` or `dl`.
+  Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`: the mixer's where
+  `board.call_mic`, measured: donut, biscuit; radar and cannoli have the path in AFE.cfg, unmeasured): `micHfp` is
+  Amazon's "Voice" pipeline (AFE.cfg: (V)AEC, RES, NR, CNG, AGC -22/-23 dBFS, Tx EQ, limiter; no beamformer) once the
+  front end is in call mode (a Voip stream open; on biscuit opening micHfp alone starts it). `callmic_thread` opens it
+  after the playout has the Voip stream (`voip_gen`), sends it without micgain and with the gate's duck at -12 dB
+  (`SUPPRESS_HFP_DB`, `NEAR_MIN_HFP_DB`), `call_mic` (micAsr) stands aside (`src_hfp`) while micHfp came within
+  `HFP_STALE_MS` (`hfp_at`; the mixer's read waits 1.5 s for a block that does not come, the far end gives up after
+  5 s); no stream, 3 empty reads or the Voip stream failed (`voip_gen` -1): micAsr for the rest of the call. Record
+  streams' format getters answer -1 (mixcap.c): never refuse on that. `audio_file.c`: `HASSMIC_CALL_CAP` (tests: the
+  hall's 700 Hz tone in `fake_ha_dropin.py`), `HASSMIC_CALL_CAP_STALL` (a file: while it exists reads stall, 7c),
+  `HASSMIC_VOIP_FAIL` (a file: the Voip stream fails, 7d), `HASSMIC_FAKE_LISTEN` (the front end's listening mode
+  logged); Android: none.  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
+  (`listen_on`, `near_until`): reset, the core never heard "off" and kept the front end listening for the call.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
@@ -417,7 +473,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
   Name: one, made at start and stored nowhere (`main.c` `name_make`): `board.default_name` (the model: "Echo Dot 3")
   plus the Wi-Fi MAC's last 3 bytes ("Echo Dot 3 5695c4", node `echo-dot-3-5695c4`), as ESPHome's name_add_mac_suffix;
-  people name the Echo in Home Assistant.  No rename anywhere (page "Name" row only shows it); `-n` only for the PC
+  people name the Echo in Home Assistant.  No rename anywhere (page "Name" row only shows it; the owner's note beside
+  it, `state/note`, issue #153: web.c, in the unsigned hello, not exported); `-n` only for the PC
   (no MAC).  Old `state/name`/`state/node` are deleted at start, hassmic.conf `NAME` is ignored.  `state/restart`
   (its text says why: wake word engine), which root's `ota_watch` turns into `stop hassmic; start hassmic`.
   Identify (`POST /api/identify`, HA button `identify`, device class identify): `core_identify` sets `zzz_rainbow`
@@ -465,8 +522,19 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   noise; it ignores hassmic's signals and ends at EOF. Never make it hassmic's direct child (Amazon's DHA module waits
   for all children). Host: `HASSMIC_CLOCK_SYNCED=0` plays an unset clock.
   Time zone: GetTimeResponse field 2 (a POSIX TZ string, aioesphomeapi's `timezone.py`; HA keeps the name) ->
-  `clock_zone_from_ha` -> `tz.c` `tz_lookup`: a zone of bionic's one-file `tzdata` whose TZif footer is that rule (the
-  zone set kept when it has it, else zone.tab's names in area order), else the string itself -> `state/timezone` ->
+  `clock_zone_from_ha` (with `core_lock` held: hands the rule to a thread of its own, `zone_thread`) -> `tz.c` `tz_lookup`: a zone of bionic's one-file `tzdata` whose TZif footer is that rule (a
+  country's first by area, then zone.tab order: the country of Home Assistant's home, `zone.home`'s latitude/longitude
+  subscribed on keyed links (`proto_esphome.c` `home_subscribe`, no permission needed; `clock_home`; 0,0 = never set)
+  through `geo.c` (`geo/borders.bin`, Natural Earth's borders cut down by `tools/geo/build.py`, built in, ~10 ms on a
+  Dot 2; within 3 km of a border the other country is named), or the Wi-Fi's country where it is that neighbour or
+  there is no location (`apcountry.c`: the associated BSS's 802.11d Country element by an unprivileged nl80211
+  GET_SCAN dump, `HASSMIC_FAKE_COUNTRY` a file for tests); else the zone set kept when it has it, else zone.tab's
+  names in area order: a guess; no zone set: the last known one stands for it), else the string itself.  How it was
+  found stays in hassmic's own `state/zone` (`<zone> home|wifi|kept|guess|rule <its country> <the home's> <the Wi-Fi's>`, `-` none, `zone_note`; a kept zone
+  that is hassmic's earlier guess stays a guess, a known one stays known when the country is missing once), which
+  `clock_zone` gives `speech_locale` only when known (home, wifi, kept): the language never from a guess (CET:
+  Europe/Amsterdam) nor from `state/timezone`, which root takes away at once; `/api/state` `zone` and the page's
+  "Language you speak" row say what Automatic stands on.  Coordinates never stored or logged.  The zone -> `state/timezone` ->
   `main.sh` `tz_set` (a name or a rule, never a path): `persist.sys.timezone`, plus `service call alarm 3` for
   names where the framework runs.  `HASSMIC_TZDATA`, `HASSMIC_TIMEZONE` (the zone set) for tests;
   `tests/unit/tz_ref.py` builds a tzdata from Python's.
@@ -475,8 +543,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `/data/local/hassmic/wifi/` (`status`, `scan`, `result`, `lock/`; the id ties answer to request). The password comes
   sealed with K (`web.c` unseal, `crypto.js` seal) and only its PSK (PBKDF2) leaves hassmic. wifi.sh saves nothing
   until the Echo is on the new network with a fresh lease (dhcpcd runs with `-K` and ignores network changes: wifi.sh
-  marks `dhcp.<if>.result`, runs `dhcpcd -n`, waits for the hook to write it) and its router answers ARP; else it
-  removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
+  marks `dhcp.<if>.result`, restarts init's `dhcpcd-<if>` (not `dhcpcd -n`: it waited for a carrier for good), waits
+  for the hook to write it) and its router answers ARP; else it removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
   leaves wifisvc alone while `lock/` exists and runs `wifi.sh status` on every address change; `clean` at the firewall start.
 - **Setup (OOBE) and factory reset** (`improv.c`, `main.c`): not set up = from an install or a reset until Home
   Assistant's voice assistant subscribed (`core_link` ready -> `state/adopted`; an existing `state/api_key` counts);
@@ -508,13 +576,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `toolchain/linux-<KVER>` + `devices/<codename>/kconfig` (biscuit/radar: IKCONFIG of `boot.img`, `KCONFIG`; donut: a
   fragment on arm64 defconfig, `KFRAG`), with AOSP
   `arm-eabi-4.8` / `aarch64-linux-android-4.9`. Without the module donut falls back to `iwpriv wlan0 driver RX_STAT` (last
-  frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.
+  frame from anyone). The MT7668's CSI commands are accepted but the chip firmware sends no data.  RCPI1 where RCPI0 is
+  255 (cannoli's second antenna receives).  Modversions kernels (athena, cannoli): `devices/<codename>/Module.symvers`
+  from `tools/kcrc.py` (boot.img's `__kcrctab`, checked against stock modules).  Cannoli (Android's common kernel 5.4):
+  `HM_DRIVER_SYMS` (no `kallsyms_lookup_name` export: the driver's own symtab via `find_module`; the `bl` written
+  through a `vmap` alias), `KMOD_INIT` 0xfc (`tools/kmod-init.py`: its `struct module` has `init` 36 bytes on).
 - **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
   `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6; Dot 3: the TAS2770 amplifier's
   `DAC Playback Volume` = AMP_LEVEL, stock 16 of 0..20 in 0.5 dB steps (`speaker_gain_steps` 2), so +2 dB at most:
   `spkgain_max()`/`settings_max()` give the page the control's top; Show 5: the RT5616's line out `OUT Playback Volume`,
   stock 29 = -3 dB of 0..39 in 1.5 dB steps, `speaker_gain_steps` 2 per `speaker_gain_db` 3, a whole dB takes the
-  nearest step), written by hassmic itself (group audio). The Dot 2's
+  nearest step; Dot 5: the MAX98396's `Speaker Volume A`, stock 10 = +14 dB of +4..+21, offered to 16), written by
+  hassmic itself (group audio). The Dot 2's
   HAL writes stock at every mixer start (and per its XML on a jack change; the Dot 3's never writes it): a thread on the
   card's control events writes ours back when it sees stock, and leaves other values (the jack's 11) alone.
   `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>]]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
@@ -569,9 +642,67 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   turned (band position p = LED p + 5: the talker's pair in the middle): Apply needs no root there
   (`ring_designs_live`), and `ring_stock` gives the page the band's own patterns as files.  Every ledctrl call (patterns and brightness) goes through `ledq.c` (issue #40): one at a time, in order,
   each waited for, in its own thread (started together, an unset can overtake its set and leave the pattern on);
-  sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).  The
+  sets and unsets queued one behind the other go in one ledctrl (`LEDQ_BATCH`: it takes repeated -s/-u).
+  Binary animations (ACS, the Echo Dot 5; found by stock's `acs_animation_list.txt`): `<index>.<name>.animation_bin`
+  (big-endian "animagic"/"totl"/"loop"/"fram", 12 RGB pixels, donut's text byte for byte), index files rewritten with
+  ours after stock's (`acs_*`, `layer_config_common.txt` = the JSON flattened; stock's kept as `.pre-hassmic`,
+  `sysinstall.sh leds`).  Its LED manager on the SCP holds every animation from ledcontroller's start and refuses an
+  init past ~400 (a failed one leaves it dead until a reboot), so no palette: Home Assistant's light is drawn when it
+  changes into one of two slots (`hassmic_light_a|b`, `light_apply_acs`) through `src/ledshim/ledshim.c`
+  (`libhmled.so`, device.mk `LEDSHIM`), preloaded into ledcontroller (abstract socket `@hassmic-led`,
+  `aceLedMgr_updateAnimationData`; the daemon's uid, `hassmic_` names only).  Root runs that ledcontroller itself
+  (`main.sh` `ledc_start`/`ledc_watch`): a copy without its file capability, else the linker ignores LD_PRELOAD.  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
+- **Light ring live** (`ringlive.c`, `ringlive.h`, feature `ring_live`, off): hassmic writes the LED driver's frame (the Dot 5: below)
+  itself (`board.ring_frame`, donut's, biscuit's and radar's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0
+  first, on donut scaled by the unit's calibration in the driver; ledcontroller writes it only when its picture
+  changes; radar matched to biscuit by firmware, not probed; PLAN.md "Light ring live",
+  `scripts/led-probe.sh`).  Root's `main.sh` `led_frame` gives that one file to group `LED_GID` 3991 (device.conf
+  `LED_FRAME`, the same path; `tests/unit/ringlive_conf.py`), which runas adds to hassmic's groups; led_current, the
+  calibration, boot_animation and pwm1 stay ledcontroller's/root's.  Colours as seen -> gamma 2.2 (as ring.c's
+  designs) -> x the brightness table's pwm for the ring's level (`led_mute_ring_config.json` rgbTable by idme
+  `capcolor`, as the HAL's scaleDutyCycle), so never above what ledcontroller writes at that level (FD at 100).  One
+  writer thread, latest wins, `RINGLIVE_FPS` 30; waits while `ring_busy()` (the Echo's own patterns) or muted, back
+  150 ms after; reads back every 200 ms and puts ours back, backs off 5 s if something else keeps writing; nothing
+  left: the dark frame once.  HA (`proto_esphome.c`): lights "Light
+  ring LED 1..12" (from the fill's start + rotation), actions `light_ring_frame|animation|design|stop`, select "Light
+  ring design" (`rd_names`, re-listed when the names change: `rd_generation`, main.c `live_names_check`).  Layers:
+  "Light ring" (ring.c keeps its state; `ring_light_live` makes ring.c play no palette pattern, `ring_light_now`;
+  `ringlive_effect`: the palette's five and `RING_LIVE_EFFECTS`; the six music ones `ringlive_music_effect` from
+  `musiclight.c`: the PCM fed by sendspin.c, a2dp.c and main.c's play_media path with its output's queue (the TTS
+  stream's modelled in `playback_thread`: written minus real time, as `s_queued_us`); 12 biquad
+  bands against running ranges, the level and L/R as punch against 1.5 s, kick/snare/hi-hat from log-amplitude flux
+  with level gates, tempo by autocorrelation, a beat grid locked to the kicks (phase by circular mean, then a PLL), the
+  accent every 4 beats; each reading stamped when heard; only while a music effect shows, `musiclight_want`.  Measured
+  by `make unit-ringviz`: tools/ringmusic.py's track with its drums written down, build/ringviz, tools/ringviz.py
+  (scores, and effects.png to look at)), the LED lights over it, an animation over all; HA's
+  transition (LightCommand 14/15, else `LIVE_FADE_MS`) as a fade in seen space (`ringlive_fade`).  SIGTERM and
+  `ringlive_shutdown`: the dark frame, never while the Echo's own pattern shows (main.c `led()` and the mute bracket
+  `ring_set` with `ringlive_yield`/`_yield_end`: no frame of ours starts in between and one in flight is waited for
+  (`write_lock`), so ledcontroller's frame for a static pattern lands after ours; the handler leaves the ring alone
+  until the writer looked; only in hassmic's own pid, not a child forked without exec); init's stop kills outright (a
+  moving effect stays frozen), so `state/ring-live` (the boot id; written once a run when ours first shows, never per
+  frame: /data is flash; deleted at a clean end) has the next start in the same boot make the ring dark at
+  `ringlive_begin` (main.c after settings_load: the mute and the Echo's own known), unless `live_hold` then.  Page: `POST /api/ring/live` (a design's text, as drawn; empty: stop), `live` in
+  GET /api/ring, ring.js `liveShow`.  PC: `HASSMIC_FAKE_FRAME`, `HASSMIC_FAKE_ALSPARAMS`; `tests/unit/ringlive_test.c`,
+  `tests/fake_ha_ring_live.py`.
+  The Echo Dot 5 (binary animations, `ring_live_acs`; picked before `board.ring_frame`, not with `HASSMIC_FAKE_FRAME`):
+  no frame file, the LEDs are the SCP's LED manager's.  Each frame goes as one looped frame into ring.c's slot
+  `hassmic_live` (layer 0 with the light's slots, auto-stop 0): `ring_live_put` (the frame, `shim_update` on the light's
+  connection under `shim_lock`), `ring_live_show` (-s/-u queued; set once per
+  ledcontroller: `live_on`, `live_put_conn`, `shim_conns` counts connections made and lost), unset when
+  nothing of ours is left and by `ringlive_yield` before the Echo's own pattern (the compositor would mix ours into its
+  gaps).  Full duty: ledcontroller gives the LED manager its brightness tables (`prepare_brightness_tables_for_acs`).
+  No read back, marker or SIGTERM frame: `ring_start` unsets the slot.  `shim_check` (ring_tick, `ring_live_on`): the
+  connection hung up = ledcontroller ended, the light and the live frame drawn again into the next one.
+  An update stops the animation it replaces (measured), so libhmled.so wraps ledcontroller's
+  `aceLedMgr_startAnimationWithConfig`/`stopAnimation`/`stopAllAnimations` (preloaded: its HAL's PLT calls land there)
+  and keeps `hassmic_live` as a pair with `hassmic_live_b`: a frame into the one not showing, started with
+  ledcontroller's config, the other stopped; ledcontroller only knows `hassmic_live`.  ~47 ms a swap: ~20 frames a
+  second.  The shim takes 4 clients, `?leds` reads what each LED shows (`aceLedMgr_getLedState`: on, brightness,
+  RGB); `src/tools/ledstate.c` (not in `all`; `runas puffin aipc ledstate [-n N -i MS] [-p RRGGBBx12]`).  ledctrl -g
+  is stale on the Dot 5: trust `?leds`.  `tests/fake_ha_ring_live_acs.py`.
 - **Screen UI** (`src/ui/`, `screen.c`, `screen.h`; device.mk `SCREEN`, else `screen_none.c`; every Show): the
   Echo Show's own screen, small beside any app (Kiosk Satellite, View Assist...).  `src/ui/ui.h` lists the parts:
   `scene.c` (display list with a clip per item, diffed by id into one dirty rectangle; text cache by hash; image cache
@@ -657,7 +788,7 @@ Firewall invariant: Amazon's daemons may only reach local addresses; hassmic its
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
-`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed; its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
+`state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed, and with `kiosk_dlna` on its DLNA renderer (`kiosk_dlna` in `lockdown.sh`: the TCP port of the app's own setting `flutter.ks.dlna.port`, read through `runas` as its user, while its uid listens there per `/proc/net/tcp*`; UDP 1900 to 239.255.255.250 only while its uid alone holds 1900; issue #109); its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it.
 
@@ -666,7 +797,8 @@ DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there 
 `tools/wakealign/corpus_eval.py` measures the replay's start on it (stock Pryon under qemu, the release's rule, the
 aligner, adapted) and `tools/vad_leadin.py` HA's VAD with and without the lead-in (build/ha-venv).
 `tools/` is PC-side reverse-engineering and firmware tooling (`payload_dump.py`, Thumb disassembly helpers,
-`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `vol-curve.py`: an Android Echo's
+`davs-fetch.py` for extra wake word models, `arbsim.py` for arbitration's wait estimator, `kcrc.py` (a modversions
+kernel's CRCs out of its boot image) and `kmod-init.py` (Wi-Fi motion's module),  `vol-curve.py`: an Android Echo's
 volume curve with a Dot's micRaw beside it, for `board.volume_curve`; `cold-lead.py`: what a sound loses on a closed
 output, a PC microphone beside it, for `board.cold_lead_ms`).
 

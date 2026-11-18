@@ -38,7 +38,7 @@ int  ble_present(void);                 /* the radio exists and is ours (not -B;
 void ble_start(const struct ble_handler *h);    /* controller thread; takes the radio once btmanagerd has stopped.
                                                    Again to set the handler (NULL: none yet) */
 const char *ble_mac(void);              /* "AA:BB:CC:DD:EE:FF", "" if unknown */
-int  ble_scanning(void);                /* 1 while the controller scans */
+int  ble_scanning(void);                /* 1 while scanning, as HA was last told: brief pauses (ble_quiet, GATT) left out */
 int  ble_connections(uint64_t *addrs);  /* slots in use (connecting or connected), their addresses: BLE_MAX_CONN room */
 
 /* Requests: queued for the controller thread, never block.  Each is answered through the handler. */

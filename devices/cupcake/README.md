@@ -32,36 +32,43 @@ Read the [XDA thread][xda] in full first: the unlock is not this project's work.
 ### Requirements
 
 Besides the general [requirements](../../README.md#requirements): an Echo Input from 2018 (C1125P), a micro-USB data
-cable, Linux running on the PC itself (not a VM: the bootrom's USB timing is tight), and these files in
-`firmware/cupcake/` (git-ignored):
+cable, and these files in `firmware/cupcake/` (git-ignored):
 
 | File | Source | sha256 |
 |---|---|---|
 | `update-kindle-cupcake-NS6575_user_8338_0013323244164.bin` | stock Fire OS 6.5.7.5 for `cupcake`, [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.cupcake.android.os/675ff746519090e1cbd2366a92132d55-13323244164-fire-os-6-5-7-5-ns6575-8338-2026-10-14/) | `6f076e3193bd0431818147fe0f41172d55ed2fa8361f88b90368bdbed6da310b` |
-| `kamakiri-cupcake-v1.0.0.zip` | bootloader unlock + TWRP, [XDA thread][xda] (its `lk` and `tee` are this firmware's, byte for byte) | `bb76e4a86c90015ac80b5bd2aacb5e75b4caa3919f900f202ef480708cf6616f` |
-| `boot-root.zip` | **the Echo Dot 3's** root zip, [donut's XDA thread][xda-donut] (its system-as-root path fits this firmware) | `de49cc88b27a8e77cf97cf0156bee50e4ddc0e116c41aaede06b494e38397be0` |
+| `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`); `scripts/setup.sh` fetches it itself | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
 | `toolchain/android-ndk-r21e/` | unpack <https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip> into `toolchain/` | – |
+
+The unlock's own files are the [XDA thread][xda]'s, the root's (`boot-root.zip`, the Echo Dot 3's: its system-as-root
+path fits this firmware) [donut's XDA thread][xda-donut]'s: they say which, kept current with their procedure. Nothing
+here downloads or reads them.
 
 Use exactly this firmware version: everything was worked out against its binaries, and `scripts/probe.sh` checks the
 Echo for it. Flashing it in step 1 replaces whatever the Echo ran before.
 
 ### 1. Unlock, flash stock firmware, root
 
-The Echo Input runs from its micro-USB socket, and the bootrom answers on it: no opening, no soldering. Until the install
+The Echo Input runs from its micro-USB socket, which also carries its USB: no opening, no soldering. Until the install
 the PC's port powers it (USB 2 gives 0.5 A, less than its own adapter; what it draws is not measured): if it restarts
 or drops off adb during the later steps, put a powered USB hub between them.
 
+Once, first: USB access without sudo, and ModemManager kept off the Echo's bootrom.
+
 ```sh
-sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload   # USB without sudo; keeps ModemManager off the bootrom
-unzip firmware/cupcake/kamakiri-cupcake-v1.0.0.zip -d firmware/cupcake/kamakiri
-K=$(dirname "$(find firmware/cupcake/kamakiri -name bootrom-step.sh)")
-(cd "$K" && ./bootrom-step.sh)    # start it, then: hold the action button (•), plug the micro-USB cable from the PC into
-                                  # the Echo (its power adapter out), keep holding until it asks for Enter
-(cd "$K" && ./fastboot-step.sh)   # when the light shows a rotating rainbow (kaeru); ends in TWRP
+sudo cp scripts/51-echo-unlock.rules /etc/udev/rules.d/ && sudo udevadm control --reload
 ```
 
-Flash the firmware into both A/B slots, then root, as on donut (TWRP makes the slot it flashed the active one; do not
-switch it back by hand):
+Unlock the Echo **by hand, as the [XDA thread][xda] says**, from its first post: which Echos it is for, its files, how
+to get the Echo ready and every command are there, kept up to date. R0rt1z2 asks (since kamakiri-donut v1.1.0) that the
+unlock is only ever run that way, never from an installer or a script, so this page does not repeat its steps and
+`scripts/setup.sh cupcake` does not run them either: it names the thread, waits for Enter and then checks for TWRP on
+adb. **Stop once TWRP is running**: the firmware below is this project's step, and boot-root comes after it. Stuck, or
+the Echo does something the thread does not say? Ask in the thread, with what the Echo did, in your own words, and the
+tool's output or log as it is.
+
+Flash the firmware into both A/B slots, as on donut (TWRP makes the slot it flashed the active one; do not switch it
+back by hand):
 
 ```sh
 F=firmware/cupcake/update-kindle-cupcake-NS6575_user_8338_0013323244164.bin
@@ -71,23 +78,29 @@ adb shell twrp install /sdcard/update.zip      # one slot; it becomes the active
 adb reboot recovery
 adb shell twrp install /sdcard/update.zip      # must name the OTHER slot this time
 adb reboot recovery
-adb push firmware/cupcake/boot-root.zip /sdcard/ && adb shell twrp install /sdcard/boot-root.zip   # patches both slots
-adb reboot
 ```
+
+Then root, by hand: the Echo Dot 3's `boot-root` (its system-as-root path fits this firmware), installed from TWRP as
+[donut's XDA thread][xda-donut] says, with the file the thread offers now, until Fire OS has started with root adb
+(`adb shell id -u` says 0). `scripts/setup.sh cupcake` does not install it either: it waits for Enter and checks.
 
 TWRP refuses to write lk, preloader and tee: leave them alone in any case. Result: stock Fire OS, unregistered, no
 Wi-Fi, and `adb shell` is root.
 
 ### 2. Unpack the firmware and build
 
-With `PREBUILT=1` (a commit CI built) only `boot-root` needs unpacking.
+With `PREBUILT=1` (a commit CI built) only magiskpolicy needs fetching.
 
 ```sh
 unzip firmware/cupcake/update-kindle-*.bin payload.bin -d firmware/cupcake/
 python3 tools/payload_dump.py firmware/cupcake/payload.bin firmware/cupcake/images
 mkdir -p firmware/cupcake/rootfs
 debugfs -R "rdump / firmware/cupcake/rootfs" firmware/cupcake/images/system.img
-unzip firmware/cupcake/boot-root.zip -d firmware/cupcake/boot-root    # the installer uses its patch/magiskpolicy32
+curl -fsSL -o toolchain/Magisk-v30.7.apk https://github.com/topjohnwu/Magisk/releases/download/v30.7/Magisk-v30.7.apk   # the installer's magiskpolicy
+sha256sum toolchain/Magisk-v30.7.apk   # e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5
+unzip -p toolchain/Magisk-v30.7.apk lib/armeabi-v7a/libmagiskpolicy.so > firmware/cupcake/magiskpolicy32
+chmod 755 firmware/cupcake/magiskpolicy32
+sha256sum firmware/cupcake/magiskpolicy32   # e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a
 make kernel-tools DEVICE=cupcake          # optional: Wi-Fi motion's module (donut's kernel and compiler)
 make DEVICE=cupcake
 scripts/probe.sh                          # must not list any DIFFERENT library

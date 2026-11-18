@@ -56,6 +56,7 @@ static void drawer_go(struct scene *s, const char *pkg)
     d->go = 1; snprintf(d->go_pkg, sizeof d->go_pkg, "%s", pkg);
     s->view = V_FACE;                                           /* what shows when that app is gone again */
     s->own_asked = 0;                                           /* (the home app asked for: back when it leaves, tried again) */
+    music_page_hold(s);                                         /* (and kept: not the music page over it again this track) */
     scene_backdrop(s, NULL, 0, 0);                              /* not the other app's picture while this one comes: ours */
 }
 
@@ -154,7 +155,7 @@ void drawer_draw(struct scene *s)
         time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm); char clk[16], date[64];
         if (s->h12) snprintf(clk, sizeof clk, "%d:%02d", tm.tm_hour % 12 ? tm.tm_hour % 12 : 12, tm.tm_min);
         else snprintf(clk, sizeof clk, "%02d:%02d", tm.tm_hour, tm.tm_min);
-        strftime(date, sizeof date, "%A, %e %B", &tm);
+        ui_date(date, sizeof date, &tm, s->lang);
         text(s, ID_DRAWER + 65, clk, U(44), 0, cx1 - cx0, cx1, qy - U(4), 2, FG, 255);
         text(s, ID_DRAWER + 66, date, U(18), 0, cx1 - cx0, cx1, qy + U(52), 2, DIM, 255);
     }
@@ -184,9 +185,9 @@ int drawer_act(struct scene *s, int a, int arg, int ev)
     case A_DR_HOME: {
         const char *pkg; home_label(s, &pkg);
         if (pkg[0]) drawer_go(s, pkg);
-        else { drawer_close(s, 0); go_home(s, V_FACE); }
+        else { drawer_close(s, 0); go_home(s, V_FACE); music_page_hold(s); }
     } break;
-    case A_DR_FACE: drawer_close(s, 0); go_home(s, V_FACE); ask_own(s); break;
+    case A_DR_FACE: drawer_close(s, 0); go_home(s, V_FACE); ask_own(s); music_page_hold(s); break;
     case A_DR_MUSIC: case A_DR_NOW: drawer_close(s, 0); music_show(s, a == A_DR_NOW ? 0 : -1); break;
     case A_DR_DND: s->dnd = !s->dnd; send(s, "dnd %d", s->dnd); break;
     case A_DR_SLEEP: drawer_close(s, 1); if (s->p->sleep) s->p->sleep(s->ctx); break;
