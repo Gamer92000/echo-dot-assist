@@ -57,7 +57,12 @@ const char *const ring_effects[] = { "None", "Pulse", "Spin", "Blink", "Rainbow"
 const int ring_neffects = 5;
 enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 
-#define FRAME_MS     33                 /* 30 frames a second while something moves */
+/* ~60 frames a second while something moves (the panel's rate), on a grid of their own so that a late frame does not
+ * push the next ones back */
+#define FRAME_NS     16666667LL
+#define SMOOTH_MS    40                 /* each pixel eases to what the pattern wants over about this long (a time constant):
+                                           frames and steps (a blink, a frame of a design, a pattern ending) fade instead of
+                                           snapping */
 #define MAX_W        2048
 #define MAX_ROWS     40
 #define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default): without a screen UI */
@@ -70,6 +75,7 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 
 struct rgb { float r, g, b; };
 
+static long long mono_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000000000LL + t.tv_nsec; }
 static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
 static struct rgb hex(unsigned v) { return (struct rgb){ (v >> 16 & 255) / 255.f, (v >> 8 & 255) / 255.f, (v & 255) / 255.f }; }
 static struct rgb mix(struct rgb a, struct rgb b, float k) { return (struct rgb){ a.r + (b.r - a.r) * k, a.g + (b.g - a.g) * k, a.b + (b.b - a.b) * k }; }
@@ -94,7 +100,8 @@ static struct rgb hue(float h)                   /* h in turns: full colour */
 /* ---------------------------------------------------------------- drawing: the ring, unrolled */
 
 /* The Dots' ring has 12 LEDs; laid out along the band, each takes a twelfth of the width and blends into its neighbours
- * over the middle 40 % between them: the ring's steps stay visible, without hard edges.  Unrolled with the talker at the
+ * along the whole span between their centres, on a smoothstep: no hard edges and no flat blocks, each LED still the
+ * peak at its own centre (the 40 % blend this replaced showed the twelve as blocks on a wide screen).  Unrolled with the talker at the
  * centre: what stock's ring turns towards the talker (the cyan of the listening ring) is in the middle, the side away
  * from it at both ends. */
 #define LEDS 12
@@ -103,7 +110,7 @@ static void unroll(const struct rgb led[LEDS], struct rgb *px, int w)
     for (int x = 0; x < w; x++) {
         float f = (x + 0.5f) * LEDS / w - 0.5f; int i = (int)floorf(f); float u = f - i;
         int a = i < 0 ? 0 : i, b = i + 1 > LEDS - 1 ? LEDS - 1 : i + 1;
-        px[x] = mix(led[a], led[b], clamp01((u - 0.5f) * 2.5f + 0.5f));
+        px[x] = mix(led[a], led[b], u * u * (3 - 2 * u));
     }
 }
 
@@ -212,6 +219,88 @@ static void draw(int p, struct rgb *led, long long t, int arg, float loudness)
         break; }
     case P_IDENTIFY: for (int i = 0; i < LEDS; i++) led[i] = hue((float)i / LEDS - (float)(t % 2000) / 2000); break;
     }
+}
+
+/* ---------------------------------------------------------------- the patterns drawn for the band itself
+ *
+ * The band has no LEDs.  The patterns above are the Dots' ring's, twelve slots blended; those that are not one colour
+ * everywhere (a fill, a front, a runner, a blink in groups) are drawn here instead, per pixel, as functions of the
+ * position u (0 left .. 1 right, the talker at 0.5) and the time: the same timings and colours, but no steps.  Stock
+ * draws only listening, thinking, mic off and calls on the Show's band, as Lottie compositions (not read here: the
+ * shapes are best guesses); the rest has no stock band at all.  Positions are also given in "slots" (twelfths of the
+ * width), to keep the timings and sizes of the Dots' files. */
+static float smooth01(float v) { v = clamp01(v); return v * v * (3 - 2 * v); }
+/* a soft bump of width sigma (turns of the width) centred at c (turns), wrapping at the ends */
+static float glow(float u, float c, float sigma)
+{
+    float d = fabsf(fmodf(u - c + 2.5f, 1) - 0.5f);
+    return expf(-d * d / (2 * sigma * sigma));
+}
+
+/* a glow running round (wrapping at the ends) at a fractional position, as runner(): s a slot position */
+static float run_px(float s, long long t, int lap, float tail)
+{
+    float d = fmodf((float)(t % lap) / lap * LEDS - s + LEDS + LEDS / 2.0f, LEDS) - LEDS / 2.0f;      /* > 0: behind the head */
+    return smooth01(d < 0 ? 1 + d : 1 - d / (tail + 1));
+}
+
+/* 1 if p is drawn here (row[w] filled), else 0: the slots' draw() does it */
+static int render_px(int p, struct rgb *row, int w, long long t, int arg, float loudness)
+{
+    switch (p) {
+    case P_LISTEN: case P_THINK: case P_END: case P_TIMER: case P_TIMER_SHORT: case P_PAIRING: case P_SETUP:
+    case P_CALL_OUT: case P_CALL_IN: case P_CALL: case P_CALL_END: case P_VOLUME: case P_ASSIST: case P_IDENTIFY: break;
+    default: return 0;
+    }
+    for (int x = 0; x < w; x++) {
+        float u = (x + 0.5f) / w, s = u * LEDS - 0.5f;                  /* s: slot coordinates, slot i centred at i */
+        float fc = fabsf(u - 0.5f) * LEDS - 0.5f;                        /* from the talker: 0 at the middle slots, 5 at the ends */
+        struct rgb c = { 0, 0, 0 };
+        switch (p) {
+        case P_LISTEN:
+            if (t < 500) {                                               /* blue in from both ends, cyan at the front */
+                float front = clamp01(t / 500.f) * (LEDS / 2), d = front - (LEDS / 2 - fc - 0.5f);
+                c = scale(mix(hex(CYAN), hex(BLUE), smooth01((d - 0.3f) / 1.2f)), smooth01(d / 0.9f));
+            } else {                                                     /* blue, a cyan core that swells with the voice */
+                float core = smooth01(1 - (fc - 2.5f * loudness) / 1.3f);
+                c = mix(scale(hex(BLUE), 0.55f + 0.45f * loudness), mix(hex(CYAN), hex(WHITE), 0.08f * loudness * loudness), core);
+            }
+            break;
+        case P_THINK: {                                                  /* two wide cyan glows drifting over the blue, at
+                                                                            speeds that do not match: it never repeats the
+                                                                            same way twice, and nothing blinks */
+            float g = glow(u, t / 1700.f, 0.13f) + 0.7f * glow(u, 0.4f - t / 2300.f, 0.10f);
+            c = mix(scale(hex(BLUE), 0.6f), hex(CYAN), clamp01(g));
+            break; }
+        case P_END: {                                                    /* dark from the talker outwards, the last cyan */
+            float gone = clamp01(t / 600.f) * (LEDS / 2 + 1);
+            c = scale(mix(hex(CYAN), hex(BLUE), smooth01(fc - gone + 1.0f)), smooth01(fc - gone + 1.7f));
+            break; }
+        case P_TIMER: case P_TIMER_SHORT: {                              /* groups of three blinking against the others */
+            float m = 0.5f + 0.5f * cosf((float)M_PI * (s / 3 + t / 375.f));
+            c = mix(scale(hex(BLUE), 0.6f), hex(CYAN), m);
+            break; }
+        case P_PAIRING: c = scale(hex(BLUE), run_px(s, t, 1060, 0)); break;
+        case P_SETUP: c = scale(hex(ORANGE), run_px(s, t, 1380, 0)); break;
+        case P_CALL_OUT: c = scale(hex(GREEN), run_px(s, t, 900, 5)); break;
+        case P_CALL: c = scale(hex(GREEN), 0.85f * run_px(s, t, 2400, 7)); break;
+        case P_CALL_IN: {                                                /* green swells passing along, all pulsing */
+            float m = 0.5f + 0.5f * cosf(2 * (float)M_PI * (s - t / 1300.f) / 4);
+            c = scale(hex(GREEN), (0.25f + 0.75f * wave(t, 1300)) * m);
+            break; }
+        case P_CALL_END: {                                               /* green running from the middle to both ends */
+            float d = clamp01(t / 1480.f) * (LEDS / 2 + 2) - fc;
+            c = scale(hex(GREEN), d > 0 && d < 2 ? smooth01(1 - fabsf(d - 1)) : 0);
+            break; }
+        case P_VOLUME: case P_ASSIST: {                                  /* filled from the left to the level, a soft end */
+            float v = arg >= 100 ? 1 : arg <= 0 ? 0 : smooth01((arg / 100.f - u) * LEDS + 0.5f);
+            c = scale(hex(p == P_ASSIST ? CYAN : WHITE), v);
+            break; }
+        case P_IDENTIFY: c = hue(u - (float)(t % 2000) / 2000); break;
+        }
+        row[x] = c;
+    }
+    return 1;
 }
 
 /* ---------------------------------------------------------------- state */
@@ -585,7 +674,8 @@ static void *band_thread(void *arg)
     static struct rgb row[MAX_W], last[MAX_W];
     int fd = -1, w = 0, have_rows = -1, sent = 0, timeout = 0, fails = 0, waited = 0, off_ui = 0;
     float last_k = -1;                              /* the brightness of the frame sent last */
-    long long last_wake = 0, next_check = 0;
+    long long last_wake = 0, next_check = 0, eased_ns = 0, frame_at = 0;
+    static struct rgb eased[MAX_W];                 /* the band as shown: row[] eased towards the pattern's */
     for (;;) {
         pthread_mutex_lock(&lock);
         int want = rows, wake = wake_req; wake_req = 0;
@@ -660,13 +750,26 @@ static void *band_thread(void *arg)
         int lv = atomic_load(&level_db);            /* the talker: -50 dBFS nothing, -20 the widest */
         float target = clamp01((lv / 10.f + 50) / 30);
         loud += (target - loud) * (target > loud ? 0.35f : 0.08f);
+        int native = 0;
         if (!designed) {
-            if (p < P_COUNT) draw(p, led, now - at, arg_, loud);
+            if (p < P_COUNT) { native = w <= MAX_W && render_px(p, row, w, now - at, arg_, loud); if (!native) draw(p, led, now - at, arg_, loud); }
             else if (l.on || blink) { light_draw(&l, blink, led, now); moving = blink || l.effect != E_NONE; }  /* a still
                                                      * light: no frames 30 times a second, the 1 s wait below takes a new level */
             else { all(led, hex(0)); moving = 0; }
         }
-        unroll(led, row, w);
+        if (!native) unroll(led, row, w);
+        {                                           /* ease: a gap (a still band woken) counts as a frame, not as time to settle */
+            long long ns = mono_ns(), dt = ns - eased_ns; eased_ns = ns;
+            float dms = dt < 1000000 || dt > 2 * FRAME_NS ? FRAME_NS / 1e6f : dt / 1e6f;
+            float a = 1 - expf(-dms / SMOOTH_MS), off = 0;
+            for (int x = 0; x < w; x++) {
+                float m = fmaxf(fabsf(row[x].r - eased[x].r), fmaxf(fabsf(row[x].g - eased[x].g), fabsf(row[x].b - eased[x].b)));
+                if (m < 1 / 512.f) eased[x] = row[x];          /* close enough: land, so a still band stops sending */
+                else { eased[x] = mix(eased[x], row[x], a); off = fmaxf(off, m); }
+            }
+            if (off) moving = 1;                    /* still on its way: the next frame is due even if the pattern is still */
+            memcpy(row, eased, sizeof row[0] * w);
+        }
         float k = core_led_brightness(-1) / 100.f;
         if (!sent || k != last_k || memcmp(row, last, sizeof row[0] * w)) {    /* the level too: a still light dims */
             if (send_frame(fd, row, w, have_rows, k) < 0) {
@@ -677,9 +780,13 @@ static void *band_thread(void *arg)
             memcpy(last, row, sizeof row[0] * w); last_k = k; sent = 1;
         }
         pthread_mutex_lock(&lock);
-        if (moving) {
+        if (moving) {                               /* the next frame on the grid, not a frame's length after this one */
+            long long nw = mono_ns();
+            frame_at += FRAME_NS;
+            if (frame_at < nw || frame_at > nw + 2 * FRAME_NS) frame_at = nw + FRAME_NS;      /* late, or the band was still */
             struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += FRAME_MS * 1000000L; if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+            long long ns = ts.tv_nsec + (frame_at - nw);
+            ts.tv_sec += ns / 1000000000LL; ts.tv_nsec = ns % 1000000000LL;
             pthread_cond_timedwait(&cv, &lock, &ts);
         } else {                                    /* dark: until something changes, or the timeout check is due */
             struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;

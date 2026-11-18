@@ -3512,7 +3512,14 @@ Run in this order. Each step says what it proves.
       pair in the middle, never turned), Apply without root (`ring_designs_live`), the band's patterns as files for
       the page (`ring_stock`), the page's band drawing and designer; `hassmic_assist_NN` in cyan on the band.
       `ring_band_test.c` (with ringdesign.c), the page checked in headless Chromium on the PC build, the build on the
-      tester's Show (self test, factory copy).
+      tester's Show (self test, factory copy).  Smooth band (2026-11-18, an Echo Show 8 1st gen): the slots' blend is a
+      smoothstep over the whole gap (was the middle 40 %, which read as twelve blocks), the patterns that are not one
+      colour everywhere are drawn per pixel (`render_px`: listening's core follows the talker's level, thinking is two
+      glows at 1.7 s and 2.3 s, the volume bar has a soft end), every pixel eases over 40 ms (`SMOOTH_MS`), and
+      frames go out on a 60 Hz grid (was a 33 ms wait after each frame: ~30 and uneven).  Stock draws only listening,
+      thinking, mic off and calls on the band (Lottie, docs/re-checkers.md): its shapes were not read, so these are
+      our own; speeds, widths and the 40 ms are guesses.  `ring_band_test.c` waits for the fade (250 ms), the
+      page's band drawing still matches pixel for pixel (`band_map_test.py`).  Looks right on the Show 8 (owner).
       Screen UI (2026-10-14): not one frontend for everyone, a small fallback of our own and any app beside it.
       `src/ui/` (scene.c: face, music, switcher as a display list diffed per frame into one dirty rectangle; gfx.c:
       anti-aliased boxes and polygons by distance, fills inside; android.c: JNI) as libhmui.so, loaded by

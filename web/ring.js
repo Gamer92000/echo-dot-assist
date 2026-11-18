@@ -262,13 +262,13 @@ function ringImage(px, s, talker) {
 // so a tile shows it.  As fractions of a square canvas, for the designer's targets too
 const BAND_BOX = { x0: 0.04, x1: 0.96, top: 0.27, y0: 0.63, y1: 0.73 };
 // the band's colours left to right, w of them, as ring_band.c unroll() draws them: each LED a twelfth of the width,
-// running into the next over the middle 40 % between them
+// running into the next along the whole span between their centres, on a smoothstep
 function bandColours(px, w) {
   const n = px.length, out = new Array(w);
   for (let x = 0; x < w; x++) {
     const f = ((x + 0.5) * n) / w - 0.5, i = Math.floor(f), u = f - i;
     const a = px[bandLed(Math.max(0, i), n)], b = px[bandLed(Math.min(n - 1, i + 1), n)];
-    const k = Math.max(0, Math.min(1, (u - 0.5) * 2.5 + 0.5));
+    const k = u * u * (3 - 2 * u);
     out[x] = [0, 1, 2].map((c) => a[c] + (b[c] - a[c]) * k);
   }
   return out;
