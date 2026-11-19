@@ -2,6 +2,20 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-18 — A smoother light band on the Echo Shows
+
+- **The light band along the bottom of the Echo Show's screen no longer steps.** It was the Dots' ring laid out in a
+  line, twelve lights blended across the width, with a hard edge between them, and every animation moved in whole
+  steps. The patterns that are not one colour everywhere (listening, thinking, the end of listening, timers, setup
+  and pairing, calls, the volume bar, identify) are now drawn for the band itself, pixel by pixel, with the same
+  timings and colours. Listening fills in from both ends and keeps a cyan core in the middle that swells and shrinks
+  with how loud you speak. Thinking is two wide soft glows drifting across the band at different speeds, in place of
+  twelve lights taking turns. The volume bar ends softly. Your own designs and Home Assistant's light keep the
+  twelve-light layout, blended smoothly across the whole gap between neighbours.
+- **Changes fade in about 40 ms, and the band runs at 60 frames a second** on an even beat (30 before, and each frame
+  waited a fixed 33 ms after the last was drawn, so any late frame slowed all that followed). A pattern ending, a blink
+  or the next frame of a design is a quick fade, not a snap.
+
 ## 2026-11-18 — The language you speak, from the right time zone
 
 - **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to

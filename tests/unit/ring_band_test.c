@@ -129,12 +129,12 @@ int main(int argc, char **argv)
     ring_unset("active-start"); ring_set("active-thinking"); ms(300);
     c = px_at(480);
     check(b_(c) > 100 && r_(c) < 160, "thinking: blue");
-    ring_set("volume_step-40"); ms(200);
+    ring_set("volume_step-40"); ms(450);      /* the LEDs ease (SMOOTH_MS): settled after ~250 ms */
     check(px_at(100) == 0xffffff && px_at(250) == 0xffffff && px_at(600) == 0,
           "volume over thinking: 40 % of the LEDs white from the left, the rest dark");
     ring_unset("volume_step-40"); ring_unset("active-thinking"); ring_set("active-end"); ms(300);
-    check(px_at(480) == 0 && b_(px_at(10)) > 100, "active-end: dark from the talker outwards");
-    ms(500);
+    check(g_(px_at(480)) < 16 && b_(px_at(480)) < 16 && b_(px_at(10)) > 100, "active-end: dark from the talker outwards");
+    ms(800);
     check(px_at(10) == 0, "active-end: gone after 0.6 s");
 
     ring_set("mics-off_on"); muted = 1; ms(1300);
@@ -146,11 +146,11 @@ int main(int argc, char **argv)
     ring_unset("mics-off_on"); muted = 0; ms(300);
     c = px_at(480); long d = px_at(0);
     check(b_(c) > 100 && r_(c) < 50 && b_(d) > 100, "the timer: cyan and blue, the whole width");
-    ring_unset("ready-timer"); ms(1200);
+    ring_unset("ready-timer"); ms(1700);      /* the fade out (SMOOTH_MS), then the thread's idle second */
     check(last_timeout == 300000, "mic on again: 5 min");
 
     struct ring_light l = { .on = 1, .brightness = 1, .color_brightness = 1, .r = 1, .g = 0.5f, .b = 0, .fill = 100 };  /* yellowish, no effect */
-    ring_light_set(&l, 0); ms(200);
+    ring_light_set(&l, 0); ms(450);
     c = px_at(10);
     check(r_(c) == 255 && g_(c) > 120 && g_(c) < 135 && b_(c) == 0 && px_at(950) == c, "Home Assistant's light: its colour across the band");
     brightness = 50;                                /* "LED brightness" while the picture stands still */
@@ -161,9 +161,9 @@ int main(int argc, char **argv)
     ring_set("call_connected"); ms(600);
     int green = 0; for (int x = 40; x < W; x += 80) if (g_(px_at(x)) > 150 && r_(px_at(x)) < 30) green++;
     check(green >= 2 && r_(px_at(10)) < 30 && r_(px_at(950)) < 30, "a call over the light: green going round, the light gone meanwhile");
-    ring_unset("call_connected"); ms(200);
+    ring_unset("call_connected"); ms(450);
     check(px_at(10) == c, "the light back after the call");
-    l.on = 0; ring_light_set(&l, 0); ms(200);
+    l.on = 0; ring_light_set(&l, 0); ms(450);
     check(px_at(10) == 0, "light off: black");
 
     /* Designs (ringdesign.c), as the settings page makes them: on the band as soon as applied, flattened with LEDs 10
@@ -264,7 +264,7 @@ int main(int argc, char **argv)
     ring_set("hassmic_assist_50");
     WAIT(px_at(40) == 0x00ffff && px_at(600) == 0);
     check(px_at(40) == 0x00ffff && px_at(600) == 0, "the replies' own volume: cyan");
-    ring_unset("hassmic_assist_50"); ms(200);
+    ring_unset("hassmic_assist_50"); ms(500);
 
     long n = nframes(); ms(500);
     check(nframes() == n, "nothing moving: no frames sent");

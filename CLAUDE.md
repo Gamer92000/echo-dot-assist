@@ -762,8 +762,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   along).  `json.c` is a token reader (no DOM copies, depth 64; `tests/unit/json_test.c` fuzzes it).
   `tests/fake_ma_api.py`: a stand-in MA server.
 - **Light band** (`ring_band.c`, the Echo Show's `RING` in device.mk instead of `ring.c`): the same `ring.h` drawn as a
-  band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended across the
-  width, the talker's side in the middle; never turned: the Show's beam says too little, docs/re-checkers.md) plus
+  band along the bottom of the screen, every pattern as the Dots' ring unrolled (12 virtual LEDs blended on a smoothstep across the
+  width, the talker's side in the middle; the patterns that are not one colour everywhere are drawn per pixel by
+  `render_px` instead, as functions of position and time, no slots; every pixel eased over `SMOOTH_MS`, frames on a
+  60 Hz grid (`FRAME_NS`); never turned: the Show's beam says too little, docs/re-checkers.md) plus
   HA's light, one at a time by priority.  `scripts/device/ringbar.dex` (`tools/mkringbar.py` on `tools/dexasm.py`,
   next to the binary, `HASSMIC_RINGBAR`) runs as app_process: overscan for the band, a SurfaceFlinger layer over it,
   "ready <w> <rows>" on stdout, then frames (w x rows ARGB) on stdin.  Setting `light_band` (rows, 0 off).  Screen

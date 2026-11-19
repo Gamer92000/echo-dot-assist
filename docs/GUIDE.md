@@ -513,8 +513,10 @@ Beyond the README's two figures:
 - **Echo Show 5 (both generations) and Echo Show 8**: no ring; its lights run along the bottom edge of the screen as the ring laid out in a line (the
   talker's side always in the middle: two microphones tell directions apart too poorly to turn it). The band keeps
   that strip of the screen for itself, 10 pixels by default ("Light band" on the settings page; 0 gives the whole
-  screen to the apps and shows no band), so an app shown on the screen is never covered. The light "Light ring" works
+  screen to the apps and shows no band), so an app shown on the screen is never covered. Its patterns are drawn for the band, smoothly (listening swells with
+  how loud you speak). The light "Light ring" works
   there too, in any colour, and so do your own designs: each shows on the band as the ring's twelve LEDs in a row,
+  blended smoothly into each other,
   the side that faces the talker in the middle, never turned (the settings page draws and edits them that way on
   these models, and Apply shows them at once). A design made on a Dot works on the band and the other way round;
   the designer's Ring / Band switch shows a design either way on any Echo.
