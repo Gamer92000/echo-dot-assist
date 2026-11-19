@@ -106,7 +106,9 @@ by side to copy settings and wake words between them, the log. A press of the ac
 - A **Linux PC**, running Linux on the machine itself (not macOS, not a VM or WSL: the unlock needs direct USB; a live
   USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
   about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
-  GitHub's build (8 for an Echo Input). On a live USB stick the session's own disk is RAM: keep the repository on a drive.
+  GitHub's build (8 for an Echo Input) — and about 35 GB for an Echo Dot 5, whose manual install builds the recovery
+  from a 26 GB source tree ([its page](devices/cannoli/README.md#what-you-need) breaks it down). On a live USB stick
+  the session's own disk is RAM: keep the repository on a drive.
   The setup offers to install what is missing. An Echo that is **unlocked already** (by hand, as its XDA thread
   says) can also be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb`
   (platform-tools) and `python3`.
@@ -210,7 +212,8 @@ Open issues and measurements: [PLAN.md](PLAN.md).
   if it gets internet.
 - **For good**: `scripts/install-system.sh --uninstall`. On the Echo Shows this also wipes the Echo's data, which
   Amazon's apps need to start again: it starts at Amazon's setup.
-- **All of it**: reflash the stock firmware from TWRP, step 1 of the model's page.
+- **All of it**: reflash the stock firmware from TWRP, step 1 of the model's page (cannoli: its
+  page's [Going back to stock](devices/cannoli/README.md#going-back-to-stock)).
 - **Start over** but keep the install: [factory reset](docs/GUIDE.md#factory-reset) (hold the action button 10 s).
 
 ## Security
