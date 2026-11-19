@@ -471,10 +471,19 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   Echos page from `arb_status_json`
   (members with name, IP and whether they arbitrate from their signed beacons, others: in no network / younger / older); other Echos' pages are called cross-origin (CORS `*`,
   the signature counts), each approved once with its own button; "make like this Echo" posts this one's export.
-  Name: one, made at start and stored nowhere (`main.c` `name_make`): `board.default_name` (the model: "Echo Dot 3")
-  plus the Wi-Fi MAC's last 3 bytes ("Echo Dot 3 5695c4", node `echo-dot-3-5695c4`), as ESPHome's name_add_mac_suffix;
-  people name the Echo in Home Assistant.  No rename anywhere (page "Name" row only shows it; the owner's note beside
-  it, `state/note`, issue #153: web.c, in the unsigned hello, not exported); `-n` only for the PC
+  Name: `main.c` `name_make` generates `board.default_name` plus the Wi-Fi MAC's last 3 bytes ("Echo Dot 3 5695c4").
+  `name_load` fixes the node identity from that original name (or PC `-n`) before loading `state/display_name`.
+  Login `renderThrough` reads each peer's public hello for its visible name, retaining the discovered node as fallback;
+  this display-only lookup never changes voucher verification (`tests/unit/web_login_test.py`, `make unit-web_login`).
+  Arbitration/pairing warnings and the web Drop In banner resolve nodes with `peerDisplayName` from peer records.
+  Show `screen.c` resolves the active caller through public hello on a separate worker (same web port, node checked,
+  30 s refresh, node fallback); only the UI's `peer` line changes. Drop In routing and HA sensor data remain nodes.
+  Parser regression: `make unit-screen_peer_name`.
+  The web page's System / Name posts a signed UTF-8 body to `/api/name` (empty restores automatic, 63 bytes maximum,
+  no controls or outer spaces): saved atomically, then `state/restart` asks root to restart the service. The override
+  is shared by web, ESPHome friendly_name, Bluetooth, Sendspin and Wyoming; never exported or copied. HA's manual
+  name override stays authoritative there. The owner's note beside it (`state/note`, issue #153) stays independent;
+  `-n` only for the PC
   (no MAC).  Old `state/name`/`state/node` are deleted at start, hassmic.conf `NAME` is ignored.  `state/restart`
   (its text says why: wake word engine), which root's `ota_watch` turns into `stop hassmic; start hassmic`.
   Identify (`POST /api/identify`, HA button `identify`, device class identify): `core_identify` sets `zzz_rainbow`

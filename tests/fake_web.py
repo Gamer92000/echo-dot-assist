@@ -293,16 +293,57 @@ async def main():
         check(r["applied"] == len(keys) and not r["errors"] and cfg().get("mic_level") == "-30" and cfg().get("noise_reduction") == "medium",
               f"import: all {r['applied']} back")
 
-        # the name (main.c name_make): the model and the MAC's end, set nowhere; names of before are not taken
+        # Automatic identity (main.c name_make): old name/node files are not taken.
         sf = lambda f: os.path.join(state, f)
         mdns = lambda *a: subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", *a, "-S"], env=env, capture_output=True, text=True).stdout
-        check(req(WEB, "POST", "/api/name", b"0 Kitchen")[0] == 404 and not os.path.exists(sf("name")), "no rename on the page any more")
+        check(req(WEB, "POST", "/api/name", b"Kitchen")[0] == 401 and not os.path.exists(sf("display_name")), "rename: unsigned refused")
         with open(sf("name"), "w") as f: f.write("Old Name\n")
         with open(sf("node"), "w") as f: f.write("old-node\n")
         m = mdns()
         check("Old Name" not in m and "old-node" not in m and re.search(r"friendly_name=Echo Dot 3( [0-9a-f]{6})?<", m)
               and re.search(r"<name>echo-dot-3(-[0-9a-f]{6})?</name>", m), "without -n: the model's name (and the MAC's end), not the old one")
         os.remove(sf("name")); os.remove(sf("node"))
+
+        # Persisted input is checked too, including byte limits and XML metacharacters at the maximum length.
+        for saved, expected in [("&" * 63, "&" * 63), ("é" * 31 + "x", "é" * 31 + "x"), ("x" * 64, "Echo Web")]:
+            with open(sf("display_name"), "w") as f: f.write(saved + "\n")
+            import xml.etree.ElementTree as ET
+            tree = ET.fromstring(mdns("-n", "Echo Web"))
+            check(tree.findtext("name") == "echo-web" and "friendly_name=" + expected in [x.text for x in tree.findall(".//txt-record")],
+                  f"persisted name: byte limit and XML escaping ({len(saved.encode())} bytes)")
+        os.remove(sf("display_name"))
+
+        # The visible name is local to this Echo; its node, MAC and entity identities stay unchanged.
+        hello_name = lambda: json.loads(rq("GET", "/api/hello")[2])
+        original = hello_name()
+        for invalid in [b"x" * 64, b"line\nbreak", b"nul\x00byte", b"\xc3", b"\xc0\xaf", b"\xed\xa0\x80", b"\xc2\x85", b" space "]:
+            check(b.call("POST", "/api/name", invalid)[0] == 400 and not os.path.exists(sf("display_name")),
+                  f"invalid name refused without saving: {invalid!r}")
+        wanted = 'Echo Séjour & <"Salon">'
+        check(b.call("POST", "/api/name", wanted.encode())[0] == 200
+              and open(sf("display_name")).read() == wanted + "\n" and os.path.exists(sf("restart"))
+              and hello_name()["name"] == original["name"], "rename: saved durably, applies only after restart")
+        xml = ET.fromstring(mdns("-n", "Echo Web"))
+        check(xml.findtext("name") == original["node"] and "friendly_name=" + wanted in [x.text for x in xml.findall(".//txt-record")],
+              "mDNS: escaped visible name, stable node")
+        args = proc.args
+        proc.terminate(); proc.wait()
+        proc = subprocess.Popen(args, env=env, stderr=open(log, "a")); wait_port(PORT, WEB)
+        b = Browser(WEB)
+        check(b.login_with_button(proc) and hello_name()["name"] == wanted and hello_name()["node"] == original["node"],
+              "renamed after restart: page name changed, node unchanged, browser still works")
+        ha_name = APIClient("127.0.0.1", PORT, None)
+        await ha_name.connect(login=True)
+        info = await ha_name.device_info()
+        check(info.friendly_name == wanted and info.name == original["node"], "ESPHome: same friendly name as web, stable node")
+        await ha_name.disconnect()
+        check(wanted.encode() not in b.call("GET", "/api/export")[2].split(b"\n", 1)[1], "custom name excluded from copied settings")
+        check(b.call("POST", "/api/name", b"")[0] == 200, "empty name requests automatic name")
+        proc.terminate(); proc.wait()
+        proc = subprocess.Popen(args, env=env, stderr=open(log, "a")); wait_port(PORT, WEB)
+        b = Browser(WEB)
+        check(b.login_with_button(proc) and hello_name()["name"] == original["name"] and hello_name()["node"] == original["node"],
+              "automatic name restored after restart, node unchanged")
 
         # the note (issue #153): one line under the name, in the unsigned hello (the login page shows it), set signed
         hello = lambda: json.loads(rq("GET", "/api/hello")[2])

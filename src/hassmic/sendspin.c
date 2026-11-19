@@ -27,6 +27,7 @@
  *               steered by the error: resample.h)
  */
 #include "sendspin.h"
+#include "json.h"
 #include "musiclight.h"
 #include <ctype.h>
 #include <math.h>
@@ -921,12 +922,13 @@ static void on_json(struct session *s, char *j, long long t_recv)
          * 9.1.1 shapes are what that library requires, and what marks a client as its dialect for 10.x.  Forced: 9.1.1
          * asks for it again after a re-handshake, before its server/activate (1.0 does not ask).  A model with a screen
          * also takes the track's metadata and its cover (screen.h). */
-        int scr = screen_present();
-        send_json_forced(s, NULL, "{\"type\":\"client/hello\",\"payload\":{\"name\":\"%s\",\"device_info\":{\"product_name\":\"%s\","
+        int scr = screen_present(); char name[132];
+        json_esc(name, sizeof name, core_name);
+        send_json_forced(s, NULL, "{\"type\":\"client/hello\",\"payload\":{\"name\":%s,\"device_info\":{\"product_name\":\"%s\","
                      "\"manufacturer\":\"Amazon\",\"software_version\":\"" VERSION "\"},\"supported_roles\":[\"player@v1\",\"controller@v1\"%s],"
                      "\"player@v1_support\":{\"supported_formats\":[%s],\"buffer_capacity\":%u%s},%s"
                      "\"supported_pair_methods\":%s,\"unpaired_access\":{\"enabled\":%s}}}",
-                  core_name, board.product, scr ? ",\"metadata@v1\",\"artwork@v1\"" : "", formats_json(), BUFFER_CAPACITY,
+                  name, board.product, scr ? ",\"metadata@v1\",\"artwork@v1\"" : "", formats_json(), BUFFER_CAPACITY,
                   s->spec ? "" : ",\"supported_commands\":[\"volume\",\"mute\"]",
                   scr && !s->spec ? "\"artwork@v1_support\":{\"channels\":[{\"source\":\"album\",\"format\":\"jpeg\",\"media_width\":400,\"media_height\":400}]}," : "",
                   s->spec ? "{\"pairing_psk\":{\"locations\":[\"device\"]}}" : "[{\"method\":\"pairing_psk\",\"locations\":[\"device\"]}]",
@@ -1332,7 +1334,7 @@ static void load_identity(void)
 void sendspin_mdns(int p, char *out, size_t outsz)
 {
     snprintf(out, outsz, "  <service><type>_sendspin._tcp</type><port>%d</port><txt-record>path=/sendspin</txt-record>"
-                         "<txt-record>name=%s</txt-record></service>\n", p, core_name);
+                         "<txt-record>name=%s</txt-record></service>\n", p, core_name_xml());
 }
 
 void sendspin_init(void) { load_identity(); }
