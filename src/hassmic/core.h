@@ -52,11 +52,16 @@ struct proto {
                                                  * the server goes on with what it has (stop() aborts the run) */
     void (*reply_cut)(void);                    /* may be NULL: the reply playing is cut (flush) while the run goes on: stop
                                                  * fetching it now, not at the server's next chunk */
+    /* may be NULL (then other Echos' replies are refused): another Echo's reply (replyspk.h), chime ("" none) then url,
+     * at the replies' volume; what comes of it goes to replyspk_event(id).  0 started, -1 busy */
+    int  (*remote_play)(const char *chime, const char *url, int announce, unsigned id);
+    void (*remote_stop)(unsigned id);           /* may be NULL: that reply is stopped (the asking Echo's stop) */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
 extern const char *core_name;                   /* "Echo Dot 2 5695c4": the model and the MAC's end (main.c name_make) */
+const char *core_proto(void);                   /* "esphome" or "wyoming": the protocol this start speaks */
 const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
 void core_node_of(const char *name, char node[64]);  /* any Echo's node from its name ("Echo Dot 2 5695c4"); a node stays */
 void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */
@@ -92,6 +97,7 @@ int  core_mic_denoise(int set);                 /* noise reduction on what the p
 void core_pipeline_finish(void);
 int  core_follow_up(void);                       /* the pipeline being started answers a question: no wake word stage, even with -w remote */
 void core_restart_after(void);                  /* start another pipeline once the current one has finished */
+void core_follow_up_cancel(void);               /* lock held: none after all (the reply was cut on another speaker) */
 int  core_wake_run_ended(int failed);            /* lock held: a run ended during a reply; 1: the one that only listened for the wake word */
 void core_run_over(void);                        /* lock held: the run has ended while its reply is (about to be) spoken; with -w remote the wake word may cut it */
 void core_error(void);
@@ -175,11 +181,20 @@ extern const int core_wake_nevents;
 /* lock held for this one: switches to SPEAKING.  media: Home Assistant's media, which plays at the main volume (not a
  * reply or an announcement: the Assistant's, with separate volumes) */
 void   core_tts_begin(unsigned rate, unsigned channels, int media);
+/* lock held: as core_tts_begin, but the reply plays on another speaker (replyspk.h): nothing opens here, the audio
+ * queued after it (the reply's own, or silence) only takes the time it would play for, so the run, the ring, barge-in
+ * and what follows the reply (played(), a follow-up) go as if it played here */
+void   core_tts_begin_elsewhere(unsigned rate, unsigned channels);
+/* Another Echo asks this one to play its reply (replyspk.c; not the lock): 0 started, else why not as the link says
+ * it: 'B' busy (a run, a reply, media, a Drop In, a timer ringing), 'D' do not disturb, 'U' this protocol cannot */
+int    core_remote_reply(const char *chime, const char *url, int announce, unsigned id);
+void   core_remote_stop(unsigned id);                       /* not the lock: the asking Echo stopped it */
 void   core_tts_data(const void *pcm, size_t len);
 void   core_tts_end(void);                                  /* drains, then played() and core_pipeline_finish() */
 void   core_tts_abandoned(void);                            /* lock held: a reply that began ends without core_tts_end() */
 int    core_tts_flushing(void);                             /* barge-in: drop audio until core_tts_end() */
 void   core_tts_flush(void);
+int    core_tts_was_cut(void);                              /* lock held, in played(): what ended was cut (a flush) */
 size_t core_tts_queued(void);                               /* bytes not yet played: for back pressure */
 /* Timers (lock held): Home Assistant's finished and cancelled events, by its timer id; a finished one rings until
  * stopped (button, "<wake word>, stop", media stop, HA's "Stop ringing", any request with core_timer_stop_any; not the

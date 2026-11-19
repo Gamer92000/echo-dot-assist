@@ -322,6 +322,23 @@ input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 
 .mode .radio { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--line-2); background: var(--surface); margin-top: 2px; }
 .mode.on .radio { border: 5px solid var(--accent); }
 .mode-sub { color: var(--muted); font-size: 12.5px; line-height: 1.45; margin: 4px 0 0; }
+/* "Replies play on" (app.js replyCard): the four choices two by two where there is room, what each found under it */
+.rs-modes { padding: 6px 18px 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); }
+.rs-help { padding: 0 18px; }
+.rs-help:last-child { padding-bottom: 14px; }
+.rs-help svg.i { width: 14px; height: 14px; vertical-align: -2px; }
+.mode-body select, .mode-body .btns { margin-top: 8px; }
+.mode-body select { width: 100%; }
+.mode-body .btns input[type=text] { flex: 1; min-width: 0; }
+.rs-info:empty { display: none; }
+.rs-info .ok-t, .rs-info .warn-t { display: inline-flex; gap: 5px; align-items: flex-start; }
+.rs-info svg.i { width: 13px; height: 13px; flex: none; margin-top: 2px; stroke-width: 2.5; }
+.rs-info .ok-t svg.i { color: var(--ok); }
+.rs-info .warn-t svg.i { color: var(--warn); }
+.rs-info code { font-size: 11.5px; overflow-wrap: anywhere; }
+#reply-card > .row-warn { margin: 0 18px 12px; }
+#reply-card > .row-warn:empty, .rs-last:empty { display: none; }
+.rs-last { margin: 0 18px 12px; font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
 .compare summary { font-size: 13px; }
 /* the comparison: questions down the side, one column per choice, the chosen one tinted */
 .cmp-wrap { margin-top: 10px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }

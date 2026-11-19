@@ -369,6 +369,52 @@ voice. What it leaves would still come back to the other Echo, so an Echo sends 
 talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the
 one here is clearly louder than the echo of the other: as on a speakerphone, take turns.
 
+## Replies on another speaker
+
+For a room where the Echo is hard to hear (a bathroom with the water running, a kitchen with the extractor on), the
+assistant can answer through another speaker. The Echo still does everything else: it hears the wake word and the
+request, its ring shows listening, thinking and the reply, and "<wake word>, stop", the wake word or the action button
+cut the reply where it plays. Stopped on the other Echo instead (its wake word, "stop", its button), the reply ends
+there and this Echo does not listen again: whoever stopped it talks to that one now. Settings page, Voice, **Replies
+play on**:
+
+- **This Echo**: as always (the default).
+- **Another of your Echos**: any Echo of the same Echo network (see [Several Echos](#several-echos)) that has "Play
+  other Echos' replies" on. The reply plays there at that Echo's replies' volume, and this Echo waits for it: when the
+  other Echo has played it, a question's follow-up starts here, as if the reply had played here. Between the two
+  Echos only (TCP 28933), signed with the network's key: nothing else on the network can make an Echo play anything.
+- **The speaker in this room**: the media player Home Assistant has in the area of this Echo's device (not the Echo's
+  own; one that is up first, then by entity id). The page shows which one it found, and the others in the area. Home
+  Assistant is asked again when the Echo connects, every 30 minutes, and with **Ask again**.
+- **A Home Assistant player**: any media player by its entity id (`media_player.bathroom`).
+
+A Home Assistant player plays the reply as an announcement (`media_player.play_media` with `announce`): music there
+goes quiet for it and carries on. This needs **"Allow the device to perform Home Assistant actions"** in the Echo's
+ESPHome options in Home Assistant (Settings › Devices & services › ESPHome › the Echo › Configure); the page says when
+it is off. Home Assistant does not tell when such a player has finished, so the Echo waits for the reply's length plus
+**Home Assistant player start time** (1.5 s by default: Sonos and Google Cast take 1 to 2 s, an ESPHome player a few
+hundred ms), then listens again or goes idle. If the player is in the same room and continued conversation is on, a
+start time too short lets the Echo hear the end of its own reply; raise it.
+
+**Nothing is lost.** An Echo that goes off or hangs mid-reply is given up within about 6 seconds. Whatever cannot
+take the reply has it play on this Echo instead: the other Echo is off, busy
+(its own request, reply, media or Drop In, a timer ringing), has do not disturb on (so a bedroom Echo stays quiet at
+night), has "Play other Echos' replies" off, or could not fetch it; a wake word said to it while the reply is still on
+its way there (its own request comes first); the player is
+unavailable or unknown to Home Assistant; Home Assistant refuses the action or does not run this Echo's actions; the
+room has no other player. The card says what came of the last reply, and why it played here.
+
+**What goes.** The assistant's replies. Announcements Home Assistant sends to the Echo (`assist_satellite.announce`,
+`start_conversation`) only with **Announcements play there too**. The Echo's own sounds (wake sound, timers, Drop In)
+always stay on it, and so does what Home Assistant plays on the Echo's media player (`tts.speak`, `play_media`), so two
+Echos sending each other their announcements cannot go round in circles. ESPHome only: with Wyoming the replies come as
+audio, not as an address to hand on, and play here.
+
+**In Home Assistant** the select "Replies play on" (This Echo, Speaker in this room, Home Assistant player, and every
+Echo of the network that takes replies, by its node name) and the text "Reply player" (a media player's entity id:
+setting it makes replies go there, emptying it brings them back to the Echo) let an automation switch it: the shower
+on, the bathroom's speaker.
+
 ## Buttons and light ring
 
 Beyond the README's two figures:
@@ -794,6 +840,7 @@ Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (I
 | Firmware | update entity, see [Updating](../README.md#updating) |
 | Identify, Restart, Factory reset | buttons; Restart reboots the Echo |
 | Web UI address | diagnostic: the settings page's address |
+| Replies play on, Reply player | configuration: where the assistant's replies play, see [Replies on another speaker](#replies-on-another-speaker) |
 | Sendspin pairing token | diagnostic, disabled by default, no state until Home Assistant has set the Echo's key: Music Assistant gets the token from Home Assistant by itself (2026.11 and later) |
 
 Time and time zone: the Echo takes both from Home Assistant, over the encrypted connection only (no time before
@@ -1117,6 +1164,7 @@ ARGS=""                     # extra options, below
 | `-z 0` | no Sendspin player |
 | `-a 0` | no arbitration with other Echos (UDP 28930), and so no Drop In |
 | `-i 0` | no Drop In (UDP 28932) |
+| `-r 0` | no replies from other Echos played here (TCP 28933); this Echo's own can still go elsewhere |
 | `-B` | no Bluetooth |
 | `-p <port>` | another port (the firewall only admits inbound TCP 16384–32767) |
 

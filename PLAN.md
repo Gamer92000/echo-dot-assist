@@ -2709,6 +2709,44 @@ Run in this order. Each step says what it proves.
       ducked this side for the rest of the call; it counts as silence now (7d: the hall's trace).
       Open: Echo to Echo with micHfp on both ends, the -12 dB tuned on a trace, double talk, the Echo 2 and Echo Dot 5,
       a call while music plays.
+- [~] Replies on another speaker (2026-11-19, a user's request after TECHO5's "Replies play on": a bathroom Echo over
+      the shower).  `replyspk.c` + `proto_esphome.c` "replies on another speaker": the reply's URL goes to another Echo
+      of the network (TCP 28933 `-r`, hello with a challenge, request and every event MAC'd with
+      `arb_derive("hassmic reply speaker 1")`; members say their port and whether they take replies, `T_MSG` 0x43 every
+      20-25 s, 0x44 asks at start) or to a Home Assistant player (`media_player.play_media`, announce, a call id: Home
+      Assistant 2025.10+ answers it, `_handle_service_call_with_notification`, at once for a refusal; nothing at all
+      with "perform actions" off, so `hassmic.check_actions`, which does not exist, is the probe: "not found" = ours
+      run, silence for 4 s = off).  The run here plays the reply silently: `core_tts_begin_elsewhere`, `Q_ELSEWHERE` in
+      the playback queue (nothing opens, each chunk sleeps its length, a flush ends it), so state, ring, barge-in, stop
+      and the follow-up need nothing new.  Another Echo says when it played (S, then P/C/F); a player's end is the
+      reply's length decoded here plus `reply_speaker_delay` (1.5 s).  The room's player: `media_player.browse_media`
+      on our own player (found by MAC in a data template) with `wants_response` and a response template: its device's
+      area, `area_entities` there less our own, those not unavailable first; asked on each keyed link, every 30 min,
+      on "Ask again".  Measured (PC): the follow-up after a 2 s reply on another Echo 2.01-2.09 s after the URL, within
+      a frame of its end; on a player 2.51 s (2 s + 0.5 s); the wake word here cut a 6 s reply there after 1.54 s.  In
+      a real Home Assistant 2026.10.1 (`tests/ha_real_reply.py`): the template named the other Echo of the area's
+      player (not ours, not the kitchen's), actions off = no answer and Home Assistant's repair
+      `service_calls_not_enabled-<mac>`, on after its options flow (the entry reloads, the room is asked again); an
+      announcement to the satellite played whole on that player (192000 bytes, 2 s at 48 kHz), nothing here, the
+      Echo's speaking state 2.34 s.  Found there: Home Assistant hands an ESPHome satellite its announcements through
+      its ffmpeg proxy (`/api/esphome/ffmpeg_proxy/`), one conversion per device at a time: the player's fetch (its
+      own proxy, from ours) and ours cut each other off (ours came back empty), so such a URL is read whole for its
+      length first and handed over after; replies (`tts_proxy`) are decoded beside the player's fetch.  What falls
+      back here: the Echo gone (0.1 s late), busy, refusing, the player unavailable or unknown, a refusal, actions off,
+      no other player in the area.  Not sent on: our own sounds, Home Assistant's media on our media player (two
+      Echos sending each other announcements cannot loop), Wyoming (audio, no URL).
+      Safety, after an independent review (2026-11-19): the playing Echo refuses with do not disturb (replies too) and
+      while a timer rings, and lets go of a reply not begun yet once anything of its own comes (`remote_drop`: its run's
+      start, its own reply, Home Assistant's media), so its own always wins and the asking Echo plays it; it sends a
+      signed heartbeat every 2 s, the asking Echo gives up after 6.5 s without one (a powered-off Echo, or a hung one
+      TCP would not notice: 5.4 s measured with the process stopped) and after 15 min whatever; keepalive on both ends;
+      8 links at most and 5 s for a whole request (nobody's key is needed to open one); a cut there (its wake word,
+      stop, button: `core_tts_was_cut`) opens no follow-up here (`core_follow_up_cancel`); a player's reply waits for
+      the actions probe's verdict (else it played nowhere); `ha_wait` on the monotonic clock; without a key only the
+      voice assistant's client counts as Home Assistant.  Under ASan/UBSan the whole test passes clean.
+      Open: on Echos (a Dot 3 sending to an Echo 2; the reply heard by the asking Echo's microphones, which its echo
+      canceller does not know: a wake word in the reply, the follow-up hearing its tail with the player in the room),
+      Sonos' and Cast's start time measured, the room template with a speaker whose own area overrides its device's.
 - [x] Drop In between Echos (2026-10-08, asked by a user with ten Echos who used Alexa's as an intercom). `dropin.c`:
       calls signed on the arbitration network (new arb type `T_MSG`, `arb_tell`, broadcast like the rest, repeated:
       invite every 250 ms until answered), audio unicast UDP 28932 (`-i`), Opus 16 kHz 20 ms 24 kbit/s inband FEC (stock

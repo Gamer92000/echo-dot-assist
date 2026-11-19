@@ -8,7 +8,7 @@ What protects an Echo running hassmic, and where that ends. Nobody has audited a
 | Direction | What gets through |
 |---|---|
 | **Out** | Amazon's daemons: local addresses only, plus DNS to the servers DHCP hands out (so Amazon's names may still be looked up; on the Android models Android's captive portal test, which looked two of them up every few minutes, is set to off: measured on the Echo Show 5, not yet on the others, issue #189). `otad` and `ace_otad` (firmware updates): never. hassmic itself: anywhere, to fetch replies and music from where Home Assistant or Music Assistant point it. On the screen models the Kiosk Satellite app too, while "Kiosk Satellite internet access" is on (default; one rule for that app's uid, nothing else of Amazon's or the system's gets out through it). |
-| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only; with "Kiosk Satellite DLNA renderer" on (off by default), also its DLNA renderer's port (the one the app's own setting names, so any the app picks), from private addresses only and only while the app listens there; the renderer has no login (DLNA has none) |
+| **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page, 28933 other Echos' replies; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only; with "Kiosk Satellite DLNA renderer" on (off by default), also its DLNA renderer's port (the one the app's own setting names, so any the app picks), from private addresses only and only while the app listens there; the renderer has no login (DLNA has none) |
 | **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port); with "Kiosk Satellite DLNA renderer" on, 1900 (SSDP searches to 239.255.255.250, from private addresses) while the Kiosk Satellite app holds that port and nothing else on the Echo does (looked at every 5 s) |
 | **In, ICMP** | ping (echo request) from private and link-local addresses only; answers to the Echo's own traffic |
 
@@ -102,6 +102,18 @@ an approved browser. Each call gets its own key from a fresh key exchange betwee
 closed even to someone who gets the network key later. The audio goes straight between the two Echos and nowhere else.
 Do not disturb and the microphone switches refuse calls; "Drop In answers: after the action button" makes every call
 wait for a press on the Echo called; "Drop In" off stops calls both ways.
+
+## Replies on another speaker
+
+Another Echo may ask this one to play its reply (TCP 28933): only a member of the Echo network, which proves it by a
+MAC with a key derived from the network's, over a fresh challenge of the Echo asked, so a request heard on the network
+cannot be played again; every answer and the "stop" are signed the same way. What it hands over is an address the Echo
+fetches as it fetches its own replies (http or https), and plays at its replies' volume, only while idle and never
+with do not disturb on. At most 8 such links are served at once. "Play other Echos' replies" off refuses them all. Nothing of the microphones goes
+over this link. Replies sent to a Home Assistant media player go through Home Assistant's own actions, which run only
+with "Allow the device to perform Home Assistant actions" ticked for the Echo; for replies it asks Home Assistant for
+nothing but media_player.play_media, media_player.media_stop, media_player.browse_media of its own player (the
+area's players come back in the answer) and an action that does not exist (to learn whether its actions run).
 
 ## Music Assistant (Sendspin)
 
