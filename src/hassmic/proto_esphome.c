@@ -285,7 +285,7 @@ static void key_load(void)
 
 static void print_mdns_to(FILE *f)
 {
-    char ss[512] = "";
+    char ss[640] = "";
     if (core_sendspin_port) sendspin_mdns(core_sendspin_port, ss, sizeof ss);
     fprintf(f, "<?xml version=\"1.0\" standalone='no'?>\n<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
             "<service-group>\n  <name>%s</name>\n  <service><type>_esphomelib._tcp</type><port>%d</port>\n"
@@ -293,7 +293,7 @@ static void print_mdns_to(FILE *f)
             "    <txt-record>platform=hassmic</txt-record><txt-record>network=wifi</txt-record>\n"
             /* with a key Home Assistant asks for it when the device is added; without, it adds the device and sets one */
             "    <txt-record>%s=" NOISE_NAME "</txt-record>\n  </service>\n%s</service-group>\n",
-            node_name(), core_port, mac_plain(), core_name, have_key ? "api_encryption" : "api_encryption_supported", ss);
+            node_name(), core_port, mac_plain(), core_name_xml(), have_key ? "api_encryption" : "api_encryption_supported", ss);
 }
 
 static void print_mdns(void) { key_load(); print_mdns_to(stdout); }

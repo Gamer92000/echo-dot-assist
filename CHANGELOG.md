@@ -2,6 +2,19 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-19 — One visible name for the Echo
+
+- **Name the Echo from its web page** (System → Name → Edit). The saved name is used on the page, as the friendly
+  name reported to Home Assistant, and for Bluetooth pairing. The technical node name and MAC stay unchanged.
+  Saving restarts the satellite, briefly interrupting audio and Bluetooth; an empty name restores the model and MAC
+  name. The name stays with this Echo, not in exported or copied settings. A name manually assigned in Home Assistant
+  still takes priority there. Names with accents, quotes, ampersands or angle brackets are escaped in network messages.
+- **The login page names the other Echos by their visible names too.** "Log in through" reads each peer's public
+  hello instead of displaying only its technical node name. An unreachable Echo keeps its node name as a fallback.
+- **Peer labels use those names in arbitration and pairing warnings, the web Drop In banner and the Echo Show caller
+  display too.** Technical IDs, routing, blueprint targets and Home Assistant's "Drop In with" sensor stay unchanged.
+  If a name cannot be resolved, the node name is shown; the Show resolves peers using its configured web port.
+
 ## 2026-11-18 — The language you speak, from the right time zone
 
 - **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to

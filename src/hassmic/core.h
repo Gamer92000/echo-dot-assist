@@ -56,7 +56,9 @@ struct proto {
 extern const struct proto proto_wyoming, proto_esphome;
 
 extern pthread_mutex_t core_lock;               /* guards state, the client socket (writes) and everything marked "lock held" */
-extern const char *core_name;                   /* "Echo Dot 2 5695c4": the model and the MAC's end (main.c name_make) */
+extern const char *core_name;                   /* visible name: saved override, otherwise model + MAC suffix */
+int core_name_save(const char *name, size_t len, char *err, size_t cap); /* lock held; save and request service restart */
+const char *core_name_xml(void);                /* XML text escaped for mDNS */
 const char *core_node_name(void);               /* "echo-dot-2-5695c4": the ESPHome device (host) name */
 void core_node_of(const char *name, char node[64]);  /* any Echo's node from its name ("Echo Dot 2 5695c4"); a node stays */
 void core_identify(void);                       /* rainbow ring for 10 s and a sound: which Echo is this */

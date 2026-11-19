@@ -1023,11 +1023,25 @@ turns the action button, microphone and volume sounds off too, as that switch di
 **Identify** (at the foot of the menu, and beside each Echo in the lists; also a button in Home Assistant): a rainbow on the ring
 for 10 s and stock's setup sound, to tell which Echo is which.
 
+**Name** (System → Name → Edit): choose the visible name used on the web page, reported to Home Assistant and
+advertised for Bluetooth pairing. Saving restarts the satellite and interrupts audio and Bluetooth briefly. The
+technical node name, MAC and pairings stay unchanged. Up to 63 UTF-8 bytes (accented letters may take more than one
+byte), no control characters. An empty name restores the automatic model and MAC name. The name is saved only on
+this Echo, survives restarts, is excluded from exported or copied settings, and is removed by a factory reset.
+Home Assistant may retain a name you assigned manually there; clear that override to use the name from the Echo.
+A previously paired phone may cache the old Bluetooth name.
+The login page's "Log in through" buttons also read the other Echos' visible names without needing a login on them.
+If a peer cannot be reached, its technical node name is shown instead. This does not change login verification.
+Arbitration/pairing warnings, the web Drop In banner and the Echo Show caller label use peer names too, falling back
+to the node when unavailable. The Show looks up the caller on the same web port as its own, in the background;
+custom ports must match for that label to resolve. This is presentation only: Drop In routing, blueprint targets
+and Home Assistant's "Drop In with" sensor still use their original technical identities.
+
 **Note**: a few words of your own under the Echo's name at the top of the menu, such as where it stands. Click "Add a
 note" there, or Edit on the Note row of the System page; save it empty to remove it. It shows in the browser tab's
 title, on your other Echos' pages (Overview, Echos, the list below) and on the login page, so you know which Echo's
 button to press. Up to 80 bytes, one line. Anyone on your network can read it, as the name. It stays with that Echo:
-not in the settings file, and a factory reset removes it. The name itself is fixed; name the Echo in Home Assistant.
+not in the settings file, and a factory reset removes it. The note is independent of the visible name.
 
 **Your other Echos from the name**: click the Echo's name at the top of the menu (or press the down arrow key on it) for
 a list of your other Echos with their notes and addresses. Pick one and its settings page opens on the page you are on

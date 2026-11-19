@@ -93,7 +93,21 @@ static void sound_queue(enum sound s) { atomic_fetch_or(&sounds_pending, 1 << s)
  * someone else; nor what only borrows a Bluetooth sound (web_approved, improv_authorized, arb_paired): those call sound_queue */
 static void sound_request(enum sound s) { if (!no_earcons && (s == SND_WAKE ? use_earcon : !(sounds_off >> s & 1))) sound_queue(s); }
 
-const char *core_name;                  /* name_make(), or -n (the PC) */
+const char *core_name;                  /* visible name; immutable until the next service start */
+static char node_identity[64];          /* derived before loading the visible name override */
+
+const char *core_name_xml(void)
+{
+    static char name[384]; size_t j = 0;
+    if (name[0]) return name;           /* core_name is immutable for the process lifetime */
+    for (const unsigned char *s = (const unsigned char *)core_name; *s && j + 6 < sizeof name; s++) {
+        const char *escaped = *s == '&' ? "&amp;" : *s == '<' ? "&lt;" : *s == '>' ? "&gt;" : NULL;
+        if (escaped) { size_t n = strlen(escaped); memcpy(name + j, escaped, n); j += n; }
+        else name[j++] = (char)*s;
+    }
+    name[j] = 0;
+    return name;
+}
 
 /* The name is UTF-8.  Latin-1 letters (U+00C0..U+00FF, lead byte 0xC3) are spelled out, the German way for the umlauts
  * ("Küchen Echo" -> "kuechen-echo"); anything else that is not a letter or digit separates words.  Each byte of "ü"
@@ -130,16 +144,16 @@ void core_node_of(const char *name, char n[64]) { node_of(name, n); }
 const char *core_node_name(void)
 {
     static char n[64];
-    if (!n[0]) node_of(core_name, n);
+    if (!n[0]) node_of(node_identity[0] ? node_identity : core_name, n);
     return n;
 }
 
 /* ---------------------------------------------------------------- the name */
 
-/* One name, made at start and kept nowhere: the model's (board.default_name: "Echo Dot 3") and the last three bytes of
+/* The automatic name: the model's (board.default_name: "Echo Dot 3") and the last three bytes of
  * the Wi-Fi MAC address, as ESPHome's name_add_mac_suffix and the Voice PE do ("Echo Dot 2 5695c4", node
- * "echo-dot-2-5695c4"): two Echos of a model never share it, and a reset never changes it.  What people call it is
- * Home Assistant's business (the name given when adding the device), not the Echo's.  -n sets another: for the PC,
+ * "echo-dot-2-5695c4"): a reset keeps it. name_load preserves this node identity before loading the visible override.
+ * -n sets another base name for the PC,
  * which has no Echo's MAC address.  radar brings wlan0 up late in the boot: the address is waited for. */
 static void name_make(void)
 {
@@ -172,6 +186,52 @@ static int write_state(const char *file, const char *text)
     char p[300];
     state_file(p, sizeof p, file);
     return statefile_write(p, 0666, text, strlen(text));
+}
+
+/* Empty restores the generated name. Strict UTF-8, no controls, at most 63 bytes (the existing name buffers). */
+static int name_valid(const char *s, size_t len)
+{
+    if (len > 63) return 0;
+    for (size_t i = 0; i < len;) {
+        unsigned char c = (unsigned char)s[i++]; unsigned cp; int more;
+        if (c < 0x80) { if (c < 0x20 || c == 0x7f) return 0; continue; }
+        if (c >= 0xc2 && c <= 0xdf) { cp = c & 31; more = 1; }
+        else if (c >= 0xe0 && c <= 0xef) { cp = c & 15; more = 2; }
+        else if (c >= 0xf0 && c <= 0xf4) { cp = c & 7; more = 3; }
+        else return 0;
+        int count = more;
+        while (more--) {
+            if (i == len || ((unsigned char)s[i] & 0xc0) != 0x80) return 0;
+            cp = (cp << 6) | ((unsigned char)s[i++] & 63);
+        }
+        if ((count == 2 && cp < 0x800) || (count == 3 && cp < 0x10000) ||
+            (cp >= 0xd800 && cp <= 0xdfff) || cp > 0x10ffff || (cp >= 0x80 && cp <= 0x9f)) return 0;
+    }
+    return !len || (s[0] != ' ' && s[len - 1] != ' ');
+}
+
+/* Called with core_lock held; only the next process uses the saved name, including Bluetooth and mDNS. */
+int core_name_save(const char *s, size_t len, char *err, size_t cap)
+{
+    char text[65];
+    if (!name_valid(s, len)) { snprintf(err, cap, "Use at most 63 UTF-8 bytes, no control characters or outer spaces"); return -1; }
+    memcpy(text, s, len); text[len] = '\n'; text[len + 1] = 0;
+    if (write_state("display_name", text)) { snprintf(err, cap, "Cannot save the name"); return -1; }
+    if (write_state("restart", "name changed\n")) { snprintf(err, cap, "Name saved, but cannot request restart; restart the service to apply it"); return -1; }
+    return 0;
+}
+
+static void name_load(void)
+{
+    static char name[65]; char p[300]; size_t len; FILE *f;
+    snprintf(node_identity, sizeof node_identity, "%s", core_name);
+    state_file(p, sizeof p, "display_name");
+    if (!(f = fopen(p, "r"))) return;
+    len = fread(name, 1, sizeof name, f); int failed = ferror(f); fclose(f);
+    if (len && name[len - 1] == '\n') len--;
+    if (failed || !name_valid(name, len)) { fprintf(stderr, "name: invalid display_name ignored\n"); return; }
+    name[len] = 0;
+    if (len) core_name = name;
 }
 
 /* ---------------------------------------------------------------- setup (OOBE) and reset */
@@ -3706,6 +3766,8 @@ int main(int argc, char **argv)
     }
     core_port = port ? port : proto->port;
     if (!core_name) name_make();
+    name_load();
+    core_name_xml();                    /* build the immutable escaped name before any worker threads */
     if (!print_mdns) { char p[300];                 /* names set on the settings page or by NAME before there was one name */
       state_file(p, sizeof p, "name"); if (!unlink(p)) fprintf(stderr, "name: the one set before is gone, this Echo is \"%s\" now\n", core_name);
       state_file(p, sizeof p, "node"); unlink(p); }

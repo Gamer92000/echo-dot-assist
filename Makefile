@@ -272,8 +272,8 @@ host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/ota
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight alexaoff \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness web_login ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight alexaoff \
+	screen screen_peer_name ui touch json pb uninstall_boot sysinstall_aligners resample fork_release
 unit: $(addprefix unit-,$(UNIT_TESTS))
 unit-hash:
 	@mkdir -p build
@@ -358,6 +358,10 @@ unit-web_tar:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_tar_test.py; else echo "web tar: node missing, skipped"; fi
 unit-web_matrix:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_matrix_test.py; else echo "web matrix: node missing, skipped"; fi
+unit-web_login:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_login_test.py; else echo "web login: node missing, skipped"; fi
+unit-screen_peer_name:
+	.venv/bin/python tests/unit/screen_peer_name_test.py
 # the page's timer sound level (web/loudness.js) against BS.1770, and main.c's ring beep at Alexa's level
 unit-web_loudness:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_loudness_test.py; elif [ -n "$$CI" ]; then echo "web loudness: node missing"; exit 1; else echo "web loudness: node missing, skipped"; fi

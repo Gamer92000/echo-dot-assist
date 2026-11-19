@@ -35,6 +35,7 @@ class Controller:
         tty.setraw(self.m); tty.setraw(self.s)
         self.path = os.ttyname(self.s)
         self.adv = {"on": 0, "data": b"", "rsp": b""}
+        self.local_name = b""; self.inquiry_name = b""
         self.att = queue.Queue(); self.lock = threading.Lock(); self.buf = b""; self.rx = b""
         threading.Thread(target=self.reader, daemon=True).start()
 
@@ -69,6 +70,8 @@ class Controller:
                 else: self.buf = self.buf[1:]
 
     def command(self, op, par):
+        if op == 0x0c13: self.local_name = par.split(b"\0", 1)[0]
+        elif op == 0x0c52 and len(par) >= 3 and par[2] == 0x09: self.inquiry_name = par[3:2 + par[1]]
         ret = bytes(64)
         if op == 0x2002: ret = struct.pack("<HB", 251, 8)                  # LE Read Buffer Size: 251 bytes, 8 packets
         elif op == 0x2008: self.adv["data"] = par[1:1 + par[0]]
@@ -208,6 +211,8 @@ def main():
             time.sleep(0.1)
     threading.Thread(target=root, daemon=True).start()
 
+    visible_name = 'Echo Séjour'
+    with open(os.path.join(state, "display_name"), "w") as f: f.write(visible_name + "\n")
     ctl = Controller(); keys = os.path.join(tmp, "keys"); os.mkfifo(keys)
     log = os.path.join(tmp, "log")
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_WIFI=out, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw",
@@ -231,7 +236,9 @@ def main():
         check(info is not None and info.state == prot.State.AUTHORIZED and info.capabilities == prot.Capabilities.IDENTIFY | prot.Capabilities.DEVICE_INFO | prot.Capabilities.SCAN_WIFI,
               "service data 4677: authorized; identify, device info, scan (no host name: the Echo names itself)")
         rsp = ctl.adv["rsp"]
-        check(rsp[1] == 0x09 and rsp[2:2 + rsp[0] - 1] == b"Echo Improv", "scan response: the name")
+        check(rsp[1] == 0x09 and rsp[2:2 + rsp[0] - 1] == visible_name.encode(), "scan response: saved visible name")
+        check(ctl.local_name == visible_name.encode() and ctl.inquiry_name == visible_name.encode(),
+              "Bluetooth audio: saved visible name in local name and pairing discovery")
         check("setup: not set up yet" in logtext(), "the log says the setup waits (the setup spinner on the Echo)")
 
         # ---- the phone connects and finds its way around
@@ -245,7 +252,7 @@ def main():
         check(set(cccd) == {"state", "error", "result"}, "notification descriptors for state, error, result")
         check(phone.read(hd["caps"]) == b"\x0b\x07" and phone.read(hd["state"]) == b"\x0b\x02", "reads: capabilities 0x07, state authorized")
         r = phone.req(bytes([0x08]) + struct.pack("<HHH", 1, 0xffff, 0x2a00))
-        check(r is not None and r[0] == 0x09 and r[4:] == b"Echo Improv", "device name by type (Generic Access)")
+        check(r is not None and r[0] == 0x09 and r[4:] == visible_name.encode(), "device name by type (Generic Access)")
         check(phone.write(hd["rpc"] + 5, b"\x00") is not None, "a write past the table is answered")
         for n in cccd: check(phone.write(cccd[n], b"\x01\x00") == b"\x13", f"notifications on: {n}")
 
@@ -253,7 +260,7 @@ def main():
         phone.write(hd["rpc"], prot.DeviceInfoCmd().as_bytes())
         v = phone.note(hd["result"])
         res = prot.parse_result(v) if v else None
-        check(isinstance(res, prot.DeviceInfoRes) and res.firmware_name == b"hassmic" and res.device_name == b"Echo Improv",
+        check(isinstance(res, prot.DeviceInfoRes) and res.firmware_name == b"hassmic" and res.device_name == visible_name.encode(),
               f"device info: {res}")
         phone.write(hd["rpc"], prot.IdentifyCmd().as_bytes())
         check(wait(lambda: "identify: rainbow" in logtext(), 3), "identify: the rainbow")

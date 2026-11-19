@@ -386,12 +386,12 @@ const HELP = {
       const ours = (a.members || []).filter((m) => m.arbitrates && m.mode !== 'kiosk');
       if (!ours.length) return p('No other Echo settles wake words with this one right now: it answers at once.');
       // never close in the rounds kept: the estimate (arb.c "Rivals") has none of them waited for after two rounds
-      const apart = ours.filter((m) => m.rounds >= 2 && m.close === 0).map((m) => m.node);
+      const apart = ours.filter((m) => m.rounds >= 2 && m.close === 0).map((m) => peerDisplayName(m.node));
       if (apart.length === ours.length) return p(`The other Echos never came close to this Echo's wake words lately (other rooms): it answers at once.`);
       const tail = apart.length ? ` Never close lately, so not waited for: ${apart.join(', ')}.` : '';
       const slow = (a.members || []).filter((m) => m.late_ms != null).sort((x, y) => y.late_ms - x.late_ms)[0];
       const measured = w.samples && !w.learning ? `95 % of the last ${w.samples} claims of the other Echos came within ${w.p95} ms`
-        + (slow && (a.members || []).filter((m) => m.late_ms != null).length > 1 ? `; slowest: ${slow.node}, ${slow.late_ms} ms` : '') : '';
+        + (slow && (a.members || []).filter((m) => m.late_ms != null).length > 1 ? `; slowest: ${peerDisplayName(slow.node)}, ${slow.late_ms} ms` : '') : '';
       if (!w.auto) return p(`Waits ${w.ms} ms, set below.` + (measured ? ` Measured: ${measured}, so learning would wait ${w.learned} ms.` : '') + tail);
       if (w.learning) return p(`Learning: ${w.samples} of 10 claims measured, waits ${w.ms} ms meanwhile.` + tail);
       return p(`Waits up to ${w.ms} ms: ${measured}.` + tail);
@@ -598,11 +598,24 @@ function showLogin() { $('login').classList.remove('hidden'); $('app').classList
 
 // The login page: an Echo of this one's network that this browser is approved on can vouch for it.  Its page opens in a
 // small window, asks you, and sends the voucher back here (postMessage).
-function renderThrough(members) {
+async function renderThrough(members) {
   const box = $('through'); box.innerHTML = '';
   if (!members.length) return;
   box.append(h('p', { class: 'or' }, h('span', {}, 'or, if this browser is logged in on another of your Echos')));
-  for (const m of members) box.append(h('button', { class: 'big', style: 'margin-top:8px', onclick: () => askThrough(m) }, `Log in through ${m.node}`));
+  await Promise.all(members.map(async (member) => {
+    const m = { ...member }, button = h('button', { class: 'big', style: 'margin-top:8px', onclick: () => askThrough(m) }, `Log in through ${m.node}`);
+    box.append(button);
+    // Beacons carry stable node identities, not visible names. The public hello needs no browser approval.
+    // This is a display hint only: the voucher flow still verifies the peer and browser as before.
+    try {
+      const response = await fetch(baseOf(m.ip) + '/api/hello', { signal: within(5000) });
+      if (!response.ok) return;
+      const peer = await response.json();
+      if (!box.contains(button) || peer.node !== m.node || typeof peer.name !== 'string' || !peer.name.trim()) return;
+      m.name = peer.name;
+      button.textContent = `Log in through ${m.name}`;
+    } catch (e) { /* unreachable, blocked cross-origin, or older Echo: keep the node as a fallback */ }
+  }));
 }
 
 async function askThrough(m) {
@@ -612,7 +625,7 @@ async function askThrough(m) {
   const req = { target: echo.hello.pub, pub: hex(me.pub), nonce, origin: location.origin, name: echo.hello.name };
   const w = window.open(`${base}/#vouch=${encodeURIComponent(JSON.stringify(req))}`, 'hm-vouch', 'width=480,height=640');
   if (!w) { msg.textContent = 'The browser blocked the window: allow pop-ups for this page and try again.'; return; }
-  msg.className = 'login-msg'; msg.textContent = `Confirm in the window of ${m.node}…`;
+  msg.className = 'login-msg'; msg.textContent = `Confirm in the window of ${m.name || m.node}…`;
   const onMsg = async (ev) => {
     if (ev.origin !== base || !ev.data || ev.data.type !== 'hm-voucher' || ev.data.nonce !== nonce) return;
     window.removeEventListener('message', onMsg);
@@ -1331,7 +1344,7 @@ function menu(open) {
 $('menu').onclick = () => menu(true);
 $('whonote').onclick = () => editNote();
 
-// The note (web.c, issue #153): a few words of the owner's under the name.  Not a name: that is Home Assistant's
+// The note (web.c, issue #153): a few words of the owner's under the shared visible name.
 async function editNote() {
   const v = await ask({ title: echo.hello.note ? 'Edit the note' : 'Add a note', ok: 'Save', check: () => null,
     body: ['A few words to tell this Echo from your others: where it stands, say. They show under its name here, on your other Echos\' pages and on the login page, where anyone on your network can read them.'],
@@ -1997,14 +2010,14 @@ function renderNetwork() {
   const nets = new Set(out.filter((o) => o.network).map((o) => o.network));
   const warn = (text) => netWarn.append(h('div', { class: 'callout' }, icon('warn'), h('p', {}, text)));
   // Same 60 s as the hint arb.c logs: the tags take a read, a scan and a read again, the action 30 s
-  const waiting = out.filter((o) => o.network && o.state === 'older' && o.for_s > 60).map((o) => o.node);
+  const waiting = out.filter((o) => o.network && o.state === 'older' && o.for_s > 60).map((o) => peerDisplayName(o.node));
   if (state.ha && waiting.length)
     warn(`This Echo has not got the key from ${nameList(waiting)} for over a minute. Home Assistant has not confirmed the Echos' tags: its Tags integration (part of the default configuration) may be off, or one of them is not adopted there. Tick "Allow the device to perform Home Assistant actions" in ${waiting.length > 1 ? 'their' : 'its'} ESPHome options, or pair with the volume keys.`);
   if (nets.size) warn(`${nets.size === 1 ? 'A second network' : nets.size + ' other networks'} beside this one: its Echos do not settle wake words with these. They merge by themselves when Home Assistant can carry the key; if they do not, pair them with the volume keys.`);
   const myMode = a.arbitrates ? a.mode || 'hassmic' : null;       // older Echos say nothing: they are in ours
-  const odd = a.members.filter((m) => myMode && m.arbitrates && (m.mode || 'hassmic') !== myMode).map((m) => m.node);
+  const odd = a.members.filter((m) => myMode && m.arbitrates && (m.mode || 'hassmic') !== myMode).map((m) => peerDisplayName(m.node));
   if (odd.length) warn(`${nameList(odd)} ${odd.length > 1 ? 'use' : 'uses'} the other arbitration mode (${myMode === 'kiosk' ? 'Echo network' : 'Kiosk Satellite'}): this Echo and ${odd.length > 1 ? 'they' : 'it'} do not settle wake words with each other, and both may answer. Set the same mode on every Echo.`);
-  if (stuck.length) warn(`${nameList(stuck.map((o) => o.node))} ${stuck.length > 1 ? 'have' : 'has'} not got the key for over a minute. Usually Home Assistant has not confirmed ${stuck.length > 1 ? 'their' : 'its'} tag: its Tags integration (part of the default configuration) is off, or ${stuck.length > 1 ? 'they are' : 'it is'} not adopted there. Pair with the volume keys instead.`);
+  if (stuck.length) warn(`${nameList(stuck.map((o) => peerDisplayName(o.node)))} ${stuck.length > 1 ? 'have' : 'has'} not got the key for over a minute. Usually Home Assistant has not confirmed ${stuck.length > 1 ? 'their' : 'its'} tag: its Tags integration (part of the default configuration) is off, or ${stuck.length > 1 ? 'they are' : 'it is'} not adopted there. Pair with the volume keys instead.`);
   const more = h('details', { class: 'more', open: renderNetwork.open, ontoggle: () => { renderNetwork.open = more.open; } });
   netWarn.append(more);
   more.append(h('summary', {}, 'How Echos get the key'),
@@ -2073,10 +2086,11 @@ async function probe(base) {
       if (hello.pub === echo.hello.pub) { others.delete(base); selfAt.add(base); return; }
       d.echo = new Echo(base, hello);
     } else if (!d.logged) {
-      // its note comes only from hello where this browser cannot read its state (issue #153): read it again, or a note
-      // changed there showed here until a reload
+      // Names and notes are public: refresh both even where this browser cannot read the peer's state.
       const hello = await (await fetch(base + '/api/hello', { signal: within(5000) })).json();
-      if (hello.pub === d.echo.hello.pub) d.echo.hello.note = hello.note;
+      if (hello.pub === d.echo.hello.pub && hello.node === d.echo.hello.node) {
+        d.echo.hello.name = hello.name; d.echo.hello.note = hello.note;
+      }
     }
     d.error = null;
     const read = async () => {
@@ -2084,6 +2098,9 @@ async function probe(base) {
       rediff(d);
       // what its settings are (another model has some this one has not) and how it is doing
       try { d.state = (await d.echo.call('GET', '/api/state')).json(); } catch (e) { d.state = null; }
+      if (d.state && d.state.device && d.state.device.node === d.echo.hello.node) {
+        d.echo.hello.name = d.state.device.name; d.echo.hello.note = d.state.device.note;
+      }
       try { d.arts = (await d.echo.call('GET', '/api/artifacts')).json(); } catch (e) { d.arts = null; }
     };
     try { await read(); } catch (e) {
@@ -2137,7 +2154,17 @@ const noOthers = (where) => (state.arbitration ? `Echos running hassmic on the s
 const ready = () => [...others.values()].filter((d) => d.echo && d.logged && !d.error).sort((a, b) => a.echo.hello.name.localeCompare(b.echo.hello.name));
 const shortAddr = (base) => base.replace('http://', '').replace(`:${echoPort()}`, '');
 
-function renderDevices() { drawSwitcher(); if (devBox) keepFocus(devBox, drawDevices); }
+// Display only: callers still use the original node for commands, pairing and Drop In state comparisons.
+function peerDisplayName(node) {
+  if (echo && echo.hello.node === node) return echo.hello.name || node;
+  for (const d of others.values()) if (d.echo && d.echo.hello.node === node) return d.echo.hello.name || node;
+  return node;
+}
+
+function renderDevices() {
+  drawSwitcher(); if (devBox) keepFocus(devBox, drawDevices);
+  if (state) renderNetwork();       // peer names may have arrived since the last state refresh
+}
 function drawDevices() {
   scanMark.classList.toggle('hidden', !devRun);
   devBox.innerHTML = '';
@@ -2146,7 +2173,7 @@ function drawDevices() {
     h('div', { class: 'echo-body' }, h('div', { class: 'echo-id' }, h('div', { class: 'echo-name' }, echo.hello.name), echo.hello.note ? h('div', { class: 'echo-note' }, echo.hello.note) : null, h('div', { class: 'echo-addr' }, location.host)),
       h('div', { class: 'echo-meta' }, h('span', { class: 'badge acc' }, 'This Echo'), a && !a.arbitrates ? h('span', { class: 'badge' }, 'Arbitration off')
         : a && a.mode === 'kiosk' ? h('span', { class: 'badge' }, 'Kiosk Satellite mode') : null,
-        state.dropin && state.dropin.state !== 'idle' ? h('span', { class: 'badge ok' }, icon('talk'), `Drop In ${DROPIN_WORDS[state.dropin.state]} ${state.dropin.peer}`) : null),
+        state.dropin && state.dropin.state !== 'idle' ? h('span', { class: 'badge ok' }, icon('talk'), `Drop In ${DROPIN_WORDS[state.dropin.state]} ${peerDisplayName(state.dropin.peer)}`) : null),
       h('div', { class: 'echo-acts' }, idButton(echo, echo.hello.name)))));
   for (const [base, d] of [...others].sort(([, p], [, q]) => echoName(p).localeCompare(echoName(q)))) {
     const r = arbOf(d.ip), name = echoName(d);
@@ -2962,15 +2989,31 @@ async function loadModels(arts) {
 
 let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl;
 
-// The name: the model and the end of its MAC address (main.c name_make), never set here.  What people call it is the name
-// given in Home Assistant when the Echo was added.
+// Visible name shared by the web page, ESPHome and Bluetooth; the node identity never changes.
+async function editName() {
+  const v = await ask({ title: 'Name the Echo', ok: 'Save and restart',
+    body: ['This name is used here, in Home Assistant and for Bluetooth pairing. The technical node name stays unchanged.',
+      'Home Assistant may keep a name you set manually there. Clear that override to use the name supplied by this Echo.',
+      'The service restarts to apply the name, interrupting audio and Bluetooth. An empty name restores the automatic model and MAC name.'],
+    input: { label: 'Name (empty restores automatic)', value: echo.hello.name, max: 63 },
+    check: (s) => new TextEncoder().encode(s.trim()).length > 63 ? 'Use at most 63 UTF-8 bytes.'
+      : /[\u0000-\u001f\u007f-\u009f]/u.test(s.trim()) ? 'Control characters are not allowed.' : null });
+  if (v === null) return;
+  try {
+    await echo.call('POST', '/api/name', v.trim());
+    toast('Name saved; the satellite restarts…');
+    if (await waitBack(echo)) location.reload();
+    else toast('Name saved, but the service did not restart. Restart it to apply the name.');
+  } catch (e) { toast(errText(e)); }
+}
+
 function nameRow() {
   const now = h('div', { class: 'row-val' });
   nameCtl = { paint: () => {
     now.replaceChildren(echo.hello.name, ' ', h('code', { title: 'Node name: ESPHome device name, host name' }, echo.hello.node));
   } };
-  return infoRow('Name', 'Made from the model and its MAC address', 'Made from the model and the end of its MAC address, so no two Echos share it and a reset keeps it. Name it in Home Assistant: on the device\'s page there (the pencil), which is where everything else picks names up from.',
-    null, null, now);
+  return infoRow('Name', 'Shared by this page, Home Assistant and Bluetooth', 'Change the visible name without changing the technical node identity. Saved only on this Echo, not in copied settings. Clear the field to restore the automatic name. Home Assistant\'s manually assigned name takes priority there.',
+    h('button', { onclick: editName }, icon('pen'), 'Edit…'), null, now);
 }
 
 // The note (web.c, issue #153), as in the menu's head: there for the search, and for whoever looks for it here
