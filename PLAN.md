@@ -11,6 +11,24 @@ Firmware analysed: `donut_puffin` NS65741 / Fire OS 6574.1. Findings: [docs/FIND
 Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. **(device)** = needs the physical Echo.
 "Done" in phases 0–2 means done on the PC. Device unlocked + rooted 2026-09-21 (kamakiri-donut, boot-root); satellite installed and in daily use since, reachable over Wi-Fi (adb, push updates).
 
+## 2026-11-19 — Web rename with stable node identity
+
+- [x] Signed `/api/name`: strict UTF-8, 63-byte limit, empty restores automatic; atomic `state/display_name` save and
+  service restart request. Capture the original model/MAC (or PC `-n`) node identity before loading the override.
+- [x] Use the visible name on the web page, in ESPHome device info and Bluetooth classic/LE; escape names in Avahi
+  XML and Sendspin/Wyoming JSON. Keep names out of copied settings; keep Home Assistant's manual override independent.
+- [x] PC integration coverage: authenticated writes, rejected malformed names, persistence, automatic restore,
+  unchanged node, ESPHome friendly name, XML metacharacters and byte limits; simulated Bluetooth local name,
+  inquiry response and LE name. User confirmed the OTA build works on an Echo Dot 3 (donut).
+- [x] Login peer buttons resolve visible names through each peer's public `/api/hello`, checking the node against
+  discovery and retaining it as fallback on failures. Browser test covers names, safe text, fallback and stale replies.
+- [x] Display-only peer names in arbitration/pairing warnings, web Drop In banner and Show caller label. Web uses the
+  discovered peer records; Show reads public hello on a separate worker, verifies node and retries every 30 s.
+  Failed lookups retain the node fallback (Show assumes peers share its web port). No routing, blueprint or HA
+  sensor changes. Browser helper and Show hello-parser regression tests; physical Show validation remains pending.
+- [x] Rebased onto upstream `f24014b`: retain plugin/HFP caller labels and UTF-8 truncation, new Bluetooth tests and
+  all upstream test targets. Rename restart tests reuse the approved browser key instead of triggering login rate limits.
+
 ## Phase 0 — Workspace (no device)
 
 - [x] Unpack OTA `payload.bin` (`tools/payload_dump.py`)

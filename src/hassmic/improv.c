@@ -181,8 +181,8 @@
  * protocol (ESPHome and the Voice PE do the same), and why an Echo that is set up wants the button first.
  * WPA2-PSK and open networks only (wifi.c), so the scan answer leaves out the networks it could not join.
  *
- * Names: the Echo's is made from the model and its MAC address (main.c name_make) and never set; what people call it is
- * given in Home Assistant when they add it.  So no host name or device name commands (capabilities without bit 3), the
+ * Names: the Echo's is made from the model and its MAC address (main.c name_make), optionally
+ * overridden from the web page. No host name or device name commands here (capabilities without bit 3); the
  * device info tells the name.
  *
  * Characteristics, in ble.c's order (notifications go out lowest first: the state before the result): state, error,

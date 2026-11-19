@@ -7,6 +7,7 @@
 #include "logread.h"
 #include "core.h"
 #include "plugin.h"
+#include "json.h"
 #include "screen.h"
 #include "wyoming.h"
 
@@ -42,14 +43,15 @@ static void played(void) { send_event("played", NULL, NULL, 0); }
 
 static void send_info(void)
 {
-    char data[1024];
+    char data[1024], name[132];
+    json_esc(name, sizeof name, core_name);
     snprintf(data, sizeof data,
              "{\"asr\":[],\"tts\":[],\"handle\":[],\"intent\":[],\"wake\":[],\"mic\":[],\"snd\":[],"
-             "\"satellite\":{\"name\":\"%s\",\"attribution\":{\"name\":\"hassmic\",\"url\":\"\"},"
+             "\"satellite\":{\"name\":%s,\"attribution\":{\"name\":\"hassmic\",\"url\":\"\"},"
              "\"installed\":true,\"description\":\"%s with Amazon audio front end\",\"version\":\"" VERSION "\","
              "\"area\":null,\"has_vad\":false,\"active_wake_words\":[%s],\"max_active_wake_words\":1,"
              "\"supports_trigger\":true}}",
-             core_name, board.model, core_local_wake ? "\"alexa\"" : "");
+             name, board.model, core_local_wake ? "\"alexa\"" : "");
     send_event("info", data, NULL, 0);
 }
 
@@ -117,7 +119,7 @@ static void print_mdns(void)
 {
     printf("<?xml version=\"1.0\" standalone='no'?>\n<!DOCTYPE service-group SYSTEM \"avahi-service.dtd\">\n"
            "<service-group>\n  <name replace-wildcards=\"yes\">%s %%h</name>\n"
-           "  <service><type>_wyoming._tcp</type><port>%d</port></service>\n</service-group>\n", core_name, core_port);
+           "  <service><type>_wyoming._tcp</type><port>%d</port></service>\n</service-group>\n", core_name_xml(), core_port);
 }
 
 const struct proto proto_wyoming = { "wyoming", 16700, 0, serve, start, audio, NULL, NULL, played, NULL, NULL, print_mdns, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };

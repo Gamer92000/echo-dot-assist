@@ -154,7 +154,11 @@ Echo, so it asks for a typed `yes` first.
 The steps by hand, and what to solder: each model's page in [Supported Echos](#supported-echos).
 
 Once the Echo is on your network, Home Assistant discovers it: add it, pick an Assist pipeline, say "Alexa". The Echo
-names itself after its model and MAC address ("Echo Dot 3 5695c4"); give it your name in Home Assistant.
+names itself after its model and MAC address ("Echo Dot 3 5695c4"). To change its visible name, open its web page,
+**System → Name → Edit…**. The name is saved on this Echo and used by the web page, Home Assistant and Bluetooth
+pairing after a service restart (audio and Bluetooth are interrupted). Its technical node name and MAC stay unchanged.
+An empty name restores the automatic name. Home Assistant may keep a name you assigned manually there: clear that
+override to use the Echo's name. The name is not included when exporting or copying settings to other Echos.
 
 ## Updating
 
