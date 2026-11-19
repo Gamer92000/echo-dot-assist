@@ -2709,7 +2709,7 @@ Run in this order. Each step says what it proves.
       ducked this side for the rest of the call; it counts as silence now (7d: the hall's trace).
       Open: Echo to Echo with micHfp on both ends, the -12 dB tuned on a trace, double talk, the Echo 2 and Echo Dot 5,
       a call while music plays.
-- [~] Replies on another speaker (2026-11-19, a user's request after TECHO5's "Replies play on": a bathroom Echo over
+- [~] Replies on another speaker (2026-11-19, issue #203, after TECHO5's "Replies play on": a bathroom Echo over
       the shower).  `replyspk.c` + `proto_esphome.c` "replies on another speaker": the reply's URL goes to another Echo
       of the network (TCP 28933 `-r`, hello with a challenge, request and every event MAC'd with
       `arb_derive("hassmic reply speaker 1")`; members say their port and whether they take replies, `T_MSG` 0x43 every

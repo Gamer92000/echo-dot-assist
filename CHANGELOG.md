@@ -15,7 +15,7 @@ What changed for people using the Echo, newest first. Details and measurements a
   Echo itself, and the page says why.
   Announcements can go along too ("Announcements play there too"); "Play other Echos' replies" lets an Echo take
   replies or not. In Home Assistant, the select "Replies play on" and the text "Reply player" let automations switch
-  it. Asked for by a user, after TECHO5's "Replies play on".
+  it. Asked for by lebheisenberg (issue #203), after TECHO5's "Replies play on".
 
 ## 2026-11-18 — The language you speak, from the right time zone
 
