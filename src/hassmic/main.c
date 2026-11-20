@@ -9,6 +9,7 @@
  *     -o port  push update port (default 28929, 0 = off; see scripts/ota-push.sh)
  *     -a port  wake word arbitration between Echos, UDP (default 28930, 0 = off; see arb.c)
  *     -i port  Drop In audio between Echos, UDP (default 28932, 0 = off; needs -a; see dropin.c)
+ *     -r port  other Echos' replies played here, TCP (default 28933, 0 = off; needs -a; see replyspk.c)
  *     -z port  Sendspin player port (default 28928, 0 = off)
  *     -T       print the Sendspin pairing token (paste it into Music Assistant to pair) and exit
  *     -L no LED ring   -E no earcon on wake   -V leave the volume buttons alone   -S print the avahi service file and exit
@@ -80,6 +81,7 @@
 #include "board.h"
 #include "clock.h"
 #include "statefile.h"
+#include "replyspk.h"
 
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
@@ -226,6 +228,7 @@ void core_reboot(const char *why)
 static int ota_port = 28929;                        /* 0 = no push updates */
 static int arb_port = 28930;                        /* 0 = no wake word arbitration */
 static int dropin_port = 28932;                     /* 0 = no Drop In (needs the arbitration network) */
+static int reply_port = 28933;                      /* 0 = no replies from other Echos (needs the arbitration network) */
 int core_web_port = 28931;                           /* 0 = no settings page */
 int core_duplex;
 int core_local_wake = 1, core_port, core_sendspin_port = 28928;       /* 0 = Sendspin off */
@@ -1163,6 +1166,7 @@ static void heard_end(void)
 
 int core_follow_up(void) { return follow_up; }
 void core_restart_after(void) { barge_in = 1; barge_from = 0; }
+void core_follow_up_cancel(void) { barge_in = 0; barge_from = 0; }
 
 void core_pipeline_finish(void)
 {
@@ -2133,11 +2137,12 @@ static int arb_scan(const char *tag_id)
     return r;
 }
 
-/* A member's message: to every member, the duck's (duck.c) and the rings' (ringstop.c), each taking only its own kinds;
+/* A member's message: to every member, the duck's (duck.c), the rings' (ringstop.c) and the reply speakers' (replyspk.c),
+ * each taking only its own kinds;
  * to us alone, Drop In's (an invite to all would ring every Echo) */
 static void arb_message(const unsigned char from[8], const char *node, unsigned ip, const unsigned char *p, size_t n, int all)
 {
-    if (all) { duck_message(from, node, p, n); ringstop_message(from, node, p, n); }
+    if (all) { duck_message(from, node, p, n); ringstop_message(from, node, p, n); replyspk_message(from, node, ip, p, n); }
     else dropin_message(from, node, ip, p, n);
 }
 
@@ -2152,7 +2157,10 @@ static void on_pair(void)
 /* ---------------------------------------------------------------- playback queue */
 
 struct item { struct item *next; int kind, media; unsigned rate, ch; size_t len; unsigned char data[]; };   /* media: Q_START */
+static int tts_was_cut;                 /* lock held: the playback that just ended (proto->played) was cut by a flush */
+int core_tts_was_cut(void) { return tts_was_cut; }
 enum { Q_START, Q_DATA, Q_STOP };
+#define Q_ELSEWHERE 2                   /* Q_START's media: the reply plays on another speaker (replyspk.h); its audio only paces */
 static void tts_kind(int media);
 
 static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -2178,6 +2186,9 @@ static void *playback_thread(void *arg)
     int open = 0, play_media = 0, play_ch = 1; unsigned play_rate = 0;
     long long play_t0 = 0, play_frames = 0;     /* the TTS stream's queue as the mixer's music queue is modelled
                                                  * (audio_mixer.c s_queued_us): written minus what real time played */
+    /* a reply played elsewhere (core_tts_begin_elsewhere): nothing opens, each chunk takes the time it would play for,
+     * from el_t0, so what comes after the reply (played(), the next run) comes when it ends there */
+    int elsewhere = 0; long long el_t0 = 0, el_frames = 0;
     (void)arg;
     for (;;) {
         pthread_mutex_lock(&q_lock);
@@ -2195,6 +2206,10 @@ static void *playback_thread(void *arg)
         switch (it->kind) {
         case Q_START:
             if (open) play_close(1);        /* e.g. announcement chime followed by the message */
+            if ((elsewhere = it->media == Q_ELSEWHERE)) {
+                open = 0; play_rate = it->rate; play_ch = it->ch ? (int)it->ch : 1; el_t0 = mono_ms(); el_frames = 0;
+                break;
+            }
             tts_kind(it->media);            /* the TTS stream's volume for what comes now */
             play_media = it->media; play_rate = it->rate; play_ch = it->ch; play_t0 = 0; play_frames = 0;
             open = play_open(it->rate, it->ch) == 0;
@@ -2202,6 +2217,14 @@ static void *playback_thread(void *arg)
             if (!open) fprintf(stderr, "play: open %u Hz x%u failed\n", it->rate, it->ch);
             break;
         case Q_DATA:
+            if (elsewhere && play_rate) {   /* as long as it plays there; a flush ends the wait */
+                long long now = mono_ms(), at = el_t0 + el_frames * 1000 / play_rate, due;
+                if (at < now) el_t0 += now - at;            /* ran dry (the asked Echo had more to say): it goes on from now */
+                el_frames += (long long)(it->len / 2 / (size_t)play_ch);
+                due = el_t0 + el_frames * 1000 / play_rate;
+                for (long long d; !atomic_load(&flush_playback) && (d = due - mono_ms()) > 0; ) usleep((useconds_t)(d > 20 ? 20 : d) * 1000);
+                break;
+            }
             if (open) {                     /* the reply's level, for the mouth on a screen (screen.h) */
                 const int16_t *pcm = (const int16_t *)it->data; size_t ns = it->len / 2; double e = 0;
                 for (size_t i = 0; i < ns; i += 4) e += (double)pcm[i] * pcm[i];
@@ -2222,8 +2245,10 @@ static void *playback_thread(void *arg)
             break;
         case Q_STOP:
             if (open) { play_close(1); open = 0; }
+            elsewhere = 0;
             atomic_store(&tts_on, 0); playback_hint();
             pthread_mutex_lock(&core_lock);
+            tts_was_cut = atomic_load(&flush_playback);    /* for played(): this one ended cut, not played out */
             atomic_store(&flush_playback, 0);       /* under the lock: a wake word between would cut the next reply */
             if (proto->played) proto->played();      /* also without a client: modules reset their state here */
             if (wake_cut) wake_cut = 0;              /* cut for Home Assistant's wake word: its run is the request (core_remote_wake) */
@@ -2236,7 +2261,7 @@ static void *playback_thread(void *arg)
     return NULL;
 }
 
-void core_tts_begin(unsigned rate, unsigned channels, int media)
+static void tts_begin(unsigned rate, unsigned channels, int media, int elsewhere)
 {
     /* wake_wait: a chime and then the message.  -D: the stream stays open, and with it the front end's listening flag
      * (listening(1) of pipeline_start): its cancellers do not adapt during the reply.  As measured on radar (PLAN.md);
@@ -2244,8 +2269,34 @@ void core_tts_begin(unsigned rate, unsigned channels, int media)
     if (!wake_wait && !core_duplex) { atomic_store(&streaming, 0); mic_stopped(); }
     if (state != SPEAKING) speak_media = media;
     core_set_state(SPEAKING);
-    q_push(Q_START, media, rate, channels, NULL, 0);
+    q_push(Q_START, elsewhere ? Q_ELSEWHERE : media, rate, channels, NULL, 0);
     wake_listen();
+}
+const char *core_proto(void) { return proto->id; }
+void core_tts_begin(unsigned rate, unsigned channels, int media) { tts_begin(rate, channels, media, 0); }
+void core_tts_begin_elsewhere(unsigned rate, unsigned channels) { tts_begin(rate, channels, 0, 1); }
+
+/* Another Echo's reply (replyspk.c), refused while this one is doing anything of its own: a run, a reply or media
+ * (the protocol says busy), a Drop In, a timer ringing (the two would play over each other); and with do not disturb
+ * on, a reply too: whoever asked is in another room, maybe one where nobody sleeps.  Refused, it plays on the Echo
+ * that asked */
+int core_remote_reply(const char *chime, const char *url, int announce, unsigned id)
+{
+    char peer[64]; int r;
+    (void)announce;
+    pthread_mutex_lock(&core_lock);
+    if (!proto->remote_play) r = 'U';                  /* Wyoming; Home Assistant's link is not needed to play it */
+    else if (core_dnd(-1)) r = 'D';
+    else if (state != IDLE || core_timers_ringing(NULL, 0) || (dropin_running() && dropin_status(peer, sizeof peer) != DROPIN_IDLE)) r = 'B';
+    else r = proto->remote_play(chime, url, announce, id) ? 'B' : 0;
+    pthread_mutex_unlock(&core_lock);
+    return r;
+}
+void core_remote_stop(unsigned id)
+{
+    pthread_mutex_lock(&core_lock);
+    if (proto->remote_stop) proto->remote_stop(id);
+    pthread_mutex_unlock(&core_lock);
 }
 
 void core_tts_data(const void *pcm, size_t len) { if (!atomic_load(&flush_playback)) q_push(Q_DATA, 0, 0, 0, pcm, len); }
@@ -3676,7 +3727,7 @@ int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
     micgain_init(&mic_gain, MICGAIN_LEVEL);            /* until the protocol has its saved settings (Wyoming: always) */
-    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:W:G:LEVSTBD")) != -1) switch (o) {
+    while ((o = getopt(argc, argv, "P:p:n:w:m:b:z:o:a:i:r:W:G:LEVSTBD")) != -1) switch (o) {
         case 'G': return ring_generate(optarg);     /* root, at the satellite's start (main.sh leds) */
         case 'P': proto = !strcmp(optarg, "wyoming") ? &proto_wyoming : &proto_esphome; break;
         case 'p': port = atoi(optarg); break;
@@ -3688,6 +3739,7 @@ int main(int argc, char **argv)
         case 'o': ota_port = atoi(optarg); break;
         case 'a': arb_port = atoi(optarg); break;
         case 'i': dropin_port = atoi(optarg); break;
+        case 'r': reply_port = atoi(optarg); break;
         case 'W': core_web_port = atoi(optarg); break;
         case 'L': use_led = 0; break;
         case 'E': no_earcons = 1; break;
@@ -3696,7 +3748,7 @@ int main(int argc, char **argv)
         case 'B': use_bt = 0; break;
         case 'D': core_duplex = 1; break;
         case 'T': { char tok[160]; sendspin_init(); sendspin_pairing_token(tok, sizeof tok); puts(tok); return 0; }
-        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-W port] [-G dir] [-L] [-E] [-V] [-S] [-D]\n"); return 2;
+        default: fprintf(stderr, "usage: hassmic [-P esphome|wyoming] [-p port] [-n name] [-w local|remote] [-m manifest] [-b input-device] [-z port] [-o port] [-a port] [-i port] [-r port] [-W port] [-G dir] [-L] [-E] [-V] [-S] [-D]\n"); return 2;
     }
     if (core_duplex && proto != &proto_wyoming) {
         /* ESPHome: Home Assistant's run has finished listening once its reply plays, and the open stream would keep
@@ -3760,6 +3812,8 @@ int main(int argc, char **argv)
     if (arb_running() && duck_start()) fprintf(stderr, "duck: no thread, the other Echos' runs do not duck the music here\n");
     if (arb_running() && ringstop_start()) fprintf(stderr, "ringstop: no thread, a stop here ends no ring elsewhere\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
+    replyspk_load();                    /* where replies play, whatever the network */
+    if (reply_port && arb_running() && replyspk_start(reply_port)) fprintf(stderr, "reply speaker: other Echos' replies not taken here\n");
 
     pthread_t cap_t, play_t, ear_t;
     pthread_create(&cap_t, NULL, capture_thread, NULL);

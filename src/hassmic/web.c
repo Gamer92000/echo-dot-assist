@@ -48,6 +48,7 @@
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
+#include "replyspk.h"
 #include "artifacts.h"
 #include "board.h"
 #include "davs.h"
@@ -610,6 +611,8 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     if (dropin_running()) { char peer[64]; int st = dropin_status(peer, sizeof peer); unsigned at; int res = dropin_last(&at);
         n = app(o, n, cap, ",\"dropin\":{\"state\":\"%s\",\"peer\":\"%s\",\"result\":\"%s\",\"attempt\":%u}",
                               dropin_states[st], peer, res >= 0 ? dropin_results[res] : "", at); }   /* peer: a node, [a-z0-9-] */
+    /* where the replies play (replyspk.h); only the ESPHome API hands them over as an address that can go elsewhere */
+    n = app(o, n, cap, ",\"reply_proto\":\"%s\",\"reply\":", core_proto()); n += replyspk_json(o + n, cap - n);
     n = app(o, n, cap, ",\"wifi\":"); n += wifi_current_json(o + n, cap - n);
     if (screen_present()) {                                       /* the screen: its home app, its music pages */
         n = app(o, n, cap, ",\"screen\":"); n += screen_status_json(o + n, cap - n);
@@ -1237,6 +1240,17 @@ static void handle(int fd)
         else if (!strcmp(t, "end")) { dropin_hangup("settings page"); respond_sjson(fd, &r, 200, "{\"dropin\":\"ended\"}"); }
         else if (dropin_call(t, e, sizeof e)) { jesc(ej, sizeof ej, e); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej); respond_sjson(fd, &r, 409, o); }
         else respond_sjson(fd, &r, 200, "{\"dropin\":\"calling\"}");
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/reply")) {       /* body: replyspk_set's: "here", "echo <node>", ... */
+        char e[200], t[RS_ENTITY_MAX + 40], ej[260], o[4096]; int rc;
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        snprintf(t, sizeof t, "%.*s", (int)(r.blen < sizeof t - 1 ? r.blen : sizeof t - 1), r.body ? r.body : "");
+        t[strcspn(t, "\r\n")] = 0;
+        pthread_mutex_lock(&core_lock);
+        if (!(rc = replyspk_set(t, e, sizeof e)) && !strncmp(t, "room", 4)) core_settings_changed();   /* "room" again: Home Assistant is asked again */
+        pthread_mutex_unlock(&core_lock);
+        if (rc) { jesc(ej, sizeof ej, e); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej); respond_sjson(fd, &r, 409, o); }
+        else { replyspk_json(o, sizeof o); respond_sjson(fd, &r, 200, o); }
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/reset")) {       /* body "reset": not by a stray request */
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }

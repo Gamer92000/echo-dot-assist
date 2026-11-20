@@ -223,6 +223,9 @@ const LAYOUT = {
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
 // icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.
 const HELP = {
+  reply_speaker_announcements: { help: 'Announcements Home Assistant sends to this Echo (assist_satellite.announce, its start_conversation) play where the replies play. Off: they play here. A sound Home Assistant plays on this Echo\'s media player (tts.speak, play_media) always plays here.' },
+  reply_speaker_delay: { help: 'Only for a Home Assistant player: nothing tells this Echo when the player has finished, so it waits for the reply\'s length plus this, then listens again (a question) or goes idle. Too short, and it may hear the end of the reply; too long, and a follow-up waits. Sonos and Google Cast take about 1 to 2 s, an ESPHome player a few hundred ms. Another Echo tells when it is done, and needs none.' },
+  reply_from_others: { help: 'Another of your Echos may send its replies here (its "Replies play on"). This Echo plays them at its replies\' volume when it is idle: not during a request, a reply or a Drop In of its own, not while a timer rings, and none at all with do not disturb on; then they play on the Echo that asked. A wake word here while one is still on its way gives it up: your own request comes first. Off: none are taken, and the others\' pages show this one greyed out.' },
   mic_level: { help: 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.' },
   noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
   wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Off keeps the sound you chose: on again, yours or Alexa\'s plays as before.' },
@@ -436,6 +439,9 @@ const HELP = {
 // The one line under a setting's name, what it is for: enough to find it by.  HELP's words are the ⓘ's.  A page is read
 // by scanning, and rows of two and three lines of explanation can't be scanned
 const SUB = {
+  reply_speaker_announcements: 'Home Assistant\'s announcements to this Echo go there too',
+  reply_speaker_delay: 'How long a Home Assistant player takes to start',
+  reply_from_others: 'Other Echos may play their replies on this one',
   mic_level: 'How loud your voice reaches speech-to-text',
   noise_reduction: 'Takes steady background noise out of requests',
   wake_sound: 'A tone when the Echo starts listening',
@@ -1219,7 +1225,11 @@ function settingCards(list, id) {
 // What only some pages have, beside their settings cards
 const PAGE_BUILD = {
   overview: (el) => buildOverview(el),
-  voice: (el, list) => { el.append(flow(settingCards(list.filter((s) => !soundSwitch(s.name)), 'voice'))); el.append(h('div', { class: 'ringd' }, soundsCard(), packsCard())); },   // laid out as lights' ring designs
+  voice: (el, list) => {
+    const reply = list.filter((s) => REPLY_SETTINGS.includes(s.name));
+    el.append(flow([...settingCards(list.filter((s) => !soundSwitch(s.name) && !REPLY_SETTINGS.includes(s.name)), 'voice'), replyCard(reply)]));
+    el.append(h('div', { class: 'ringd' }, soundsCard(), packsCard()));     // laid out as lights' ring designs
+  },
   wake: (el, list) => { el.append(flow(settingCards(list, 'wake'))); buildWake(el); },
   sound: (el, list) => {
     const vol = h('div', {}), cards = [];
@@ -1417,6 +1427,7 @@ const FINDABLE = [
   ['Copy models', 'models', 'model-copy', 'wake word design theme pack'],
   ['Models on file', 'models', 'model-file', 'backup tar save load'],
   ['Light ring animations', 'lights', 'ring-acts', 'designs led theme pack'],
+  ['Replies play on', 'voice', 'reply-card', 'another speaker answer respond bathroom room sonos media player echo louder'],
   ['Sounds', 'voice', 'sounds', 'wake sound chime earcon ringtone your own upload replace'],
   ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
   ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
@@ -1559,7 +1570,7 @@ function render() {
   if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
-  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint();
+  renderTop(); renderAttention(); renderNetwork(); renderDevices(); renderSystem(); renderWake(); renderSounds(); if (massCtl) massCtl.paint(); if (homeCtl) homeCtl.paint(); if (replyCtl) replyCtl.paint();
   if (fresh) route();                   // after the controls: cards are placed by their height, with what is hidden hidden
 }
 
@@ -3034,6 +3045,125 @@ function homeRow() {
     h('div', { class: 'row-t' }, h('div', { class: 'row-label' }, h('label', { for: 'home-sel' }, 'Home app')),
       h('p', { class: 'help' }, 'What the screen shows at start and goes back to when an app ends. The face is hassmic\'s own.')),
     h('div', { class: 'ctl' }, sel));
+}
+
+// ---------------------------------------------------------------- replies on another speaker (replyspk.c)
+// Where the assistant's replies play: this Echo, another of your Echos, the media player of this Echo's area in Home
+// Assistant, or one named.  A card of its own on the Voice page, not a setting row: what it can pick (the Echos that
+// take replies, what Home Assistant found in the area) comes from the Echo, state.reply, with each poll
+const REPLY_SETTINGS = ['reply_speaker_announcements', 'reply_speaker_delay', 'reply_from_others'];
+let replyCtl = null;
+const replyNames = new Map();            // node -> { name, note }: from the Echos page's list, else each Echo's hello
+let replyAsked = 0;
+
+function replyEchoName(x) {
+  for (const d of others.values()) if (d.echo && d.echo.hello.node === x.node) replyNames.set(x.node, { name: d.echo.hello.name, note: d.echo.hello.note || '' });
+  const n = replyNames.get(x.node);
+  return n ? n.name + (n.note ? ` · ${n.note}` : '') : x.node;
+}
+// the names of the Echos this one lists, once a minute at most: their hello needs no login (CORS *, web.c)
+function replyLookNames(list) {
+  if (Date.now() - replyAsked < 60000) return;
+  replyAsked = Date.now();
+  for (const x of list) if (x.ip && !replyNames.has(x.node))
+    fetch(baseOf(x.ip) + '/api/hello', { signal: within(4000) }).then((r) => r.json())
+      .then((hl) => { if (hl.node === x.node) { replyNames.set(x.node, { name: hl.name, note: hl.note || '' }); if (replyCtl) replyCtl.paint(true); } }).catch(() => {});
+}
+
+async function replyTo(spec, what) {
+  try {
+    state.reply = (await echo.call('POST', '/api/reply', spec)).json();
+    toast(what ? `Replies play on ${what}` : 'Saved');
+  } catch (e) { toast(errText(e)); }
+  if (replyCtl) replyCtl.paint(true);
+}
+
+function replyCard(settings) {
+  const echoSel = h('select', { 'aria-label': 'Which Echo', onclick: (e) => e.stopPropagation(), onchange: () => {
+    if (echoSel.value) replyTo(`echo ${echoSel.value}`, echoSel.selectedOptions[0].textContent.replace(/ \(.*\)$/, ''));
+  } });
+  const player = h('input', { type: 'text', placeholder: 'media_player.bathroom_speaker', spellcheck: 'false', autocomplete: 'off',
+    'aria-label': 'Home Assistant media player', onclick: (e) => e.stopPropagation(),
+    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); savePlayer(); } } });
+  const savePlayer = () => { const v = player.value.trim(); if (v) replyTo(`player ${v}`, v); else player.focus(); };
+  const roomInfo = h('div', { class: 'mode-sub rs-info' }), playerInfo = h('div', { class: 'mode-sub rs-info' }), echoInfo = h('div', { class: 'mode-sub rs-info' });
+  const again = h('button', { type: 'button', class: 'small', onclick: (e) => { e.stopPropagation(); replyTo('room'); } }, icon('refresh'), 'Ask again');
+  const againRow = h('div', { class: 'btns' }, again);
+  const MODES = [
+    ['here', 'This Echo', 'Replies play here, as they always have.', []],
+    ['echo', 'Another of your Echos', 'The reply plays there, at its own replies\' volume; this Echo listens again once it has played. Straight between your Echos, signed with the network\'s key.', [echoSel, echoInfo]],
+    ['room', 'The speaker in this room', 'The media player Home Assistant has in this Echo\'s area, played as an announcement: music there goes quiet for it and carries on.', [roomInfo, againRow]],
+    ['player', 'A Home Assistant player', 'Any media player, by its entity id, played as an announcement.', [h('div', { class: 'btns' }, player,
+      h('button', { type: 'button', class: 'small', onclick: (e) => { e.stopPropagation(); savePlayer(); } }, 'Use it')), playerInfo]],
+  ];
+  const cards = MODES.map(([mode, title, sub, extra]) => {
+    const pick = () => {
+      const r = state.reply || {};
+      if (mode === 'echo') { if (echoSel.value) replyTo(`echo ${echoSel.value}`, echoSel.selectedOptions[0].textContent); else echoSel.focus(); }
+      else if (mode === 'player') { if (player.value.trim()) savePlayer(); else if (r.player) replyTo('player', r.player); else player.focus(); }
+      else if (r.mode !== mode) replyTo(mode, mode === 'here' ? 'this Echo' : 'the speaker in this room');
+    };
+    return h('div', { class: 'mode', role: 'radio', tabindex: '0', 'aria-checked': 'false', 'data-mode': mode, onclick: pick,
+      onkeydown: (e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); pick(); } } },
+      h('span', { class: 'radio' }),
+      h('div', { class: 'mode-body' }, h('div', { class: 'mode-head' }, h('b', {}, title)), h('p', { class: 'mode-sub' }, sub), extra));
+  });
+  const warn = h('ul', { class: 'pc row-warn' }), last = h('div', { class: 'rs-last' });
+  const rows = settings.map(settingRow);
+  // each row only where it does something: the announcements and a player's start with replies elsewhere, the latter
+  // only for a Home Assistant player; this Echo playing others' replies always
+  const shows = { reply_speaker_announcements: (m) => m !== 'here', reply_speaker_delay: (m) => m === 'room' || m === 'player' };
+  let built = '';
+  replyCtl = { paint: (force) => {
+    const r = state.reply; if (!r) return;
+    cards.forEach((c) => { const on = c.dataset.mode === r.mode; c.classList.toggle('on', on); c.setAttribute('aria-checked', String(on)); });
+    settings.forEach((x, i) => rows[i].classList.toggle('hidden', !!shows[x.name] && !shows[x.name](r.mode)));
+    // the Echos: those that take replies first; one heard from that does not, and one known but not heard from now, greyed
+    const list = [...r.echos].sort((a, b) => (b.accepts - a.accepts) || replyEchoName(a).localeCompare(replyEchoName(b)));
+    replyLookNames(list);
+    const opts = [['', list.length ? 'Choose an Echo…' : 'No other Echo in this one\'s network', false],
+      ...list.map((x) => [x.node, replyEchoName(x) + (!x.online ? ' (not heard from)' : !x.accepts ? ' (does not take replies)' : ''), !x.accepts && x.node !== r.node])];
+    if (r.node && !opts.some(([n]) => n === r.node)) opts.push([r.node, `${r.node} (not heard from)`, false]);
+    const sig = JSON.stringify(opts);
+    if ((sig !== built || force) && document.activeElement !== echoSel) {
+      built = sig; echoSel.replaceChildren(...opts.map(([v, t, off]) => h('option', { value: v, disabled: off }, t)));
+    }
+    if (document.activeElement !== echoSel) echoSel.value = r.mode === 'echo' ? r.node : r.node || '';
+    const chosen = r.echos.find((x) => x.node === r.node);
+    echoInfo.replaceChildren(...(r.mode !== 'echo' ? [] : !chosen ? ['It has not been heard from: the replies play here until it is.']
+      : !chosen.online ? ['Not heard from just now: the replies play here until it is back.']
+      : !chosen.accepts ? [h('span', { class: 'warn-t' }, icon('warn'), '"Play other Echos\' replies" is off on it: the replies play here.')]
+      : [h('span', { class: 'ok-t' }, icon('check'), `Takes replies (${chosen.ip})`)]));
+    const rm = r.room, room = r.mode === 'room';
+    againRow.classList.toggle('hidden', !room || r.actions === false);
+    roomInfo.replaceChildren(...(r.actions === false && room ? [] : !rm.asked ? [room ? 'Asking Home Assistant…' : 'Home Assistant is asked which one once you choose this.']
+      : !rm.found ? [`Home Assistant could not be asked: ${rm.area}`]
+      : !rm.area ? ['This Echo has no area in Home Assistant: give its device one there.']
+      : !rm.entity ? [`No other media player in ${rm.area}.`]
+      : [h('span', { class: 'ok-t' }, icon('check'), `${rm.name || rm.entity} in ${rm.area}`), h('code', {}, ' ' + rm.entity),
+         rm.others ? h('div', {}, `Also there: ${rm.names}${rm.others > 4 ? '…' : ''}. Name one under "A Home Assistant player" to use it instead.`) : null]));
+    if (document.activeElement !== player) player.value = r.player || '';
+    const pi = r.mode === 'player' ? r.player_info : null;
+    playerInfo.replaceChildren(...(!pi ? [] : !pi.state ? [h('span', { class: 'warn-t' }, icon('warn'), 'Home Assistant has told nothing of it: is the entity id right?')]
+      : pi.state === 'unavailable' || pi.state === 'unknown' ? [h('span', { class: 'warn-t' }, icon('warn'), `${pi.name || pi.entity} is ${pi.state}: the replies play here meanwhile.`)]
+      : [h('span', { class: 'ok-t' }, icon('check'), `${pi.name || pi.entity}: ${pi.state}`)]));
+    const w = [];
+    if (state.reply_proto !== 'esphome') w.push('Home Assistant hands replies to another speaker only over its ESPHome integration; with Wyoming they play here.');
+    if (r.mode === 'echo' && !(state.arbitration && state.arbitration.network)) w.push('This Echo is in no network of Echos (the Echos page): another Echo cannot be asked.');
+    if ((r.mode === 'room' || r.mode === 'player') && r.actions === false)
+      w.push('Home Assistant does not let this Echo perform actions, so it cannot play the replies on a player: in Home Assistant, Settings → Devices & services → ESPHome → this Echo → Configure, tick "Allow the device to perform Home Assistant actions".');
+    warn.replaceChildren(...w.map((t) => h('li', {}, icon('warn'), h('span', {}, t))));
+    const l = r.last, where = l && (r.echos.find((x) => x.node === l.where) ? replyEchoName(r.echos.find((x) => x.node === l.where)) : l.where);
+    const ago = l && (l.ago_s < 60 ? 'just now' : l.ago_s < 3600 ? `${Math.round(l.ago_s / 60)} min ago` : `${Math.round(l.ago_s / 3600)} h ago`);
+    last.replaceChildren(...(!l ? [] : [h('span', { class: 'badge' + (l.result === 'here' ? ' warn' : ' ok') }, l.result === 'here' ? 'Played here' : l.result === 'cut' ? 'Stopped' : 'Played'),
+      h('span', {}, l.result === 'here' ? ` instead of on ${where}${l.why ? ': ' + l.why : ''}` : ` on ${where}${l.why ? ' (' + l.why + ')' : ''}`), h('span', { class: 'row-val-sub' }, ` · last reply, ${ago}`)]));
+  } };
+  replyCtl.paint();
+  return h('div', { class: 'card', id: 'reply-card' },
+    h('div', { class: 'sub-head' }, 'Replies play on', haMark()),
+    h('p', { class: 'help rs-help' }, 'For a room where this Echo is hard to hear, a bathroom with the water running: the assistant answers through another speaker. This Echo still listens, its ring still shows the reply, and "stop" or the wake word still cut it. If that speaker cannot take a reply, it plays here.'),
+    h('div', { class: 'modes rs-modes', role: 'radiogroup', 'aria-label': 'Replies play on' }, cards), warn, last, rows,
+    h('p', { class: 'help rs-help' }, icon('ha'), ' In Home Assistant: the select "Replies play on" and the text "Reply player", for automations (the shower on: the bathroom\'s speaker).'));
 }
 
 const MASS_STATE = { off: 'Not connected', connecting: 'Connecting…', up: 'Connected', auth: 'Token refused', error: 'Not reachable' };

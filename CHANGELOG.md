@@ -2,6 +2,21 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-19 — Replies on another speaker
+
+- **The assistant can answer through another speaker.** For a room where the Echo is hard to hear, a bathroom with the
+  water running: settings page, Voice, "Replies play on": another of your Echos, the media player Home Assistant has
+  in the Echo's area, or any Home Assistant media player you name. The Echo still hears you and shows everything on
+  its ring, and "stop" or the wake word cut the reply where it plays. On another Echo the reply plays straight between
+  the two (signed with your Echos' key), and a question's follow-up starts when it has finished there. A Home
+  Assistant player gets it as an announcement, so music there goes quiet and carries on; that needs "Allow the device
+  to perform Home Assistant actions" in the Echo's ESPHome options, and the page says when it is off. Whatever cannot
+  take a reply (switched off, busy, do not disturb, a timer ringing there, unavailable, refused) has it play on the
+  Echo itself, and the page says why.
+  Announcements can go along too ("Announcements play there too"); "Play other Echos' replies" lets an Echo take
+  replies or not. In Home Assistant, the select "Replies play on" and the text "Reply player" let automations switch
+  it. Asked for by lebheisenberg (issue #203), after TECHO5's "Replies play on".
+
 ## 2026-11-18 — The language you speak, from the right time zone
 
 - **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to

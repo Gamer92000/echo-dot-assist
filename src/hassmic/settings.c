@@ -15,6 +15,7 @@
 #include "ring.h"
 #include "ringlive.h"
 #include "ringstop.h"
+#include "replyspk.h"
 #include "screen.h"
 #include "sendspin.h"
 #include "sound.h"
@@ -106,7 +107,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, REPLY_ANNOUNCE, REPLY_DELAY, REPLY_ACCEPT, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -149,6 +150,12 @@ static const struct setting table[NSET] = {
     /* buttons.c keeps it: double press of the action button = next, triple = previous; a single press waits 450 ms */
     [MULTI_PRESS] = { "multi_press", "Double and triple press of the action button", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* replyspk.c keeps them (where replies play is its own file, state/reply_speaker: a room's, never exported): Home
+     * Assistant's announcements go where the replies go; what a Home Assistant player takes to start (nothing says
+     * when it is done, so the run here waits the reply's length after it); this Echo plays other Echos' replies */
+    [REPLY_ANNOUNCE] = { "reply_speaker_announcements", "Announcements play there too", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    [REPLY_DELAY] = { "reply_speaker_delay", "Home Assistant player start time", "Voice", "ms", S_INT, 0, RS_DELAY_MAX, 1, 0 },
+    [REPLY_ACCEPT] = { "reply_from_others", "Play other Echos' replies", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* main.c: the request's audio from the wake word on (replay_whole); not with Home Assistant's wake word */
     [WAKE_IN_REQ] = { "wake_word_in_request", "Wake word in the request", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* micend.c, issue #66: ESPHome only (Wyoming has no end of audio here) */
@@ -277,6 +284,7 @@ static int present(enum id i)
     case RING_LIVE: return ringlive_available();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
+    case REPLY_ACCEPT: return replyspk_running();
     case CALL_MIC: return callmic_present() && dropin_running();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
@@ -377,6 +385,9 @@ int settings_get(const struct setting *s)
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
     case TIMER_STOP_OTHERS: return ringstop_from_others(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
+    case REPLY_ANNOUNCE: return replyspk_announce(-1);
+    case REPLY_DELAY: return replyspk_delay(-1);
+    case REPLY_ACCEPT: return replyspk_accept(-1);
     case MULTI_PRESS: return buttons_multi_press(-1);
     case WAKE_IN_REQ: return core_wake_in_request(-1);
     case END_REQ: return core_end_of_request(-1);
@@ -459,6 +470,9 @@ static void put(enum id i, int v)
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
     case TIMER_STOP_OTHERS: ringstop_from_others(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
+    case REPLY_ANNOUNCE: replyspk_announce(v); break;
+    case REPLY_DELAY: replyspk_delay(v); break;
+    case REPLY_ACCEPT: replyspk_accept(v); break;
     case MULTI_PRESS: buttons_multi_press(v); break;
     case WAKE_IN_REQ: core_wake_in_request(v); break;
     case END_REQ: core_end_of_request(v); break;
@@ -572,7 +586,7 @@ void settings_save(void)
         if (i == SCR_COLOUR) {
             if (!colour_supported()) continue;
             snprintf(v, sizeof v, "%s", adaptive_colour ? "on" : "off");
-        } else { if (!present(i)) continue; format(&table[i], v, sizeof v); }
+        } else { if (!present(i) && i != REPLY_ACCEPT) continue; format(&table[i], v, sizeof v); }     /* replyspk.c holds it either way */
         fprintf(s.f, "%s=%s\n", table[i].name, v);
     }
     if (statefile_commit(&s)) fprintf(stderr, "settings: cannot write %s\n", p);

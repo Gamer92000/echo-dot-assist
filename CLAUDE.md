@@ -66,6 +66,10 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
+.venv/bin/python tests/fake_ha_reply.py       # replies on another speaker: three Echos, Kitchen takes them, Hall does not;
+                                             # played there, the follow-up after it, cut by the wake word here, refusals
+                                             # and a vanished Echo playing here; a fake HA player (play_media, answers,
+                                             # unavailable, actions off), the room's player, HA's select and text
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
 .venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
@@ -73,6 +77,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/ha_real_dropin.py      # the blueprint in a real Home Assistant (build/ha-venv, made by --setup;
                                              # skips without it) with four Echos, one the released build: replies, timing.
                                              # All of it in an `unshare -rn` namespace with only lo
+.venv/bin/python tests/ha_real_reply.py       # the room's player in a real Home Assistant (the template, actions off then on,
+                                             # an announcement played on another Echo of the area through HA's proxy);
+                                             # its --setup adds ffmpeg (imageio-ffmpeg) to build/ha-venv
 .venv/bin/python tests/fake_ha.py [--qemu]    # Wyoming; --qemu uses the ARM build + stock Pryon model under qemu-arm
 .venv/bin/python tests/fake_talk_duplex.py    # -D over Wyoming (a realtime client with its own barge-in): the mic through
                                              # a reply, a wake word then left to the client, the button still cuts it,
@@ -428,6 +435,25 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `HASSMIC_VOIP_FAIL` (a file: the Voip stream fails, 7d), `HASSMIC_FAKE_LISTEN` (the front end's listening mode
   logged); Android: none.  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
   (`listen_on`, `near_until`): reset, the core never heard "off" and kept the front end listening for the call.
+- **Replies on another speaker** (`replyspk.c`, `replyspk.h`; `proto_esphome.c` "replies on another speaker"): the
+  page's "Replies play on" (`state/reply_speaker`: here / room / player / echo, the player's entity, the node, the
+  Echos known for HA's select), Home Assistant's select "Replies play on" (`reply_labels`, then nodes: keep them) and
+  text "Reply player".  A reply (and an announcement with `reply_speaker_announcements`; never media on our media player,
+  never another Echo's: no loops) asks the target first (`media_thread` -> `elsewhere`), else plays here, the outcome on
+  the page (`replyspk_outcome`).  Meanwhile the run here plays it silently: `core_tts_begin_elsewhere` (`Q_ELSEWHERE`:
+  nothing opens, each chunk sleeps its length, a flush ends it), so state, ring, barge-in, stop and follow-ups are
+  unchanged.  Another Echo: TCP `-r` (28933), hello with a challenge, request and events MAC'd with
+  `arb_derive("hassmic reply speaker 1")`; the target plays it as a job with `remote` (`remote_play`, `core_remote_reply`:
+  refused unless idle, with DND or a timer ringing; anything of its own before the audio: `remote_drop`; a heartbeat
+  'H' every 2 s, none for 6.5 s = gone; a cut there opens no follow-up here: `core_tts_was_cut`, `core_follow_up_cancel`) and says S, then P/C/F (`replyspk_event`, `played()`); members say
+  port and `reply_from_others` (`T_MSG` 0x43, 0x44 asks).  A Home Assistant player: `media_player.play_media`
+  (announce) with a call id (`ha_action`/`ha_wait`, HomeassistantActionResponse 130: answered at once on a refusal,
+  nothing with "perform actions" off: `hassmic.check_actions` is the probe), quiet for the decoded length +
+  `reply_speaker_delay`; an `/ffmpeg_proxy/` URL (HA's announcements to a satellite: one reader at a time) read whole
+  first (`fetch_length`).  The room's player: `media_player.browse_media` on our own player with a response template
+  (`room_ask`: own device by MAC, its area, `area_entities` less ours), on each keyed link, every 30 min, "Ask again".
+  The player's state and name subscribed (`player_subscribe`).  Tests: `tests/fake_ha_reply.py`,
+  `tests/ha_real_reply.py`.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
@@ -786,7 +812,7 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
-16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
+16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, 28933 other Echos' replies, UDP 28930 arbitration)
 must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
 `state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed, and with `kiosk_dlna` on its DLNA renderer (`kiosk_dlna` in `lockdown.sh`: the TCP port of the app's own setting `flutter.ks.dlna.port`, read through `runas` as its user, while its uid listens there per `/proc/net/tcp*`; UDP 1900 to 239.255.255.250 only while its uid alone holds 1900; issue #109); its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`

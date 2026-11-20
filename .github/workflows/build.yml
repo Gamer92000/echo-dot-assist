@@ -233,7 +233,8 @@ jobs:
           path: build/test-logs/
 
   # The Drop In voice blueprint in a real Home Assistant (tests/ha_real_dropin.py, which pins its version) against PC
-  # Echos, one of them the released build of a tag; and the end of a request heard on the Echo (tests/ha_real_end.py).  A job of its own: Home Assistant comes from PyPI with what its
+  # Echos, one of them the released build of a tag; the end of a request heard on the Echo (tests/ha_real_end.py); replies
+  # on the speaker of the Echo's area (tests/ha_real_reply.py).  A job of its own: Home Assistant comes from PyPI with what its
   # integrations need (a venv of about 1 GB, made fresh: uv takes a minute), and releases do not wait for it.
   home-assistant:
     runs-on: ubuntu-latest
@@ -272,6 +273,11 @@ jobs:
         env:
           HASSMIC_HA_REQUIRED: '1'
         run: .venv/bin/python tests/ha_real_end.py
+      # the media proxy that hands an announcement to another player needs ffmpeg in that venv (imageio-ffmpeg's)
+      - name: Replies on another speaker, in Home Assistant
+        env:
+          HASSMIC_HA_REQUIRED: '1'
+        run: .venv/bin/python tests/ha_real_reply.py --setup && .venv/bin/python tests/ha_real_reply.py
 
   release:
     needs: [version, build, test]

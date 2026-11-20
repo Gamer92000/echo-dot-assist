@@ -97,6 +97,8 @@
 #include "net.h"
 #include "netio.h"
 #include "statefile.h"
+#include "replyspk.h"
+#include "json.h"
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
 #include "../third_party/minimp3.h"
@@ -117,6 +119,7 @@ enum {
     LIST_UPDATE = 116, UPDATE_STATE, UPDATE_COMMAND, LIST_BUTTON = 61, BUTTON_COMMAND = 62,
     LIST_LIGHT = 15, LIGHT_STATE = 24, LIGHT_COMMAND = 32,
     DEVICE_CAPS_REQ = 149, DEVICE_CAPS_RESP, SENDSPIN_TOKEN_REQ = 159, SENDSPIN_TOKEN_RESP,
+    LIST_TEXT = 97, TEXT_STATE, TEXT_COMMAND, HA_ACTION_RESP = 130,
 };
 /* The API version we speak: 1.15 is the first with DeviceCapabilitiesRequest, which Home Assistant asks on every
  * connect from then on (aioesphomeapi device_capabilities_compat; below it the capabilities are made up from
@@ -158,6 +161,11 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        /* the light ring live (ringlive.h): four actions, the design select, then a light per LED (RING_LEDS_MAX keys:
         * a new key goes after KEY_LIVE_LED + RING_LEDS_MAX) */
        KEY_LIVE_FRAME, KEY_LIVE_ANIM, KEY_LIVE_DESIGN_SVC, KEY_LIVE_STOP, KEY_LIVE_DESIGN, KEY_LIVE_LED };
+/* replies on another speaker (replyspk.h): where they play, and the Home Assistant player by its entity id */
+enum { KEY_REPLY_SPEAKER = KEY_LIVE_LED + RING_LEDS_MAX, KEY_REPLY_PLAYER };
+/* the select's first options, in RS_* order; the network's Echos follow by node.  Automations name them: keep them */
+static const char *const reply_labels[3] = { "This Echo", "Speaker in this room", "Home Assistant player" };
+static char listed_nodes[16][RS_NODE_MAX]; static int nlisted = -1;     /* lock held: the Echos the select offers (-1: none listed yet) */
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -182,6 +190,7 @@ static void home_subscribe(int c);                   /* zone.home: Home Assistan
 static void home_state(const char *attr, const char *v);
 static atomic_int media_busy;
 static struct media_job *media_cur;    /* lock held: the job holding media_busy, for cancel() */
+static long long bt_asked_ms;          /* lock held: below (bt_ask) */
 
 /* ---------------------------------------------------------------- framing (the messages' protobuf: pb.h) */
 
@@ -446,6 +455,11 @@ static void send_setting(int key)       /* lock held */
         PB(t, RD_NAME + 16); char nm[RD_NAME]; ringlive_playing(nm, sizeof nm);
         pb_fixed32(&t, 1, key); pb_str(&t, 2, nm[0] && strcmp(nm, "animation") ? nm : "None"); send_state(SELECT_STATE, &t); } break;
     case KEY_RING_ROTATION: pb_float(&b, 2, ring_rotation(-1)); send_state(NUMBER_STATE, &b); break;
+    case KEY_REPLY_SPEAKER: case KEY_REPLY_PLAYER: {
+        struct rs_target t; replyspk_get(&t); PB(r, RS_ENTITY_MAX + 16);
+        pb_fixed32(&r, 1, key);
+        pb_str(&r, 2, key == KEY_REPLY_PLAYER ? t.player : t.mode == RS_ECHO ? t.node : reply_labels[t.mode]);
+        send_state(key == KEY_REPLY_PLAYER ? TEXT_STATE : SELECT_STATE, &r); } break;
     case KEY_LED_AUTO: if (have_auto) { pb_uint(&b, 2, core_led_auto(-1)); send_state(SWITCH_STATE, &b); } break;
     default:
         if (key >= KEY_LIVE_LED && key < KEY_LIVE_LED + RING_LEDS_MAX) {     /* each LED of the live ring as a light */
@@ -526,6 +540,7 @@ static void send_sensor(int key, float v)   /* lock held */
  * follows the room is an entry in HA's logbook every few minutes (forum, 2026-10-15).  Off, the level goes out when HA
  * subscribes and when it is set; auto brightness itself works the same. */
 static float sent_lux = NAN; static int sent_level = -1; static time_t sent_at, level_at;     /* lock held */
+static void reply_tick(void);
 
 static void *light_thread(void *arg)
 {
@@ -547,6 +562,7 @@ static void *light_thread(void *arg)
                 send_setting(KEY_LED_BRIGHTNESS); sent_level = level; level_at = now;
             }
         }
+        reply_tick();                                           /* replies elsewhere: Home Assistant's silences */
         pthread_mutex_unlock(&core_lock);
     }
     return NULL;
@@ -820,6 +836,22 @@ static void send_setting_entities(void)
      * forgotten, Home Assistant's key and the Wi-Fi networks too (core_reset): the Echo starts its setup again */
     { PB(b, 128); pb_str(&b, 1, "factory_reset"); pb_fixed32(&b, 2, KEY_RESET); pb_str(&b, 3, "Factory reset");
       pb_str(&b, 5, "mdi:restart-alert"); pb_uint(&b, 7, 1); pb_str(&b, 8, "restart"); send_msg(LIST_BUTTON, &b); }
+    /* replies on another speaker (replyspk.h): where, as a select: this Echo, the room's player, the player named in the
+     * text beside it, or another Echo of the network that takes replies (by node: what Home Assistant shows as the
+     * device's host name).  Configuration entities: an automation may switch them (the shower on: the bathroom's speaker) */
+    {
+        int n = replyspk_known(listed_nodes, 16);
+        PB(b, 16 * (RS_NODE_MAX + 2) + 256);
+        pb_str(&b, 1, "replies_play_on"); pb_fixed32(&b, 2, KEY_REPLY_SPEAKER); pb_str(&b, 3, "Replies play on");
+        pb_str(&b, 5, "mdi:speaker-message");
+        for (int i = 0; i < 3; i++) pb_str(&b, 6, reply_labels[i]);
+        for (int i = 0; i < n; i++) if (strcmp(listed_nodes[i], core_node_name())) pb_str(&b, 6, listed_nodes[i]);
+        nlisted = n;
+        pb_uint(&b, 8, 1); send_msg(LIST_SELECT, &b);
+    }
+    { PB(b, 192); pb_str(&b, 1, "reply_player"); pb_fixed32(&b, 2, KEY_REPLY_PLAYER); pb_str(&b, 3, "Reply player");
+      pb_str(&b, 5, "mdi:speaker"); pb_uint(&b, 7, 1); pb_uint(&b, 8, 0); pb_uint(&b, 9, RS_ENTITY_MAX - 1);
+      pb_str(&b, 10, "^(media_player\\.[a-z0-9_]+)?$"); send_msg(LIST_TEXT, &b); }
     /* ESPHome's restart button: the whole Echo, as a power cycle (core_reboot) */
     { PB(b, 128); pb_str(&b, 1, "restart"); pb_fixed32(&b, 2, KEY_RESTART); pb_str(&b, 3, "Restart");
       pb_uint(&b, 7, 1); pb_str(&b, 8, "restart"); send_msg(LIST_BUTTON, &b); }
@@ -836,7 +868,7 @@ static void send_live_states(void)
 
 static void on_setting(unsigned type, const unsigned char *p, const unsigned char *end)
 {
-    struct pbf f; unsigned key = 0; float num = 0; int on = 0; char opt[RD_NAME + 8] = "";
+    struct pbf f; unsigned key = 0; float num = 0; int on = 0; char opt[RS_ENTITY_MAX + 32] = "";
     while (pb_next(&p, end, &f)) {
         if (f.field == 1) key = f.v;
         else if (f.field == 2 && f.wire == 5) { uint32_t u = f.v; memcpy(&num, &u, 4); }
@@ -850,6 +882,17 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         else if (ringlive_design(opt, 0, 1, e, sizeof e)) fprintf(stderr, "light ring live: %s\n", e);
         else fprintf(stderr, "light ring live: design \"%s\"\n", opt);
         send_setting(key); return;
+    }
+    if ((type == SELECT_COMMAND && key == KEY_REPLY_SPEAKER) || (type == TEXT_COMMAND && key == KEY_REPLY_PLAYER)) {
+        char spec[RS_ENTITY_MAX + 40], e[200]; int i = 0;
+        if (type == TEXT_COMMAND) snprintf(spec, sizeof spec, opt[0] ? "player %s" : "player -", opt);   /* the player named: replies go there */
+        else {
+            while (i < 3 && strcmp(opt, reply_labels[i])) i++;
+            if (i < 3) snprintf(spec, sizeof spec, "%s", replyspk_modes[i]);
+            else snprintf(spec, sizeof spec, "echo %s", opt);                                 /* an Echo by its node */
+        }
+        if (replyspk_set(spec, e, sizeof e)) fprintf(stderr, "reply speaker: %s\n", e);
+        send_setting(KEY_REPLY_SPEAKER); send_setting(KEY_REPLY_PLAYER); return;
     }
     if (type == SELECT_COMMAND && key == KEY_DENOISE) { for (int i = 0; i < 4; i++) if (!strcmp(opt, denoise_names[i])) core_mic_denoise(i); }
     else if (type == SELECT_COMMAND && key == KEY_BT_LANG) { for (int i = 0; i < bt_lang_count; i++) if (!strcmp(opt, bt_langs[i].name)) settings_bt_lang_index(i); }
@@ -986,6 +1029,13 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
 
 struct media_job {
     char url[2][1024]; int announce, start_conversation, media;     /* media: play_media, at the main volume */
+    int is_reply;                       /* the pipeline's reply (else an announcement or media) */
+    int route;                          /* may play on another speaker (replyspk.h): a reply, an announcement with the setting */
+    int elsewhere, lead_ms;             /* its audio only paces a reply a Home Assistant player plays: lead_ms of quiet first */
+    unsigned remote;                    /* another Echo's reply played here (replyspk.c's session id), 0: none */
+    int counting;                       /* only its length is wanted: decoded, nothing queued (counted bytes at c_rate, c_ch) */
+    size_t counted; unsigned c_rate, c_ch;
+    int told;                           /* remote: its start was told */
     int fd, aborted;                    /* lock held.  aborted: let go of by cancel() or media_stop_early(), which set
                                          * the state; the thread queues no more audio (tts_begin refuses, the decoders
                                          * stop: job_gone) and only calls core_tts_abandoned if its audio had begun */
@@ -1033,12 +1083,43 @@ static int http_get(const char *url)    /* returns a socket positioned at the bo
     return http_get_host(host, port, path ? path : "/");
 }
 
+static void feed(struct media_job *job, const void *pcm, size_t len);
+static void feed_quiet(struct media_job *job, unsigned rate, unsigned ch, int ms);
+static int job_gone(struct media_job *job);
+/* Lock held.  Another Echo's reply is taken only while this one is idle, but its audio comes later (the fetch waits on
+ * Home Assistant rendering it): a wake word here meanwhile started a run of this Echo's own, which the reply must not
+ * break (core_tts_begin would end its microphone and take the state).  The reply lets go instead, as cancel() lets
+ * go of one: the asking Echo hears "cut" before it began and plays it itself */
+static void remote_drop(struct media_job *job)
+{
+    fprintf(stderr, "reply speaker: another Echo's reply given up: this Echo is busy with something of its own now\n");
+    job->aborted = 1;
+    if (job->fd >= 0) shutdown(job->fd, SHUT_RDWR);
+    if (media_cur == job) media_cur = NULL;
+    media_playing = 0; send_mp_state();
+    atomic_store(&media_busy, 0);
+}
+static int remote_yields(struct media_job *job)
+{
+    enum state st = core_state();
+    if (!job->remote || st == IDLE || (st == SPEAKING && job->began)) return 0;
+    remote_drop(job);
+    return 1;
+}
 static int tts_begin(struct media_job *job, unsigned rate, unsigned ch)    /* -1: let go of, it must not play */
 {
+    int lead = 0;
+    if (job->counting) { job->c_rate = rate; job->c_ch = ch ? ch : 1; return job_gone(job) ? -1 : 0; }
     pthread_mutex_lock(&core_lock);
-    int ok = !job->aborted;
-    if (ok) { job->began = 1; core_tts_begin(rate, ch, job->media); }
+    int ok = !job->aborted && !remote_yields(job);
+    if (ok) {
+        job->began = 1;
+        if (job->elsewhere) { core_tts_begin_elsewhere(rate, ch); lead = job->lead_ms; job->lead_ms = 0; }
+        else core_tts_begin(rate, ch, job->media);
+        if (job->remote && !job->told) { job->told = 1; replyspk_event(job->remote, RS_EV_STARTED); }
+    }
     pthread_mutex_unlock(&core_lock);
+    if (ok && lead > 0) feed_quiet(job, rate, ch, lead);        /* the Home Assistant player is still starting */
     return ok ? 0 : -1;
 }
 
@@ -1052,9 +1133,21 @@ static int job_gone(struct media_job *job)
 
 static void feed(struct media_job *job, const void *pcm, size_t len)       /* queue with back pressure */
 {
+    if (job->counting) { job->counted += len; return; }
     if (job_gone(job)) return;          /* let go of while its read waited */
     core_tts_data(pcm, len);
     while (core_tts_queued() > 256 * 1024 && !core_tts_flushing() && !job_gone(job)) usleep(50000);
+}
+
+static void feed_quiet(struct media_job *job, unsigned rate, unsigned ch, int ms)
+{
+    static const int16_t z[1024];
+    size_t left = (size_t)rate * (ch ? ch : 1) * (size_t)ms / 1000;            /* samples */
+    while (left && !job_gone(job) && !core_tts_flushing()) {
+        size_t n = left < 1024 ? left : 1024; n -= n % (ch ? ch : 1);
+        if (!n) break;
+        feed(job, z, n * 2); left -= n;
+    }
 }
 
 /* The decoders' buffers are each call's own, never static: a job that was let go of (cancel(), media_stop_early()) can
@@ -1124,10 +1217,14 @@ static int play_url(struct media_job *job, int fd)
     return play_mp3(job, fd, h, 12);
 }
 
+static int elsewhere(struct media_job *job, int *began, int *ok);
+static unsigned remote_playing; static int remote_cut;     /* lock held: another Echo's reply queued to its end here */
+
 static void *media_thread(void *arg)
 {
-    struct media_job *job = arg; int ok = 0, began = 0;
-    for (int i = 0; i < 2; i++) {
+    struct media_job *job = arg; int ok = 0, began = 0, here = 1;
+    if (job->route) here = elsewhere(job, &began, &ok);     /* another speaker; here when it cannot take it */
+    for (int i = 0; here && i < 2; i++) {
         pthread_mutex_lock(&core_lock); int gone = job->aborted; pthread_mutex_unlock(&core_lock);
         if (!job->url[i][0] || gone || core_tts_flushing()) continue;      /* gone: not the message after its chime either */
         int fd = http_get(job->url[i]);
@@ -1140,11 +1237,14 @@ static void *media_thread(void *arg)
     pthread_mutex_lock(&core_lock);
     if (job->aborted) {                 /* let go of: a new run and its reply, or new media, may be under way already */
         if (began) core_tts_abandoned();
+        if (job->remote) replyspk_event(job->remote, RS_EV_CUT);
         pthread_mutex_unlock(&core_lock);
         free(job);
         return NULL;
     }
     if (media_cur == job) media_cur = NULL;
+    if (job->remote && !began) replyspk_event(job->remote, RS_EV_FAILED);
+    if (job->remote && began) { remote_playing = job->remote; remote_cut = core_tts_flushing(); }    /* played() tells the end */
     if (job->announce) {
         if (job->start_conversation && ok) core_restart_after();
         if (!began) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; announce_done(); }
@@ -1157,23 +1257,209 @@ static void *media_thread(void *arg)
 }
 
 /* lock held.  url0 = optional chime, url1 = the media.  media: music, at the music volume (main.c); else speech, at the
- * replies' (separate volumes) */
-static void media_start(const char *url0, const char *url1, int announce, int start_conversation, int is_reply, int media)
+ * replies' (separate volumes).  remote: another Echo's reply (replyspk.c's id), played here and never sent on.  -1: busy */
+static int media_start(const char *url0, const char *url1, int announce, int start_conversation, int is_reply, int media, unsigned remote)
 {
     struct media_job *job = calloc(1, sizeof *job); pthread_t t;
-    if (!job) return;
+    if (!job) return -1;
+    /* this Echo's own (its reply, Home Assistant's announcement or media) first: another Echo's that has not begun yet
+     * (Home Assistant still rendering it) lets go, and plays on the Echo that asked */
+    if (!remote && media_cur && media_cur->remote && !media_cur->began) remote_drop(media_cur);
     if (atomic_exchange(&media_busy, 1)) {              /* one at a time: refuse, the running one finishes first */
         fprintf(stderr, "media: busy, dropped %s\n", url1);
         if (announce) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); }
-        free(job); return;
+        free(job); return -1;
     }
     if (!is_reply && (core_state() == LISTENING || core_state() == THINKING)) core_pipeline_finish();
     snprintf(job->url[0], sizeof job->url[0], "%s", url0); snprintf(job->url[1], sizeof job->url[1], "%s", url1);
     job->announce = announce; job->start_conversation = start_conversation; job->media = media; job->fd = -1;
+    job->is_reply = is_reply; job->remote = remote;
+    /* replies, and announcements with the setting, but not one this Echo asked for itself (a Bluetooth connection's) and
+     * never another Echo's: an announcement Home Assistant plays on a player through its media player is no
+     * announcement here (on_mp_command), so two Echos sending each other theirs cannot go round in circles */
+    job->route = !media && !remote && (is_reply || (announce && replyspk_announce(-1) && !bt_asked_ms));
     media_cur = job;
     announcing = announce; media_playing = 1; send_mp_state();
-    fprintf(stderr, "media: %s%s\n", announce ? "announce " : "", url1);
-    pthread_create(&t, NULL, media_thread, job); pthread_detach(t);
+    fprintf(stderr, "media: %s%s\n", remote ? "another Echo's reply " : announce ? "announce " : "", url1);
+    if (pthread_create(&t, NULL, media_thread, job)) {     /* no thread: nothing holds media_busy, nothing plays */
+        fprintf(stderr, "media: no thread, dropped %s\n", url1);
+        media_cur = NULL; announcing = 0; media_playing = 0; send_mp_state(); atomic_store(&media_busy, 0);
+        if (announce) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); }
+        free(job); return -1;
+    }
+    pthread_detach(t);
+    return 0;
+}
+
+/* ---------------------------------------------------------------- replies on another speaker (replyspk.h)
+ * The media thread of a reply (or an announcement, with the setting) asks the speaker chosen first.  While it plays
+ * there, this Echo plays it silently (core_tts_begin_elsewhere): its run, ring, barge-in and the listening after a
+ * question follow the reply as if it played here.  Anything that keeps the reply from playing there plays it here. */
+
+#define EL_RATE      16000              /* the quiet that paces another Echo's reply here: 40 ms chunks */
+#define EL_CHUNK     (EL_RATE / 25)
+#define EL_START_MS  30000              /* another Echo that took a reply and has not begun it by then: here instead */
+#define PROBE_MS     4000               /* Home Assistant answers an action at once; none by then: it does not run ours */
+#define ROOM_MS      (30 * 60 * 1000)   /* the room's player asked again this often (a speaker moved to another area) */
+enum { EW_HERE, EW_DONE };
+
+static unsigned ha_action(const char *service, const char *const *data, const char *const *tmpl, const char *resp_tmpl);
+static int ha_wait(unsigned id, int ms, char *err, size_t cap);
+static void media_stop_early(void);
+static int actions_state(void);
+static void actions_probe(void);
+static unsigned probe_id;               /* lock held: the probe waiting for its answer (0: none) */
+static unsigned room_id;                /* lock held: the room's question waiting for its answer (0: none) */
+static int nsubs[MAX_CLIENTS];          /* lock held: player_subscribe's, per link */
+static void reply_follow(int link);
+static void player_subscribe(void);
+static void entities_changed(void);
+static int ha_link(int c);
+static void ha_answer(unsigned id, int ok, const char *err, const unsigned char *data, size_t n);
+
+/* the asked Echo's events until it played the reply, with this Echo's quiet beside it */
+static int echo_play(struct media_job *job, const char *node, int *began, int *ok)
+{
+    struct rs_peer *p; char why[160]; static const int16_t z[EL_CHUNK];
+    long long t0 = now_ms(); int started = 0, ev;
+    if (rs_open(node, job->is_reply ? "" : job->url[0], job->url[1], !job->is_reply, &p, why, sizeof why)) {
+        replyspk_outcome(node, "here", why); return EW_HERE;
+    }
+    pthread_mutex_lock(&core_lock);
+    int go = !job->aborted;
+    if (go) { job->began = 1; core_tts_begin_elsewhere(EL_RATE, 1); }
+    pthread_mutex_unlock(&core_lock);
+    if (!go) { rs_stop(p); rs_close(p); return EW_DONE; }       /* let go of meanwhile: nothing of it began here */
+    *began = 1;
+    for (;;) {
+        if (job_gone(job) || core_tts_flushing()) {             /* cut here (the wake word, "stop", the button): there too */
+            rs_stop(p);
+            for (long long until = now_ms() + 1000; now_ms() < until && (ev = rs_wait(p, 100)) != RS_EV_PLAYED && ev != RS_EV_CUT && ev != RS_EV_FAILED && ev >= 0; ) {}
+            replyspk_outcome(node, "cut", "stopped here");
+            break;
+        }
+        ev = rs_wait(p, 40);
+        if (ev == RS_EV_STARTED) started = 1;
+        else if (ev == RS_EV_PLAYED) { *ok = 1; replyspk_outcome(node, "played", ""); break; }
+        else if (ev == RS_EV_CUT && started) {          /* stopped there (its wake word, "stop", its button): whoever
+                                                         * did talks to that Echo now, so no follow-up opens here */
+            pthread_mutex_lock(&core_lock); core_follow_up_cancel(); pthread_mutex_unlock(&core_lock);
+            replyspk_outcome(node, "cut", "stopped there"); break;
+        }
+        else if (ev == RS_EV_FAILED || ev == RS_EV_CUT || ev < 0) {     /* nothing of it played there: here instead */
+            const char *w = ev < 0 ? "the link to it broke" : ev == RS_EV_CUT ? "it got busy before it began" : "it could not fetch the reply";
+            rs_close(p);
+            if (!started) { replyspk_outcome(node, "here", w); return EW_HERE; }
+            *ok = 1; replyspk_outcome(node, "played", w); return EW_DONE;
+        }
+        if (!started && now_ms() - t0 > EL_START_MS) {
+            rs_stop(p); rs_close(p); replyspk_outcome(node, "here", "it did not begin the reply"); return EW_HERE;
+        }
+        while (core_tts_queued() < 3 * sizeof z && !core_tts_flushing() && !job_gone(job)) core_tts_data(z, sizeof z);
+    }
+    rs_close(p);
+    return EW_DONE;
+}
+
+/* Home Assistant's player: play_media as an announcement, then this Echo's quiet for the reply's length, decoded here
+ * from the same URL, after what the player takes to start (reply_speaker_delay): nothing tells when it is done.
+ * Decoded as it comes, beside the player's own fetch: a streamed reply starts there while it is still being made.
+ * Not an announcement Home Assistant hands an ESPHome satellite: that is its ffmpeg proxy (/api/esphome/ffmpeg_proxy/),
+ * one conversion per device at a time, so the player's fetch (through its own proxy, from ours) and ours cut each
+ * other off (seen: ours came back empty).  That one is read whole first, for its length, and handed over after */
+static int fetch_length(struct media_job *job, int *ms)        /* the whole of url[1], decoded and counted: 0 */
+{
+    int fd = http_get(job->url[1]), r = -1;
+    if (fd < 0) return -1;
+    pthread_mutex_lock(&core_lock); job->fd = fd; pthread_mutex_unlock(&core_lock);
+    job->counting = 1; job->counted = 0; job->c_rate = 0;
+    if (!job_gone(job) && play_url(job, fd) == 0 && job->c_rate) { *ms = (int)(job->counted / 2 / job->c_ch * 1000 / job->c_rate); r = 0; }
+    job->counting = 0;
+    pthread_mutex_lock(&core_lock); job->fd = -1; pthread_mutex_unlock(&core_lock);
+    close(fd);
+    return r;
+}
+
+static int player_play(struct media_job *job, int *began, int *ok)
+{
+    char e[RS_ENTITY_MAX], why[200], err[200] = ""; int whole = strstr(job->url[1], "/ffmpeg_proxy/") != NULL, len_ms = 0;
+    replyspk_player(e, sizeof e);
+    if (!e[0]) {
+        struct rs_target t; replyspk_get(&t);
+        replyspk_outcome(t.mode == RS_ROOM ? "the room's speaker" : "a Home Assistant player", "here",
+                         t.mode == RS_ROOM ? "Home Assistant has no other media player in this Echo's area" : "none named");
+        return EW_HERE;
+    }
+    if (!replyspk_player_ready(e, why, sizeof why)) { replyspk_outcome(e, "here", why); return EW_HERE; }
+    pthread_mutex_lock(&core_lock);
+    int act = actions_state();
+    if (act < 0 && !probe_id) actions_probe();
+    /* not known yet: the probe's verdict, whatever it takes (PROBE_MS at most): without it, a reply sent where Home
+     * Assistant does not run our actions would play nowhere */
+    for (long long until = now_ms() + PROBE_MS + 500; act < 0 && probe_id && now_ms() < until; act = actions_state()) {
+        pthread_mutex_unlock(&core_lock); usleep(50000); pthread_mutex_lock(&core_lock);
+    }
+    if (act < 0) act = 0;                               /* still nothing: as good as no */
+    if (act == 0) {
+        pthread_mutex_unlock(&core_lock);
+        replyspk_outcome(e, "here", "Home Assistant does not run this Echo's actions: tick \"Allow the device to perform Home Assistant actions\" in its ESPHome options");
+        return EW_HERE;
+    }
+    if (whole) {
+        pthread_mutex_unlock(&core_lock);
+        if (fetch_length(job, &len_ms)) { replyspk_outcome(e, "here", "this Echo could not fetch it to time it"); return EW_HERE; }
+        pthread_mutex_lock(&core_lock);
+    }
+    const char *data[] = { "entity_id", e, "media_content_id", job->url[1], "media_content_type", "music", NULL };
+    const char *tmpl[] = { "announce", "{{ true }}", NULL };   /* a real bool: plain data arrives as strings */
+    long long t0 = now_ms(); int delay = replyspk_delay(-1);
+    unsigned id = ha_action("media_player.play_media", data, tmpl, NULL);
+    int r = id ? ha_wait(id, delay, err, sizeof err) : 0;      /* refusals come at once; a player may answer only once done */
+    pthread_mutex_unlock(&core_lock);
+    if (!id) { replyspk_outcome(e, "here", "no Home Assistant link runs this Echo's actions"); return EW_HERE; }
+    if (r == 0) { replyspk_outcome(e, "here", err[0] ? err : "Home Assistant refused it"); return EW_HERE; }
+    int waited = (int)(now_ms() - t0), fd = whole ? 0 : -1;
+    pthread_mutex_lock(&core_lock); job->elsewhere = 1; job->lead_ms = delay > waited ? delay - waited : 0; pthread_mutex_unlock(&core_lock);
+    if (whole) {                                        /* its length known: as much quiet */
+        if (tts_begin(job, EL_RATE, 1) == 0) { *began = 1; feed_quiet(job, EL_RATE, 1, len_ms); }
+    } else if ((fd = http_get(job->url[1])) >= 0) {
+        pthread_mutex_lock(&core_lock); job->fd = fd; pthread_mutex_unlock(&core_lock);
+        if (!job_gone(job) && play_url(job, fd) == 0) *began = 1;
+        pthread_mutex_lock(&core_lock); job->fd = -1; pthread_mutex_unlock(&core_lock);
+        close(fd);
+    }
+    /* decoded ahead of the quiet (the queue takes seconds of it): what is left of it may still be cut */
+    while (*began && core_tts_queued() && !core_tts_flushing() && !job_gone(job)) usleep(50000);
+    if (core_tts_flushing() || job_gone(job)) {
+        const char *stop[] = { "entity_id", e, NULL };
+        pthread_mutex_lock(&core_lock); ha_action("media_player.media_stop", stop, NULL, NULL); pthread_mutex_unlock(&core_lock);
+        replyspk_outcome(e, "cut", "stopped here");
+    } else replyspk_outcome(e, "played", fd < 0 ? "its length unknown here (the fetch failed)" : "");
+    *ok = 1;
+    return EW_DONE;
+}
+
+static int elsewhere(struct media_job *job, int *began, int *ok)      /* 1: play it here */
+{
+    struct rs_target t; replyspk_get(&t);
+    if (t.mode == RS_HERE) return 1;
+    return (t.mode == RS_ECHO ? echo_play(job, t.node, began, ok) : player_play(job, began, ok)) == EW_HERE;
+}
+
+/* Another Echo's reply (core_remote_reply, lock held): as a reply of ours, never sent on */
+static int remote_play(const char *chime, const char *url, int announce, unsigned id)
+{
+    (void)announce;
+    if (atomic_load(&media_busy) || tts_expected) return -1;
+    return media_start(chime, url, 0, 0, 1, 0, id);
+}
+
+static void remote_stop(unsigned id)    /* lock held: the asking Echo stopped it */
+{
+    if (media_cur && media_cur->remote == id) {
+        if (!media_cur->began) media_stop_early();
+        else { remote_cut = 1; core_tts_flush(); }
+    } else if (remote_playing == id) { remote_cut = 1; core_tts_flush(); }      /* fetched whole, still playing */
 }
 
 /* ---------------------------------------------------------------- bluetooth proxy
@@ -1423,6 +1709,7 @@ static void announce_done(void) { bt_asked_ms = 0; bt_free_ms = now_ms() + 1000;
 static void start(void)
 {
     PB(b, 96);
+    if (media_cur && media_cur->remote && !media_cur->began) remote_drop(media_cur);     /* a request of this Echo's own */
     tts_expected = 0; tts_url[0] = 0; if (cancelled) cancelled = 2;
     pb_uint(&b, 1, 1);                                  /* start */
     stt_run = core_local_wake || core_follow_up();
@@ -1482,6 +1769,7 @@ static void reply_cut(void)
 
 static void played(void)
 {
+    if (remote_playing) { replyspk_event(remote_playing, remote_cut || core_tts_was_cut() ? RS_EV_CUT : RS_EV_PLAYED); remote_playing = 0; remote_cut = 0; }
     if (announcing) { PB(b, 8); pb_uint(&b, 1, 1); send_va(VA_ANNOUNCE_FINISHED, &b); announcing = 0; announce_done(); }
     if (media_playing) { media_playing = 0; send_mp_state(); }
     atomic_store(&media_busy, 0);
@@ -1537,7 +1825,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
         /* fall through */
     case EV_TTS_END:
-        if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0); }
+        if (!tts_expected && tts_url[0]) { tts_expected = 1; core_mic_off(); media_start("", tts_url, 1, 0, 1, 0, 0); }
         break;
     case EV_RUN_END:
         if (!tts_expected && core_state() != SPEAKING) core_pipeline_finish();
@@ -1592,7 +1880,7 @@ static void on_announce(const unsigned char *p, const unsigned char *end)
     /* Do not disturb drops announcements (reported as not played), but not the one we asked for ourselves: a Bluetooth
      * connection message answers something the user just did, as stock's does. */
     if (core_dnd(-1) && !bt_asked_ms) { fprintf(stderr, "media: do not disturb, dropped announcement %s\n", media); PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); return; }
-    media_start(pre, media, 1, conv, 0, 0);
+    media_start(pre, media, 1, conv, 0, 0, 0);
 }
 
 /* Lock held.  The media player's stop before the job's audio began (on_mp_command): it is let go of as cancel() does,
@@ -1637,7 +1925,7 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
         else core_tts_flush();
     }
     if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* as "Stop ringing" does, for automations */
-    if (has_url && url[0]) media_start("", url, 0, 0, 0, !announcement);
+    if (has_url && url[0]) media_start("", url, 0, 0, 0, !announcement, 0);
     if (has_cmd && !has_url) send_mp_state();
 }
 
@@ -1753,10 +2041,11 @@ static void send_all_settings(void)
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
         send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
         send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
+        send_setting(KEY_REPLY_SPEAKER); send_setting(KEY_REPLY_PLAYER);
         send_light_states();
 }
 
-static void settings_changed(void) { send_all_settings(); }      /* lock held: a setting changed (web page, settings.c) */
+static void settings_changed(void) { send_all_settings(); reply_follow(0); }  /* lock held: a setting changed (web page, settings.c) */
 
 /* lock held: a feature went on or off.  ESPHome has no message for a changed entity list: Home Assistant reads it at
  * each connect, and removes what is no longer there (registry included).  So the links close; it comes back in seconds. */
@@ -1821,7 +2110,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         if (c >= 0 && epoch && ha_time(epoch) && core_timer_next(NULL, 0, NULL, NULL)) send_setting(KEY_NEXT_TIMER);
         if (c >= 0 && clients[c].keyed && tz[0]) screen_tz(tz);
     } break;
-    case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
+    case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: case TEXT_COMMAND: on_setting(type, p, end); break;
     case LIGHT_COMMAND: on_light(p, end); break;
     case BUTTON_COMMAND: { struct pbf f;
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == KEY_IDENTIFY) core_identify(); else if (f.field == 1 && f.v == KEY_RESET) core_reset("Home Assistant's button");
@@ -1837,12 +2126,27 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         else if (cmd == UPDATE_CMD_INSTALL && c >= 0 && clients[c].keyed) update_install();
         else if (cmd == UPDATE_CMD_INSTALL) fprintf(stderr, "update: install refused, the request did not come over the keyed connection\n");
     } break;
-    case SUBSCRIBE_HA_ACTIONS: if (c >= 0) clients[c].actions = 1; break;
+    case SUBSCRIBE_HA_ACTIONS:
+        if (c < 0) break;
+        clients[c].actions = 1;
+        /* Home Assistant itself: whether it runs our actions is asked again (its option may have changed: it reloads
+         * the entry, so the link is new) */
+        if (ha_link(c)) { replyspk_actions(-2); probe_id = room_id = 0; reply_follow(1); }
+        break;
     case SUBSCRIBE_HA_STATES:
         if (c < 0) break;
         clients[c].ha_states = 1;
         if (clients[c].keyed) home_subscribe(c);
+        if (ha_link(c)) player_subscribe();
         break;
+    case HA_ACTION_RESP: {
+        unsigned id = 0; int ok = 0; char err[200] = ""; const unsigned char *data = NULL; size_t dn = 0;
+        while (pb_next(&p, end, &f)) {
+            if (f.field == 1) id = (unsigned)f.v; else if (f.field == 2) ok = f.v != 0;
+            else if (f.field == 3 && f.data) pbf_str(&f, err, sizeof err); else if (f.field == 4 && f.data) { data = f.data; dn = f.len; }
+        }
+        if (ha_link(c)) ha_answer(id, ok, err, data, dn);
+    } break;
     case HA_STATE: {
         /* a state we asked for (arb_request): only from Home Assistant itself, the client holding the device key */
         char ent[128] = "", st[300] = "", attr[64] = "";
@@ -1851,6 +2155,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (f.field == 2) pbf_str(&f, st, sizeof st);
             else if (f.field == 3) pbf_str(&f, attr, sizeof attr);
         }
+        if (ha_link(c) && (!attr[0] || !strcmp(attr, "friendly_name")) && replyspk_ha_state(ent, attr, st)) break;   /* the reply player */
         if (c < 0 || !clients[c].keyed) break;
         if (!strcmp(ent, "zone.home") && attr[0]) { home_state(attr, st); break; }
         if (attr[0] || !arb_running()) break;
@@ -2016,7 +2321,7 @@ static void serve(int fd)
                                        adbwifi_start(adb_changed); wifimotion_start(wifi_changed); update_start(update_changed);
                                        if (core_bluetooth(-1)) { ble_start(&ble_handler); a2dp_start(bt_changed); } } }
     for (int i = 0; i < MAX_CLIENTS; i++) { if (clients[i].fd < 0 && slot < 0) slot = i; n += clients[i].fd >= 0; }
-    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; if (!n) core_link(1, 0); }
+    if (slot >= 0) { clients[slot].fd = fd; clients[slot].states = clients[slot].enc = clients[slot].keyed = clients[slot].ble = clients[slot].ble_free = clients[slot].ble_user = clients[slot].actions = clients[slot].ha_states = 0; nsubs[slot] = 0; if (!n) core_link(1, 0); }
     int keyed = have_key;
     pthread_mutex_unlock(&core_lock);
     if (slot < 0) { fprintf(stderr, "client refused: %d connections already\n", MAX_CLIENTS); free(buf); free(pt); return; }
@@ -2085,6 +2390,213 @@ static int arb_send(const char *node, const char *network, const char *key)
 }
 
 static void arb_changed(void) { for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k); }
+
+/* ---------------------------------------------------------------- Home Assistant's actions, with an answer
+ * An action with a call id: Home Assistant (2025.10 on) answers each with HomeassistantActionResponse once it ran
+ * (esphome manager _handle_service_call_with_notification: blocking, so a player that holds the call while it plays
+ * answers at the end), or at once with an error (no such action, bad data).  With "Allow the device to perform Home
+ * Assistant actions" off it answers nothing and raises a repair instead, so silence is the only sign of that: an
+ * action that does not exist (PROBE) is answered at once wherever ours run.  wants_response with a template: the
+ * template's text comes back (the room's player).  Only to the keyed link: Home Assistant itself. */
+
+#define NCALL 6
+static struct { unsigned id; int done, ok; char err[200]; } calls[NCALL];   /* lock held */
+
+/* lock held: a link that is Home Assistant itself for the replies: the keyed one, or with no key on this Echo (Home
+ * Assistant links in plaintext) the one that subscribed to the voice assistant, which only Home Assistant does: never a
+ * second client beside it, which would get the replies' addresses and could answer for it */
+static int ha_link(int c) { return c >= 0 && clients[c].fd >= 0 && (clients[c].keyed || (!have_key && clients[c].fd == va_fd)); }
+static pthread_cond_t call_cv;          /* on the monotonic clock (call_cv_init): root sets the wall clock from HA */
+static pthread_once_t call_cv_once = PTHREAD_ONCE_INIT;
+static void call_cv_init(void)
+{
+    pthread_condattr_t a; pthread_condattr_init(&a); pthread_condattr_setclock(&a, CLOCK_MONOTONIC);
+    pthread_cond_init(&call_cv, &a); pthread_condattr_destroy(&a);
+}
+static unsigned call_next, room_id;
+static long long probe_at;
+
+static void pb_kv(struct pb *b, int f, const char *k, const char *v)       /* HomeassistantServiceMap, a URL or a template */
+{
+    PB(e, 2400); pb_str(&e, 1, k); pb_str(&e, 2, v);
+    pb_msg(b, f, &e);
+}
+
+/* lock held: the call's id, 0 if no keyed link runs actions.  data/tmpl: key, value, ..., NULL */
+static unsigned ha_action(const char *service, const char *const *data, const char *const *tmpl, const char *resp_tmpl)
+{
+    PB(b, 6000); int n = 0, slot = 0;
+    if (!++call_next) ++call_next;
+    pb_str(&b, 1, service);
+    for (; data && data[0]; data += 2) pb_kv(&b, 2, data[0], data[1]);
+    for (; tmpl && tmpl[0]; tmpl += 2) pb_kv(&b, 3, tmpl[0], tmpl[1]);
+    pb_uint(&b, 6, call_next);
+    if (resp_tmpl) { pb_uint(&b, 7, 1); pb_str(&b, 8, resp_tmpl); }
+    for (int i = 0; i < MAX_CLIENTS; i++) if (ha_link(i) && clients[i].actions) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
+    if (!n) return 0;
+    for (int i = 1; i < NCALL; i++) if (calls[i].id < calls[slot].id) slot = i;       /* the oldest goes */
+    calls[slot].id = call_next; calls[slot].done = calls[slot].ok = 0; calls[slot].err[0] = 0;
+    return call_next;
+}
+
+/* lock held (let go of while waiting): 1 ran, 0 refused (err), -1 no answer within ms */
+static int ha_wait(unsigned id, int ms, char *err, size_t cap)
+{
+    struct timespec until; pthread_once(&call_cv_once, call_cv_init); clock_gettime(CLOCK_MONOTONIC, &until);
+    until.tv_sec += ms / 1000; until.tv_nsec += (long)(ms % 1000) * 1000000;
+    if (until.tv_nsec >= 1000000000) { until.tv_sec++; until.tv_nsec -= 1000000000; }
+    for (;;) {
+        for (int i = 0; i < NCALL; i++) if (calls[i].id == id && calls[i].done) { snprintf(err, cap, "%s", calls[i].err); return calls[i].ok; }
+        if (pthread_cond_timedwait(&call_cv, &core_lock, &until)) return -1;
+    }
+}
+
+/* lock held: does Home Assistant run our actions at all (replyspk_actions) */
+static void actions_probe(void)
+{
+    unsigned id = ha_action("hassmic.check_actions", NULL, NULL, NULL);    /* no such action: answered "not found" */
+    if (id) { probe_id = id; probe_at = now_ms(); }
+}
+static int actions_state(void)          /* lock held */
+{
+    int a = replyspk_actions(-1);
+    if (a < 0 && probe_id && now_ms() - probe_at > PROBE_MS) {
+        probe_id = 0; a = replyspk_actions(0);
+        fprintf(stderr, "reply speaker: Home Assistant does not run this Echo's actions (\"Allow the device to perform Home Assistant actions\" is off)\n");
+    }
+    return a;
+}
+
+/* lock held: Home Assistant finds the media players of this Echo's area (its device's), other than its own, those that
+ * are up first; this Echo's device by its MAC, as bt_ask finds the satellite.  browse_media on our own player is only
+ * something to answer: the template is what comes back */
+static void room_ask(void)
+{
+    char m[24], me[400], resp[1800]; size_t j = 0;
+    for (const char *c = mac(); *c && j < sizeof m - 1; c++) m[j++] = tolower((unsigned char)*c);
+    m[j] = 0;
+    snprintf(me, sizeof me, "{%% for e in integration_entities('esphome') if e.startswith('media_player.') and "
+             "('mac', '%s') in (device_attr(e, 'connections') or []) %%}{{ e }}{%% endfor %%}", m);
+    snprintf(resp, sizeof resp,
+             "{%%- set ns = namespace(me=[], area='', up=[], down=[], names=[]) -%%}"
+             "{%%- for e in integration_entities('esphome') if ('mac', '%s') in (device_attr(e, 'connections') or []) -%%}"
+             "{%%- set ns.me = ns.me + [e] -%%}{%%- set d = device_id(e) -%%}"
+             "{%%- if d and not ns.area -%%}{%%- set ns.area = area_id(d) or '' -%%}{%%- endif -%%}{%%- endfor -%%}"
+             "{%%- for p in (area_entities(ns.area) if ns.area else []) | select('match', 'media_player[.]') | reject('in', ns.me) | sort -%%}"
+             "{%%- if states(p) in ['unavailable', 'unknown'] -%%}{%%- set ns.down = ns.down + [p] -%%}"
+             "{%%- else -%%}{%%- set ns.up = ns.up + [p] -%%}{%%- endif -%%}{%%- endfor -%%}"
+             "{%%- for p in ns.up + ns.down -%%}{%%- set ns.names = ns.names + [state_attr(p, 'friendly_name') or p] -%%}{%%- endfor -%%}"
+             "{{ {'area': area_name(ns.area) if ns.area else '', 'players': ns.up + ns.down, 'names': ns.names} | tojson }}", m);
+    const char *tmpl[] = { "entity_id", me, NULL };
+    unsigned id = ha_action("media_player.browse_media", NULL, tmpl, resp);
+    if (id) { room_id = id; replyspk_room_asked(); }
+}
+
+/* the room's answer: {"response": {"area", "players", "names"}} (Home Assistant parses what looks like a dict), or the
+ * same as a string */
+static void room_answer(int ok, const char *err, const unsigned char *data, size_t n)
+{
+    struct json j = { 0 }, k = { 0 };       /* json_parse takes them empty: it grows the token array it finds */
+    char area[RS_NAME_MAX] = "", e[RS_ENTITY_MAX] = "", name[RS_NAME_MAX] = "", names[200] = "", *txt = NULL;
+    int others = 0, obj = -1, players, nm;
+    const struct json *src = &j;
+    if (!ok) { replyspk_room(0, err[0] ? err : "Home Assistant refused it", "", "", 0, ""); return; }
+    if (json_parse(&j, (const char *)data, n)) { replyspk_room(0, "an answer it could not read", "", "", 0, ""); goto out; }
+    int r = json_get(&j, 0, "response");
+    if (json_type(&j, r) == J_STR && (txt = malloc(n + 1))) {
+        json_str(&j, r, txt, n + 1);
+        if (!json_parse(&k, txt, strlen(txt))) { src = &k; obj = 0; }
+        else json_free(&k);
+    } else if (json_type(&j, r) == J_OBJ) obj = r;
+    if (obj < 0) { replyspk_room(0, "an answer it could not read", "", "", 0, ""); goto out; }
+    json_str(src, json_get(src, obj, "area"), area, sizeof area);
+    players = json_get(src, obj, "players"); nm = json_get(src, obj, "names");
+    int i = 0;
+    JSON_EACH(src, players, t) {
+        if (!i++) json_str(src, t, e, sizeof e);
+        else others++;
+    }
+    i = 0;
+    JSON_EACH(src, nm, t) {
+        char one[RS_NAME_MAX]; json_str(src, t, one, sizeof one);
+        if (!i) snprintf(name, sizeof name, "%s", one);
+        else if (i <= 4) { size_t l = strlen(names); snprintf(names + l, sizeof names - l, "%s%s", l ? ", " : "", one); }
+        i++;
+    }
+    if (e[0] && !replyspk_valid_entity(e)) e[0] = 0;
+    replyspk_room(1, area, e, name, others, names);
+out:
+    json_free(&k);
+    free(txt);
+    json_free(&j);
+}
+
+/* lock held: an action's answer (only the keyed link's) */
+static void player_subscribe(void);
+static void ha_answer(unsigned id, int ok, const char *err, const unsigned char *data, size_t n)
+{
+    if (replyspk_actions(-1) != 1) { replyspk_actions(1); fprintf(stderr, "reply speaker: Home Assistant runs this Echo's actions\n"); }
+    if (id && id == probe_id) { probe_id = 0; return; }            /* "not found": all it was for */
+    if (id && id == room_id) { room_id = 0; room_answer(ok, err, data, n); player_subscribe(); return; }
+    for (int i = 0; i < NCALL; i++) if (calls[i].id == id) { calls[i].done = 1; calls[i].ok = ok; snprintf(calls[i].err, sizeof calls[i].err, "%s", err); }
+    if (!ok && err[0]) fprintf(stderr, "reply speaker: Home Assistant: %s\n", err);
+    pthread_once(&call_cv_once, call_cv_init); pthread_cond_broadcast(&call_cv);
+}
+
+/* lock held: the player in use, its state and name, on every keyed link (once each: Home Assistant keeps every
+ * subscription until the link closes) */
+#define NSUB 6
+static char subs[MAX_CLIENTS][NSUB][RS_ENTITY_MAX];
+static int nsubs[MAX_CLIENTS];
+static void player_subscribe(void)
+{
+    char e[RS_ENTITY_MAX]; replyspk_player(e, sizeof e);
+    if (!e[0]) return;
+    for (int c = 0; c < MAX_CLIENTS; c++) {
+        int have = 0;
+        if (!ha_link(c) || !clients[c].ha_states) continue;
+        for (int i = 0; i < NSUB && i < nsubs[c]; i++) have |= !strcmp(subs[c][i], e);
+        if (have) continue;
+        snprintf(subs[c][nsubs[c]++ % NSUB], RS_ENTITY_MAX, "%s", e);
+        { PB(b, 192); pb_str(&b, 1, e); send_to(clients[c].fd, HA_STATE_SUB, &b); }
+        { PB(b, 192); pb_str(&b, 1, e); pb_str(&b, 2, "friendly_name"); send_to(clients[c].fd, HA_STATE_SUB, &b); }
+    }
+}
+
+/* lock held: what the target needs of Home Assistant, after it changed or a link came (link: its answers so far are
+ * void, the option to run our actions may have changed with it) */
+static void reply_follow(int link)
+{
+    struct rs_target t; replyspk_get(&t);
+    long long age = replyspk_room_age_ms();
+    if (t.mode == RS_ROOM && !room_id && (link || age < 0 || age > ROOM_MS || replyspk_room_wanted())) room_ask();
+    if ((t.mode == RS_ROOM || t.mode == RS_PLAYER) && replyspk_actions(-1) < 0 && !probe_id && !room_id) actions_probe();
+    player_subscribe();
+    /* an Echo chosen (the page) that Home Assistant's select does not offer yet: listed again now, so its state is one of
+     * the options; a choice of the user's, so the link closing for a moment is expected then.  Not during a run */
+    static long long relisted;                          /* once a minute at most, whatever happens */
+    if (t.mode == RS_ECHO && nlisted >= 0 && core_state() == IDLE && strcmp(t.node, core_node_name())
+        && (!relisted || now_ms() - relisted > 60000)) {
+        int have = 0;
+        for (int i = 0; i < nlisted; i++) have |= !strcmp(listed_nodes[i], t.node);
+        if (!have) {
+            fprintf(stderr, "reply speaker: %s is not in Home Assistant's select yet: listed again\n", t.node);
+            nlisted = -1; relisted = now_ms(); entities_changed();
+        }
+    }
+}
+
+static void reply_tick(void)            /* lock held: Home Assistant's pings */
+{
+    struct rs_target t; replyspk_get(&t);
+    actions_state();
+    if (t.mode == RS_ROOM && replyspk_room_age_ms() > ROOM_MS) room_ask();
+    if (room_id && replyspk_room_age_ms() > PROBE_MS) {      /* any action of ours is answered where they run */
+        room_id = 0;
+        if (replyspk_actions(-1) < 0) replyspk_actions(0);
+        replyspk_room(0, "Home Assistant does not run this Echo's actions", "", "", 0, "");
+    }
+}
 
 /* lock held: our arbitration tag as scanned (arb.c).  An event, which HA fires for any device it adopted, "perform
  * actions" or not (esphome manager: is_event before the permission check); only to Home Assistant itself */
@@ -2171,4 +2683,5 @@ static void dropin_result(const char *result)   /* lock held */
 
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut,
+                                     remote_play, remote_stop };
