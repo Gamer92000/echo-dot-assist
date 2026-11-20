@@ -1126,8 +1126,8 @@ static void log_redact(char *t, size_t n)
  * BLAKE2b-512 keyed with EK over the request's counter, "\n" and i as 4 bytes little-endian, EK = BLAKE2b-256 keyed
  * with K over "hassmic clip 1": the label keeps it apart from what the page seals (unseal), the 4 bytes let a clip run
  * past unseal's 256 blocks.  The counter is the request's, taken once (signed_ok), so no stream serves twice; the
- * answer's MAC covers the sealed bytes.  web/crypto.js stream() is the other half.  POST /api/wakeclips/label "<id>
- * wake|not_wake|none", /api/wakeclips/delete "<id>|all".  Signed. */
+ * answer's MAC covers the sealed bytes.  web/crypto.js stream() is the other half.  POST
+ * /api/wakeclips/delete "<id>|all".  Signed. */
 static int clip_seal(const struct req *r, uint8_t *buf, size_t n)
 {
     uint8_t pub[32], k[32], ek[32], ks[64]; crypto_blake2b_ctx ctx; int bad;
@@ -1165,12 +1165,6 @@ static void wakeclip_api(int fd, struct req *r)
         if (clip_seal(r, (uint8_t *)pcm, n * 2)) { free(pcm); respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
         respond_s(fd, r, 200, "application/octet-stream", NULL, pcm, n * 2);
         free(pcm);
-        return;
-    }
-    if (write && !strcmp(r->path, "/api/wakeclips/label") && r->body && sscanf(r->body, "%u %15s", &id, what) == 2) {
-        int label = !strcmp(what, "wake") ? WAKECLIP_WAKE : !strcmp(what, "not_wake") ? WAKECLIP_NOT_WAKE : !strcmp(what, "none") ? WAKECLIP_UNLABELLED : -1;
-        if (label < 0 || wakeclip_label(id, label)) respond_sjson(fd, r, 404, "{\"error\":\"no such clip or label\"}");
-        else respond_sjson(fd, r, 200, "{\"labelled\":true}");
         return;
     }
     if (write && !strcmp(r->path, "/api/wakeclips/delete") && r->body) {

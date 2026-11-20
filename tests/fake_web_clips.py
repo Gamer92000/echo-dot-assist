@@ -3,7 +3,7 @@
 a wake word (SIGUSR1) and a near miss (SIGTTOU) kept, each from 1 s before the word to the setting's time after it, the
 samples the ring held byte for byte (the capture file, looped as audio_file.c loops it), sealed on the way (web.c
 clip_seal: never the room's audio in the clear, opened with the browser's key only), its waveform in the list; none
-while muted; labels; a clip deleted, then all; refused unsigned; nothing of it in Home Assistant; a restart keeps the
+while muted; a clip deleted, then all; refused unsigned; nothing of it in Home Assistant; a restart keeps the
 setting and no clip; off drops them.  The page's unsealing is tests/unit/web_crypto_test.py's."""
 import asyncio, hashlib, json, os, signal, subprocess, sys, tempfile, time
 from aioesphomeapi import APIClient
@@ -103,7 +103,7 @@ def main():
         echo.proc.send_signal(signal.SIGUSR1)
         c = until(lambda: (lambda x: x if x["clips"] and x["clips"][0]["done"] else None)(clips(b)), 5)
         w = c and c["clips"][0]
-        check(bool(w) and w["kind"] == "wake" and w["word"] == "test" and w["wall"] == 0 and w["outcome"] == "" and w["label"] == "",
+        check(bool(w) and w["kind"] == "wake" and w["word"] == "test" and w["wall"] == 0 and w["outcome"] == "",
               f"a wake word kept: {w and {k: w[k] for k in ('kind', 'word', 'wall', 'len', 'word_at', 'word_len')}}")
         # SIGUSR1 plays a word of 0.6 s that ended 128 ms ago (main.c), and the clip runs 1 s ahead of it to 0.3 s past it
         check(bool(w) and w["word_at"] == RATE and w["word_len"] == RATE * 6 // 10 - RATE * 128 // 1000
@@ -128,11 +128,8 @@ def main():
         check(len(clips(b)["clips"]) == 2, "muted: none kept")
         b.set(mute="off")
 
-        st, _, data = b.call("POST", "/api/wakeclips/label", f"{w['id']} wake".encode())
-        st2, _, _ = b.call("POST", "/api/wakeclips/label", f"{miss['id']} not_wake".encode())
-        st3, _, _ = b.call("POST", "/api/wakeclips/label", f"{w['id']} maybe".encode())
-        labels = {x["id"]: x["label"] for x in clips(b)["clips"]}
-        check(st == 200 and st2 == 200 and st3 == 404 and labels == {w["id"]: "wake", miss["id"]: "not_wake"}, f"marked: {labels}")
+        st, _, _ = b.call("POST", "/api/wakeclips/label", f"{w['id']} wake".encode())
+        check(st == 404, "no marking any more")
         st, _, _ = b.call("POST", "/api/wakeclips/delete", str(miss["id"]).encode())
         c = clips(b)
         check(st == 200 and [x["id"] for x in c["clips"]] == [w["id"]], "one deleted")

@@ -1,8 +1,7 @@
 /* Wake word clips (setting wake_clips, off by default; the settings page's "Wake word clips" card): the last
  * WAKECLIP_KEEP wake words and the last WAKECLIP_KEEP near misses as the engine heard them, kept in RAM only, to be
  * listened to on the page.  What woke the Echo (the television, a word in a conversation, its own reply) or what it
- * nearly took is heard there, not guessed from the log; a clip marked "wake word" or "not the wake word" is a sample
- * for training one's own (microWakeWord).  Nothing of it reaches Home Assistant, the log or the flash: a restart, an
+ * nearly took is heard there, not guessed from the log; Nothing of it reaches Home Assistant, the log or the flash: a restart, an
  * update or switching it off drops every clip.
  *
  * A clip runs from WAKECLIP_PRE_MS ahead of the word to the setting wake_clips_after past its end (0.3 to 3 s: past
@@ -25,13 +24,12 @@
 #define WAKECLIP_OUTCOME_MS 30000   /* what came of a wake word is told within this, or not at all */
 
 enum wakeclip_kind { WAKECLIP_HIT, WAKECLIP_MISS, WAKECLIP_KINDS };
-enum wakeclip_label { WAKECLIP_UNLABELLED, WAKECLIP_WAKE, WAKECLIP_NOT_WAKE };
 /* what the Echo itself played when it heard it: its own sound is the commonest false wake */
 enum { WAKECLIP_MUSIC = 1, WAKECLIP_REPLY = 2, WAKECLIP_RINGING = 4, WAKECLIP_SOUND = 8 };
 
 struct wakeclip_info {
     unsigned id;                    /* new with every clip, never 0 */
-    int kind, label, playing, done; /* done: every sample is in */
+    int kind, playing, done; /* done: every sample is in */
     char word[32];                  /* the engine's keyword ("ALEXA", "STOP", a microWakeWord id) */
     char outcome[24];               /* "request", "no_speech", "answered_elsewhere", or "" */
     long long wall;                 /* when, seconds since 1970; 0: the clock was not set */
@@ -53,7 +51,6 @@ void wakeclip_feed(const int16_t *ring, size_t cap, uint64_t ring_n);
 void wakeclip_outcome(const char *what, long long now_ms);
 int  wakeclip_get(int i, struct wakeclip_info *out);     /* 0..: newest first; -1 past the last */
 int16_t *wakeclip_audio(unsigned id, size_t *n);        /* a malloc'd copy of a done clip; NULL: none, or not done */
-int  wakeclip_label(unsigned id, int label);            /* -1: no such clip or label */
 int  wakeclip_delete(unsigned id);                      /* 0: all; -1: no such clip */
 size_t wakeclip_json(char *out, size_t cap, long long now_ms);   /* the list, for the page (web.c); now: "ago" */
 #endif

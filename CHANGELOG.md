@@ -40,8 +40,8 @@ What changed for people using the Echo, newest first. Details and measurements a
   can now hear what it heard: the television, a word in a conversation, its own reply. Near misses (the engine nearly
   took the wake word) show whether it is missing you. Each clip starts a second before the word and goes on 0.3 to 3 s
   after it (1 s by default), with how loud the word and the room were, what the Echo itself was playing, and whether a
-  request followed. A clip that looks like a false wake is marked as one. Mark each as the wake word or not and save
-  them all in one file, sorted into folders by your marks, to train a wake word of your own. The clips stay in the
+  request followed. A clip that looks like a false wake is marked as one. Save
+  them all in one file (folders for wake words and near misses, with what the Echo knew of each) to keep. The clips stay in the
   Echo's memory only: they are never written to its storage, sent to Home Assistant or logged, and a restart, an
   update or switching it off deletes them. They come to the page encrypted. "Wake word" page, card "Wake word clips".
   Asked for in issue #48.

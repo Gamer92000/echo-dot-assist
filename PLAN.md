@@ -3353,7 +3353,8 @@ Run in this order. Each step says what it proves.
       answered_elsewhere, `core_transcript` "request").  RAM only, ~2 MB at most (20 x 4.3 s x 32 kB/s).
       Page: `GET /api/wakeclips` (list with a 96-point waveform, `env`: unsealing every clip to draw it took ~0.2 s a
       clip in node), `GET /api/wakeclips/<id>` sealed (`clip_seal`: label "hassmic clip 1", 4-byte block counter; seal's
-      one byte would wrap at 16 kB), label, delete.  Save all: tar, a folder per mark, `clips.json`.
+      one byte would wrap at 16 kB), delete.  Save all: tar, a folder per kind, `clips.json`.  (Marking clips "wake word / not it" was built and removed
+      again 2026-11-20: it only sorted the saved file, the Echo learnt nothing from it.)
       Tests: `make unit-wakeclip` (ASan/UBSan), `tests/fake_web_clips.py` (bytes against the capture file, sealed,
       unsigned and unapproved refused, muted, labels, delete, restart, off), `web_crypto_test.py` (stream vs Python).
       Open (device): a near miss's begin/end from Pryon on a Dot (taken from its result as for accepts, not yet seen in

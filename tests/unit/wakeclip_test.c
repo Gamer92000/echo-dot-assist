@@ -2,7 +2,7 @@
  * capture puts them in (so the part after the word is never lost to the 4 s ring), with the word's place, its level
  * and the room's; ten of each kind, the oldest of that kind going first; a word reported too long is cut to its last
  * 2 s; samples already out of the ring stay silent; an outcome goes to the newest wake word only, once and in time;
- * labels, deletes, off drops all, nothing is kept while off; the page's JSON.  Under ASan/UBSan. */
+ * deletes, off drops all, nothing is kept while off; the page's JSON.  Under ASan/UBSan. */
 #include "wakeclip.h"
 #include <math.h>
 #include <stdio.h>
@@ -101,12 +101,10 @@ int main(void)
     }
     check(found, "samples that left the ring before the mark stay silent, and the clip still finishes");
 
-    /* labels, delete, JSON */
+    /* delete, JSON */
     wakeclip_get(0, &i);
-    check(!wakeclip_label(i.id, WAKECLIP_NOT_WAKE) && wakeclip_label(i.id, 7) && wakeclip_label(99999, WAKECLIP_WAKE),
-          "labels: known ones on known clips only");
     wakeclip_json(js, sizeof js, 7000);
-    check(strstr(js, "\"on\":true,\"now_ms\":7000,\"after_ms\":1000,") && strstr(js, "\"label\":\"not_wake\"") && strstr(js, "\"kind\":\"near_miss\"")
+    check(strstr(js, "\"on\":true,\"now_ms\":7000,\"after_ms\":1000,") && !strstr(js, "label") && strstr(js, "\"kind\":\"near_miss\"")
           && strstr(js, "\"music\":true") && js[strlen(js) - 1] == '}', "the page's JSON");
     { const char *e = strstr(js, "\"env\":\""); size_t el = e ? strcspn(e + 7, "\"") : 0;
       check(el == 2 * WAKECLIP_ENV && strspn(e + 7, "0123456789abcdef") == el, "each done clip's waveform: 96 levels in hex"); }

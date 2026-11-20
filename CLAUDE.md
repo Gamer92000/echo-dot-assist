@@ -343,8 +343,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   gets Pryon's begin/end through `wake_miss_cb`), each from 1 s before the word to the setting past it, copied from
   the ring by the capture thread block by block (`wakeclip_feed`); RAM only; none muted or in a Drop In; what played
   and the outcome (`wake_told`, `core_transcript`) with each.  Page: `/api/wakeclips` (list with a waveform), the
-  audio sealed (`web.c` `clip_seal`, "hassmic clip 1", 4-byte block counter; `crypto.js` `stream`), label, delete;
-  card on the Wake word page, Save all = tar by label.  PC: SIGUSR1/SIGTTOU mark clips too.  Tests: `make
+  audio sealed (`web.c` `clip_seal`, "hassmic clip 1", 4-byte block counter; `crypto.js` `stream`), delete;
+  card on the Wake word page, Save all = tar by kind.  PC: SIGUSR1/SIGTTOU mark clips too.  Tests: `make
   unit-wakeclip`, `tests/fake_web_clips.py`.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
   (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it, in a

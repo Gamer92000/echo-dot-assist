@@ -243,13 +243,13 @@ ten wake words and the last ten near misses (Amazon's engine reports when it nea
 - **Listen** to each one on the page: a false wake is usually plain once heard (the television, a name in a
   conversation, the Echo's own reply). Near misses tell you whether it is missing you, for instance over music.
 - Each clip runs from **1 s before the word** to 0.3, 1 (default), 2 or 3 s after it ("Clips go on after the word
-  for"): 0.3 s is enough for training, 1 s shows whether someone went on talking.
+  for"): 0.3 s is short but enough to hear the word, 1 s shows whether someone went on talking.
 - Beside it: how loud the word and the room were (dBFS), whether music, a reply, a timer or one of the Echo's sounds
   played, and what followed (a request, nothing said, another Echo answered). A wake word with nothing said after
   it, or heard while the Echo played, is marked **false?**.
-- **Mark** each as "Wake word" or "Not it", then **Save all**: a `.tar` with the WAVs (16 kHz mono) in the folders
-  `wake_word/`, `not_wake_word/` and `unmarked/`, and `clips.json` with what the Echo knew of each. Real samples from
-  your room, for training a wake word of your own.
+- **Save all** (or the arrow on one clip for its WAV): a `.tar` with the WAVs (16 kHz mono) in the folders
+  `wake_word/` and `near_miss/`, and `clips.json` with what the Echo knew of each. Real samples from your room, to keep
+  or to look at on the PC.
 
 The clips are the audio the wake word engine heard (after the echo canceller, before the request's gain and noise
 reduction). They stay in the Echo's memory only, about 2 MB at most: never on its storage, never in Home Assistant or

@@ -291,8 +291,8 @@ const HELP = {
       return h('p', { class: 'f-model' }, a.kiosk_heard_s == null ? 'No claim from another Kiosk Satellite device heard yet.'
         : `Last claim from another Kiosk Satellite device: ${a.kiosk_heard_s < 90 ? a.kiosk_heard_s + ' s' : Math.round(a.kiosk_heard_s / 60) + ' min'} ago.`);
     } },
-  wake_clips: { help: 'Keeps the last ten wake words and the last ten near misses (times the engine nearly took the wake word) as short clips you can listen to below: what woke the Echo when nobody meant it, and whether it missed you. Mark each as the wake word or not and save them to train a wake word of your own. The clips are kept in the Echo\'s memory only, never on its storage, in Home Assistant or in the log: a restart, an update or switching this off deletes them. They come to this page encrypted. None are kept while the Echo is muted or in a Drop In. Off by default.' },
-  wake_clips_after: { help: 'How much of what followed the wake word each clip keeps. 0.3 s is enough to train a wake word, 1 s tells whether someone went on talking (a false wake is followed by nothing), 3 s keeps the start of the request. Each clip also starts 1 s before the word. Applies to new clips.' },
+  wake_clips: { help: 'Keeps the last ten wake words and the last ten near misses (times the engine nearly took the wake word) as short clips you can listen to below: what woke the Echo when nobody meant it, and whether it missed you. Save them all in one file if you want to keep them. The clips are kept in the Echo\'s memory only, never on its storage, in Home Assistant or in the log: a restart, an update or switching this off deletes them. They come to this page encrypted. None are kept while the Echo is muted or in a Drop In. Off by default.' },
+  wake_clips_after: { help: 'How much of what followed the wake word each clip keeps. 0.3 s is short but enough to hear the word, 1 s tells whether someone went on talking (a false wake is followed by nothing), 3 s keeps the start of the request. Each clip also starts 1 s before the word. Applies to new clips.' },
   wake_word_adaptation: { help: 'The Echo learns from your requests how the wake word sounds here, in your voices, your room and through its microphone. It then finds where the word ends a little more often (in tests 163 of 220 instead of 158, from the sixth request on). What it learns stays on the Echo; it forgets the oldest as new requests come. On by default.' },
   speech_language: { help: 'The language you and the others at home speak. After a wake word the Echo finds where the word ends by its sounds, and it hears those best when it knows how you say them: a German speaker\'s "Alexa" is found far better with German sounds, even with the English wake word. Those sounds come for German, English, French, Spanish and Japanese so far; for the other languages the Echo finds the word\'s end as it did before they were listed: by your time zone where it has sounds for that zone\'s language (in Brazil: English), else by the wake word\'s own (English for "Alexa"). The Echo Show also writes the date on its screen in this language. Automatic takes it from your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Romania, Moldova: Romanian; ...), else from the wake word\'s own language. Home Assistant tells the Echo only the zone\'s offset and summer time, which many countries share, so the country comes from Home Assistant\'s home location (its Home zone); near a border, or without a location, from your Wi-Fi router; with neither, only a zone set on the Echo before counts. What Automatic found shows under this row.',
     status: () => {
@@ -1956,7 +1956,7 @@ function renderWake() {
 
 // ---------------------------------------------------------------- wake word clips (wakeclip.h)
 // The last ten wake words and near misses as the engine heard them, kept in the Echo's RAM only: listened to here,
-// marked as the wake word or not, saved as WAVs (a folder per mark) to train a model of one's own.  The list carries
+// saved as WAVs (a folder per kind) to keep.  The list carries
 // each clip's waveform; the audio itself comes only when played or saved, sealed (web.c clip_seal): plain HTTP
 let clipBox = null, clips = null, clipBusy = '', clipPlay = null, clipCtx = null;
 const CLIP_SETTINGS = ['wake_clips', 'wake_clips_after'];
@@ -2016,7 +2016,7 @@ function clipWav(pcm, rate) {
   return new Uint8Array(v.buffer);
 }
 
-const clipFolder = (c) => c.label === 'wake' ? 'wake_word' : c.label === 'not_wake' ? 'not_wake_word' : 'unmarked';
+const clipFolder = (c) => c.kind === 'wake' ? 'wake_word' : 'near_miss';
 const clipName = (c) => `${c.wall ? new Date(c.wall * 1000).toISOString().replace(/[:.]/g, '-').slice(0, 19) : `clip`}-${c.id}-${c.kind}`;
 
 function clipSave(files, name, tar) {
@@ -2031,7 +2031,7 @@ async function clipDo(what, fn) {
   clipBusy = ''; await getClips().catch(() => {});
 }
 
-// every clip in a tar: a folder per mark, and what the Echo knew of each in clips.json (the training's labels)
+// every clip in a tar: a folder per kind, and what the Echo knew of each in clips.json
 const clipSaveAll = () => clipDo('Reading…', async () => {
   const done = clips.clips.filter((c) => c.done), files = [];
   for (const c of done) files.push({ path: `${clipFolder(c)}/${clipName(c)}.wav`, parts: [clipWav(await clipPcm(c), clips.rate)] });
@@ -2066,7 +2066,6 @@ function clipRow(c) {
   const playing = clipPlay && clipPlay.id === c.id, busy = !!clipBusy;
   const tags = [c.music && 'music played', c.reply && 'a reply played', c.ringing && 'a timer rang', c.sound && 'a sound played', CLIP_OUT[c.outcome],
     c.peak >= 32767 && 'clipped'].filter(Boolean);
-  const label = (to) => clipDo('Saving…', () => echo.call('POST', '/api/wakeclips/label', `${c.id} ${c.label === to ? 'none' : to}`));
   return h('div', { class: 'row clip-row' + (playing ? ' on' : '') },
     h('div', { class: 'clip-main' },
       h('div', { class: 'row-label' }, h('span', { class: 'badge ' + (c.kind === 'wake' ? 'acc' : '') }, c.kind === 'wake' ? (c.word === 'STOP' ? 'Stop' : 'Wake word') : 'Near miss'),
@@ -2075,8 +2074,6 @@ function clipRow(c) {
       h('p', { class: 'help' }, [c.word.toLowerCase(), c.done ? `word ${c.word_db.toFixed(0)} dBFS, room ${c.floor_db.toFixed(0)} dBFS` : null, ...tags].filter(Boolean).join(' · '))),
     h('div', { class: 'ctl btns' },
       h('button', { class: 'small', disabled: !c.done, title: playing ? 'Stop' : 'Listen', onclick: () => clipToggle(c) }, icon(playing ? 'stop' : 'play'), playing ? 'Stop' : 'Listen'),
-      h('button', { class: 'small' + (c.label === 'wake' ? ' on' : ''), disabled: busy, title: 'This was the wake word', 'aria-pressed': c.label === 'wake' ? 'true' : 'false', onclick: () => label('wake') }, icon('check'), 'Wake word'),
-      h('button', { class: 'small' + (c.label === 'not_wake' ? ' on' : ''), disabled: busy, title: 'This was not the wake word', 'aria-pressed': c.label === 'not_wake' ? 'true' : 'false', onclick: () => label('not_wake') }, icon('x'), 'Not it'),
       h('button', { class: 'small', disabled: !c.done || busy, title: 'Save as WAV', onclick: () => clipDo('Reading…', async () => clipSave([{ path: `${clipName(c)}.wav`, parts: [clipWav(await clipPcm(c), clips.rate)] }], `${clipName(c)}.wav`, false)) }, icon('down')),
       h('button', { class: 'small danger', disabled: busy, title: 'Delete', onclick: () => clipDo('Deleting…', () => echo.call('POST', '/api/wakeclips/delete', String(c.id)).then(() => { if (playing) clipStop(); })) }, icon('trash'))));
 }
@@ -2086,17 +2083,16 @@ function renderClips() {
   const on = settingValue('wake_clips'), list = (clips && clips.on && on) ? clips.clips : [];
   if (on && (!clips || !clips.on) && Date.now() - (clipBox.asked || 0) > 3000) { clipBox.asked = Date.now(); getClips().catch(() => {}); }   // just switched on
   const head = cardHead('Wake word clips', ['What woke the Echo, and what nearly did: the last ten wake words and ten near misses, as the wake word engine heard them. ',
-    'Listen to find what wakes it falsely, mark each one, and save them to train a wake word of your own.'], 'wave', null,
-    'The clips stay in the Echo\'s memory only: a restart, an update or switching this off deletes them, and they never go to Home Assistant or the log. They come to this page encrypted. None are kept while the Echo is muted or in a Drop In. A clip starts a second before the word, so you hear the room as it was; how long it goes on after the word is yours to choose: 0.3 s is enough for training, a second tells whether someone went on talking. Beside each clip: how loud the word and the room were, what the Echo itself played at that moment (music, a reply, a timer, one of its sounds: its own sound is the commonest false wake), and what followed: a request, nothing said, or another Echo answering. "false?" marks a wake word with nothing said after it, or heard while the Echo played. Marks "Wake word" and "Not it" sort the saved file into folders (16 kHz mono WAVs, plus clips.json), real samples from your room for training. The setting is not part of exports, so copying this Echo\'s settings never switches recording on elsewhere.');
+    'Listen to find what wakes it falsely, or whether it misses you, and save them if you want to keep them.'], 'wave', null,
+    'The clips stay in the Echo\'s memory only: a restart, an update or switching this off deletes them, and they never go to Home Assistant or the log. They come to this page encrypted. None are kept while the Echo is muted or in a Drop In. A clip starts a second before the word, so you hear the room as it was; how long it goes on after the word is yours to choose: a second tells whether someone went on talking. Beside each clip: how loud the word and the room were, what the Echo itself played at that moment (music, a reply, a timer, one of its sounds: its own sound is the commonest false wake), and what followed: a request, nothing said, or another Echo answering. "false?" marks a wake word with nothing said after it, or heard while the Echo played. "Save all" writes one file: 16 kHz mono WAVs in the folders wake_word and near_miss, plus clips.json with all of the above. The setting is not part of exports, so copying this Echo\'s settings never switches recording on elsewhere.');
   const rows = clipBox.rowEls;
-  const wakes = list.filter((c) => c.kind === 'wake'), misses = list.filter((c) => c.kind !== 'wake'), sus = list.filter(clipSuspect).length,
-    marked = list.filter((c) => c.label).length;
+  const wakes = list.filter((c) => c.kind === 'wake'), misses = list.filter((c) => c.kind !== 'wake'), sus = list.filter(clipSuspect).length;
   const body = !on ? empty('ear', 'Off. Switch it on above to keep the next wake words and near misses here.')
     : !list.length ? empty('ear', 'No clips yet. Say the wake word, or wait for the next time the Echo wakes, or nearly wakes, by itself.')
     : h('div', { class: 'clients' }, list.map(clipRow));
   clipBox.replaceChildren(head, rows, body, on && list.length ? h('div', { class: 'card-foot' },
     clipBusy ? h('div', { class: 'busy grow' }, h('span', { class: 'spin' }), clipBusy)
-      : h('span', { class: 'help grow' }, `${plural(wakes.length, 'wake word')}${sus ? ` (${sus} perhaps false)` : ''}, ${plural(misses.length, 'near miss', 'near misses')}, ${marked} marked`),
+      : h('span', { class: 'help grow' }, `${plural(wakes.length, 'wake word')}${sus ? ` (${sus} perhaps false)` : ''}, ${plural(misses.length, 'near miss', 'near misses')}`),
     h('button', { disabled: !!clipBusy, onclick: clipSaveAll }, icon('down'), 'Save all…'),
     h('button', { class: 'danger', disabled: !!clipBusy, onclick: async () => {
       if (await ask({ title: 'Delete every clip?', ok: 'Delete', danger: true, body: 'They are gone from the Echo. Save them first if you want to keep them.' }))

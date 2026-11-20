@@ -166,16 +166,6 @@ int16_t *wakeclip_audio(unsigned id, size_t *n)
     return copy;
 }
 
-int wakeclip_label(unsigned id, int label)
-{
-    struct clip *c; int r = -1;
-    if (label < WAKECLIP_UNLABELLED || label > WAKECLIP_NOT_WAKE) return -1;
-    pthread_mutex_lock(&mu);
-    if ((c = find(id))) { c->i.label = label; r = 0; }
-    pthread_mutex_unlock(&mu);
-    return r;
-}
-
 int wakeclip_delete(unsigned id)
 {
     struct clip *c; int r = 0;
@@ -204,7 +194,6 @@ static void envelope(const struct clip *c, char *out)
 }
 
 static const char *const kinds[WAKECLIP_KINDS] = { "wake", "near_miss" };
-static const char *const labels[] = { "", "wake", "not_wake" };
 
 size_t wakeclip_json(char *out, size_t cap, long long now_ms)
 {
@@ -219,11 +208,11 @@ size_t wakeclip_json(char *out, size_t cap, long long now_ms)
         const struct wakeclip_info *i = &clips[at[k]].i; char env[2 * WAKECLIP_ENV + 1] = "";
         if (i->done) envelope(&clips[at[k]], env);
         PUT("%s{\"id\":%u,\"kind\":\"%s\",\"word\":\"%s\",\"wall\":%lld,\"mono_ms\":%lld,\"from\":%llu,\"len\":%u,\"word_at\":%u,\"word_len\":%u,"
-            "\"done\":%s,\"word_db\":%.1f,\"floor_db\":%.1f,\"peak\":%d,\"music\":%s,\"reply\":%s,\"ringing\":%s,\"sound\":%s,\"outcome\":\"%s\",\"label\":\"%s\",\"env\":\"%s\"}",
+            "\"done\":%s,\"word_db\":%.1f,\"floor_db\":%.1f,\"peak\":%d,\"music\":%s,\"reply\":%s,\"ringing\":%s,\"sound\":%s,\"outcome\":\"%s\",\"env\":\"%s\"}",
             k ? "," : "", i->id, kinds[i->kind], i->word, i->wall, i->mono_ms, (unsigned long long)i->from, i->len, i->word_at, i->word_len,
             i->done ? "true" : "false", i->done ? i->word_db : 0.0f, i->done ? i->floor_db : 0.0f, i->peak,
             i->playing & WAKECLIP_MUSIC ? "true" : "false", i->playing & WAKECLIP_REPLY ? "true" : "false",
-            i->playing & WAKECLIP_RINGING ? "true" : "false", i->playing & WAKECLIP_SOUND ? "true" : "false", i->outcome, labels[i->label], env);
+            i->playing & WAKECLIP_RINGING ? "true" : "false", i->playing & WAKECLIP_SOUND ? "true" : "false", i->outcome, env);
     }
     PUT("]}");
     pthread_mutex_unlock(&mu);
