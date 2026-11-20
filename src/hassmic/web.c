@@ -1175,8 +1175,8 @@ static void wakeclip_api(int fd, struct req *r)
     }
     if (write && !strcmp(r->path, "/api/wakeclips/delete") && r->body) {
         int all = !strncmp(r->body, "all", 3);
-        if (!all && sscanf(r->body, "%u", &id) != 1) { respond_sjson(fd, r, 400, "{\"error\":\"say which\"}"); return; }
-        if (wakeclip_delete(all ? 0 : id) || (!all && !id)) respond_sjson(fd, r, 404, "{\"error\":\"no such clip\"}");
+        if (!all && (sscanf(r->body, "%u", &id) != 1 || !id)) { respond_sjson(fd, r, 400, "{\"error\":\"say which\"}"); return; }   /* id 0 would be "all" in wakeclip_delete */
+        if (wakeclip_delete(all ? 0 : id)) respond_sjson(fd, r, 404, "{\"error\":\"no such clip\"}");
         else { fprintf(stderr, "web: wake word clip%s deleted\n", all ? "s" : ""); respond_sjson(fd, r, 200, "{\"deleted\":true}"); }
         return;
     }

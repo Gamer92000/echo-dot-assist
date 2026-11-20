@@ -152,6 +152,8 @@ def main():
         check(c["on"] is True and c["after_ms"] == 300 and c["clips"] == [], "after a restart: still on, 0.3 s, and no clip (RAM only)")
         echo.proc.send_signal(signal.SIGUSR1)
         check(bool(until(lambda: clips(b)["clips"], 5)), "a new one kept")
+        st, _, _ = b.call("POST", "/api/wakeclips/delete", b"0")
+        check(st == 400 and len(clips(b)["clips"]) == 1, "id 0 is an error and deletes nothing (it once meant all)")
         st, _, _ = b.call("POST", "/api/wakeclips/delete", b"all")
         check(st == 200 and clips(b)["clips"] == [], "delete all")
         echo.proc.send_signal(signal.SIGUSR1)
