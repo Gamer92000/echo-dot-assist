@@ -524,6 +524,9 @@ static size_t hello_json(char *o, size_t cap, int members)
                          name, node, nt, board.model, board.codename, VERSION, p, start_id, core_web_port);
     /* no action button (board.action_combo): the page names what stands in for it */
     if (board.action_combo && n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"action\":\"volume_keys\"");
+#ifdef CUBE
+    if (n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"platform\":\"fire_tv\"");
+#endif
     if (members && n < cap) { n += (size_t)snprintf(o + n, cap - n, ",\"members\":"); if (n < cap) n += arb_members_json(o + n, cap - n); }
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
     return n < cap ? n : cap - 1;
@@ -1249,10 +1252,14 @@ static void handle(int fd)
         else { respond_sjson(fd, &r, 200, "{\"reboot\":true}"); core_reboot("settings page"); }
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/adb")) {
+#ifdef CUBE
+        respond_json(fd,409,"{\"error\":\"Manage ADB in Fire TV Developer options\"}");
+#else
         char o[64];
         if (!signed_ok(&r, 1) || unhex(pub, r.pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         snprintf(o, sizeof o, "{\"adb\":\"%s\"}", adb_ask(pub, !strncmp(r.body, "on", 2)));
         respond_sjson(fd, &r, 200, o);
+#endif
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/revoke")) {
         uint8_t who[32]; int found = 0;
@@ -1273,7 +1280,12 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/davs", 9)) davs_api(fd, &r);
     else if (!strncmp(r.path, "/api/mww", 8)) mww_api(fd, &r);
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
+#ifdef CUBE
+    else if (!strncmp(r.path, "/api/wifi", 9))
+        respond_json(fd,409,"{\"error\":\"Manage networking in Fire TV Settings\"}");
+#else
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
+#endif
     else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);
     else if (!strcmp(r.path, "/api/screen")) screen_api(fd, &r);
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);

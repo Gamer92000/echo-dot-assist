@@ -52,6 +52,10 @@ static void on_log(int level, const char *tag, const char *msg)
  * {.."timestamp_before_ww_end":9559,"timestamp_before_ww_start":8823}, "has_audio_lsb_metadata":1), a fingerprint.
  * Stock hands those two numbers back to the front end before it asks for the wake word's energies (main.c). */
 static long afe_start[WAKE_SLOTS], afe_end[WAKE_SLOTS]; static atomic_int afe_known[WAKE_SLOTS];
+#ifdef CUBE
+static uint64_t cube_begin[WAKE_SLOTS],cube_end[WAKE_SLOTS];
+static int cube_timing[WAKE_SLOTS];
+#endif
 
 static void read_metadata(int slot, const unsigned char *m, size_t n)
 {
@@ -59,6 +63,10 @@ static void read_metadata(int slot, const unsigned char *m, size_t n)
     char *js = jss[slot]; const size_t cap = sizeof jss[0];
     size_t at = 0; z_stream z; const char *a, *b;
     atomic_store(&afe_known[slot], 0);
+#ifdef CUBE
+    cube_timing[slot]=0;
+    if(n>(1u<<20))return;
+#endif
     while (m && at + 3 < n && at < 64 && !(m[at] == 0x1f && m[at + 1] == 0x8b && m[at + 2] == 8)) at++;
     if (!m || at >= 64 || at + 3 >= n) return;
     memset(&z, 0, sizeof z);
@@ -66,6 +74,11 @@ static void read_metadata(int slot, const unsigned char *m, size_t n)
     if (inflateInit2(&z, 16 + MAX_WBITS) != Z_OK) return;
     inflate(&z, Z_FINISH); inflateEnd(&z);
     js[cap - 1 - z.avail_out] = 0;
+#ifdef CUBE
+    const char *begin=strstr(js,"\"kwSampleStartIndex\":"),*end=strstr(js,"\"kwSampleEndIndex\":");
+    if(begin&&end){cube_begin[slot]=strtoull(strchr(begin,':')+1,NULL,10);cube_end[slot]=strtoull(strchr(end,':')+1,NULL,10);cube_timing[slot]=cube_end[slot]>=cube_begin[slot];}
+    return; /* Cube's callback ABI timing fields and Echo LIPC energy API are not used. */
+#endif
     if (!strstr(js, "\"has_audio_lsb_metadata\":1") || !(a = strstr(js, "\"timestamp_before_ww_start\":"))
         || !(b = strstr(js, "\"timestamp_before_ww_end\":"))) return;
     afe_start[slot] = atol(strchr(a, ':') + 1); afe_end[slot] = atol(strchr(b, ':') + 1);
@@ -84,12 +97,19 @@ static void on_result(const char *decoderId, PryonEnumeratedResult *r)
     int slot = 0;
     while (slot < WAKE_SLOTS && (!decoderId || strcmp(decoderId, decoder[slot]))) slot++;
     if (slot == WAKE_SLOTS) return;
+#ifdef CUBE
+    if(r->detectionType==PRYON_DETECTION_TYPE_ACCEPT&&r->keyword){
+        read_metadata(slot,r->metadata,r->metadataSize);
+        if(cube_timing[slot]){fprintf(stderr,"wake: %s type=%d samples %llu-%llu\n",r->keyword,r->detectionType,(unsigned long long)cube_begin[slot],(unsigned long long)cube_end[slot]);callback(slot,r->keyword,cube_begin[slot],cube_end[slot]);}
+    }else if(r->detectionType==PRYON_DETECTION_TYPE_NEAR_MISS&&r->keyword)wake_near_miss(slot,r->keyword);
+#else
     fprintf(stderr, "wake: %s type=%d samples %llu-%llu (fed %llu%s)\n", r->keyword ? r->keyword : "?", r->detectionType,
             (unsigned long long)r->beginSampleIndex, (unsigned long long)r->endSampleIndex, (unsigned long long)sample_index[slot],
             slot ? ", second wake word" : "");
     if (r->detectionType == PRYON_DETECTION_TYPE_ACCEPT) read_metadata(slot, r->metadata, r->metadataSize);
     if (r->detectionType == PRYON_DETECTION_TYPE_ACCEPT && r->keyword) callback(slot, r->keyword, r->beginSampleIndex, r->endSampleIndex);
     else if (r->detectionType == PRYON_DETECTION_TYPE_NEAR_MISS && r->keyword) wake_near_miss(slot, r->keyword);
+#endif
 }
 
 static int pryon_open(int slot, const char *manifest, wake_cb cb)
