@@ -163,6 +163,11 @@ for k in range(3):
     print(("ok   " if ok else "FAIL ") + f"adaptation {k}: C and Python ends {'the same' if c == py else (c, py)}, "
           f"transform after {ad.requests} requests apart by {err:.1e} of its largest, saved and read back (exit {r.returncode})")
     bad |= not ok
+    # main.c gathers a window's statistics on their own and merges them once a request followed: the same as adding
+    r = subprocess.run([BIN, "merge", wa] + raws, capture_output=True, text=True)
+    ok = r.returncode == 0 and r.stdout.strip() == "same"
+    print(("ok   " if ok else "FAIL ") + f"adaptation {k}: gathered alone and merged, the same ends and statistics as added directly ({r.stdout.strip()})")
+    bad |= not ok
     for f in raws + [st]: os.path.exists(f) and os.unlink(f)
 shutil.rmtree(tmp)
 sys.exit(1 if bad else 0)

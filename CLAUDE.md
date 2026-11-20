@@ -100,6 +100,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
+.venv/bin/python tests/fake_web_clips.py      # wake word clips: off by default, a wake word and a near miss kept, the ring's
+                                             # bytes sealed to the page, muted, labels, delete, restart (RAM only), off
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
@@ -336,6 +338,14 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   wins (`core_wake_refused`).  Remote: EV_WAKE_END -> `core_remote_wake` (sound, ring, `listening(1)` until mic off).
   `tests/unit/mww_ref.py` (in `make unit`) checks features and every inference against pymicro-features and TFLite
   BUILTIN_REF on all of pymicro-wakeword's models.
+- **Wake word clips (`wakeclip.c`, `wakeclip.h`)**: setting `wake_clips` (off, page only: no HA entity, not exported)
+  and `wake_clips_after` (0.3/1/2/3 s).  The last 10 wake words and 10 near misses (`on_wake`, `on_near_miss`, which
+  gets Pryon's begin/end through `wake_miss_cb`), each from 1 s before the word to the setting past it, copied from
+  the ring by the capture thread block by block (`wakeclip_feed`); RAM only; none muted or in a Drop In; what played
+  and the outcome (`wake_told`, `core_transcript`) with each.  Page: `/api/wakeclips` (list with a waveform), the
+  audio sealed (`web.c` `clip_seal`, "hassmic clip 1", 4-byte block counter; `crypto.js` `stream`), delete;
+  card on the Wake word page, Save all = tar by kind.  PC: SIGUSR1/SIGTTOU mark clips too.  Tests: `make
+  unit-wakeclip`, `tests/fake_web_clips.py`.
 - **Wake word arbitration (`arb.c`, `arb.h`)**: when several Echos hear the wake word, only the best one answers
   (stock's ESP, done on the LAN; the score is the front end's own wake word energy ratio, as stock reads it, in a
   thread of its own (`afe_thread`; the capture never waits on it, issue #77: `score_wait` claims once it is in or after

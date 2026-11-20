@@ -70,6 +70,10 @@ uint64_t wakealign_space(const struct wakealign *wa);
  * space must be the model's).  Either may be NULL */
 long wakealign_end_adapt(const struct wakealign *wa, const int16_t *pcm, size_t n, const struct wakealign_adapt *use,
                          struct wakealign_adapt *add);
+/* one's statistics into ad as if its windows had been added to ad (ad forgets for each request of one, then takes
+ * them in): a window's statistics are gathered on their own first (wakealign_end_adapt into a zeroed one of the same
+ * space) and taken only once the request turned out real (main.c: a request followed the wake word) */
+void wakealign_adapt_merge(struct wakealign_adapt *ad, const struct wakealign_adapt *one);
 /* the transform from add's statistics (10 rounds from the last one); 1: estimated, 0: too few requests or no solution */
 int wakealign_estimate(struct wakealign_adapt *ad);
 /* a household's statistics on the flash and back (statefile.c); 0 / -1, or the wrong space or file */

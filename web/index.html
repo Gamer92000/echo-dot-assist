@@ -652,6 +652,14 @@ details.more li { margin: 4px 0; }
 .mww-add { padding-top: 14px; border-top: 1px solid var(--line); }
 .mww-add .help { margin: 0 0 8px; }
 @media (max-width: 600px) { .mww-row { grid-template-columns: 1fr; } .mww-row .ctl { justify-content: flex-start; } }
+/* wake word clips (app.js renderClips) */
+.clip-row .ctl { align-self: start; flex-wrap: wrap; justify-content: flex-end; }
+.clip-row.on { background: var(--accent-soft); }
+.clip-main { display: grid; gap: 6px; min-width: 0; }
+.clip-main .help { margin: 0; }
+.clip-wave { width: 288px; max-width: 100%; height: 40px; display: block; }
+.clip-row button.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+@media (max-width: 600px) { .clip-row { grid-template-columns: 1fr; } .clip-row .ctl { justify-content: flex-start; } }
 
 /* ---------------------------------------------------------------- dialogs (Wi-Fi) */
 dialog.modal { width: min(520px, calc(100% - 32px)); max-height: min(720px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line);

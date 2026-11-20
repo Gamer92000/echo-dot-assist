@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""web/crypto.js (the settings page's X25519, BLAKE2b and seal) against Python's: random keys and messages of every
+"""web/crypto.js (the settings page's X25519, BLAKE2b, seal and the clips' stream) against Python's: random keys and messages of every
 length around the block size, through node."""
 import hashlib, json, os, subprocess, sys
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, NoEncryption
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-cases = {"x": [], "b": [], "s": []}
+cases = {"x": [], "b": [], "s": [], "c": []}
 for _ in range(20):
     a, b = X25519PrivateKey.generate(), X25519PrivateKey.generate()
     ask = a.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
@@ -25,6 +25,15 @@ for n in [0, 1, 8, 63, 64, 65, 200]:
     k, data, ctr = os.urandom(32), os.urandom(n), 1700000000000000 + n
     cases["s"].append([k.hex(), ctr, data.hex(), seal(k, ctr, data).hex()])
 
+def stream(k, label, ctr, data):
+    """web.c clip_seal, from its description: the block's number in 4 bytes, little-endian"""
+    ek = hashlib.blake2b(label, key=k, digest_size=32).digest()
+    ks = b"".join(hashlib.blake2b(f"{ctr}\n".encode() + i.to_bytes(4, "little"), key=ek, digest_size=64).digest() for i in range((len(data) + 63) // 64))
+    return bytes(a ^ b for a, b in zip(data, ks))
+for n in [0, 1, 64, 65, 256 * 64 + 1, 70000]:          # past 256 blocks: where seal's one byte would wrap
+    k, data, ctr = os.urandom(32), os.urandom(n), 1700000000000000 + n
+    cases["c"].append([k.hex(), ctr, data.hex(), stream(k, b"hassmic clip 1", ctr, data).hex()])
+
 js = """
 const c = require(process.argv[1]); const t = JSON.parse(require('fs').readFileSync(0, 'utf8')); let bad = 0;
 for (const [sk, pk, pub, shared] of t.x) {
@@ -38,7 +47,12 @@ for (const [d, k, n, want] of t.b) {
 for (const [k, ctr, d, want] of t.s) {
   if (c.hex(c.seal(c.unhex(k), ctr, d ? c.unhex(d) : new Uint8Array(0))) !== want) { bad++; console.log('seal', d.length / 2); }
 }
-console.log(bad ? 'FAIL ' + bad : 'ok   ' + t.x.length + ' X25519, ' + t.b.length + ' BLAKE2b, ' + t.s.length + ' seal'); process.exit(bad ? 1 : 0);
+for (const [k, ctr, d, want] of t.c) {
+  const data = d ? c.unhex(d) : new Uint8Array(0), sealed = c.stream(c.unhex(k), 'hassmic clip 1', ctr, data);
+  if (c.hex(sealed) !== want) { bad++; console.log('stream', d.length / 2); }
+  if (c.hex(c.stream(c.unhex(k), 'hassmic clip 1', ctr, sealed)) !== d) { bad++; console.log('stream does not open itself', d.length / 2); }
+}
+console.log(bad ? 'FAIL ' + bad : 'ok   ' + t.x.length + ' X25519, ' + t.b.length + ' BLAKE2b, ' + t.s.length + ' seal, ' + t.c.length + ' clip stream'); process.exit(bad ? 1 : 0);
 """
 r = subprocess.run(["node", "-e", js, os.path.join(ROOT, "web/crypto.js")], input=json.dumps(cases), text=True)
 sys.exit(r.returncode)
