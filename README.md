@@ -28,6 +28,7 @@ as an ESPHome device, with no YAML and no add-on.
 | ✅ | Echo Show 8 1st gen (2019)   | C7H6N3 | [`crown`](devices/crown/README.md)       | micro-USB, no soldering; as checkers |
 | ✅ | Echo Show 5 2nd gen (2021)   | C76N8S | [`cronos`](devices/cronos/README.md)     | micro-USB, no soldering; as checkers |
 | ✅ | Echo Show 8 2nd gen (2021)   | A8H3N2 | [`athena`](devices/athena/README.md)     | micro-USB, no soldering (a serial-port unlock); the ring as a band on screen |
+| 🚧 | Echo Spot 1st gen (2017)     | VN94DQ | [`rook`](devices/rook/README.md)         | micro-USB, no soldering; the ring as a band on screen; no Bluetooth yet |
 | ✅ | Echo Input (2018)            | C1125P | [`cupcake`](devices/cupcake/README.md)   | micro-USB, no soldering; no speaker (jack or Bluetooth), one LED |
 | 🚧 | Echo Dot 5th gen (2022)      | C2N6L4 | [`cannoli`](devices/cannoli/README.md)   | open the case, solder USB to test pads; manual install only, no guided setup yet |
 

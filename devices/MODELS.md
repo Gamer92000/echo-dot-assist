@@ -9,7 +9,7 @@ ones with the way into each; [`README.md`](README.md) here says how to add a mod
 | ❌ | Echo Show 1st gen | MW46WB | `knight` | 2017-06-28 | *no known exploit yet* |
 | ✅ | Echo 2nd gen | XC56PY | [`radar`](radar/README.md) | 2017-10-31 | added in [`2f413ba`](https://github.com/Gamer92000/echo-dot-assist/commit/2f413ba) |
 | ❌ | Echo Plus 1st gen | ZE39KL | `sonar` | 2017-10-31 | *no known exploit yet* |
-| 🚧 | Echo Spot 1st gen | VN94DQ | `rook` | 2017-12-19 | tracked in [#69](https://github.com/Gamer92000/echo-dot-assist/issues/69) |
+| 🚧 | Echo Spot 1st gen | VN94DQ | [`rook`](rook/README.md) | 2017-12-19 | works on one unit (Fire OS 5.5.6.9, Android 5.1), tracked in [#69](https://github.com/Gamer92000/echo-dot-assist/issues/69); no Bluetooth yet |
 | ✅ | Echo Dot 3rd gen | D9N29T | [`donut`](donut/README.md) | 2018-10-11 | added in [`6d5667b`](https://github.com/Gamer92000/echo-dot-assist/commit/6d5667b) |
 | ❌ | Echo Plus 2nd gen | L9D29R | `lidar` | 2018-10-11 | *no known exploit yet* |
 | ❌ | Echo Show 2nd gen | DW84JL | `bishop` | 2018-10-11 | *no known exploit yet* |
