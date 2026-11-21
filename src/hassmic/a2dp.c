@@ -22,12 +22,14 @@
  *             mixer's drift apart: a frame is dropped or repeated now and then to hold the buffer at its target.
  *
  * And the other way, the Echo playing to a Bluetooth speaker (A2DP source; the mixer's side is btout.c), see "playing
- * to a Bluetooth speaker" below.
+ * to a Bluetooth speaker" below; and the Echo Wall Clock, an Alexa Gadget on RFCOMM (rfcomm.c, wallclock.c), see "the
+ * Echo Wall Clock" below.
  */
 #include "a2dp.h"
 #include "logread.h"
 #include "musiclight.h"
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -49,6 +51,8 @@
 #include "resample.h"
 #include "scoaudio.h"
 #include "statefile.h"
+#include "rfcomm.h"
+#include "wallclock.h"
 
 #define MAX_LINKS 3                     /* a phone playing to us, the speaker we play to, one more */
 #define MAX_CHANS 6                     /* per link: SDP, AVDTP signalling + media, and room for a retry */
@@ -62,11 +66,12 @@
 enum { H4_CMD = 1, H4_ACL = 2 };
 enum { EV_INQUIRY_COMPLETE = 0x01, EV_CONN_COMPLETE = 0x03, EV_CONN_REQUEST, EV_DISCONNECT, EV_AUTH_COMPLETE, EV_REMOTE_NAME = 0x07, EV_ENC_CHANGE, EV_PIN_REQUEST = 0x16,
        EV_LINK_KEY_REQUEST, EV_LINK_KEY_NOTIFY, EV_KEY_REFRESH = 0x30, EV_IO_CAP_REQUEST, EV_IO_CAP_RESPONSE, EV_USER_CONFIRM,
-       EV_SSP_COMPLETE = 0x36, EV_INQUIRY_RSSI = 0x22, EV_INQUIRY_EXT = 0x2f };
+       EV_SSP_COMPLETE = 0x36, EV_MODE_CHANGE = 0x14, EV_INQUIRY_RSSI = 0x22, EV_INQUIRY_EXT = 0x2f };
 enum { OP_INQUIRY = 0x0401, OP_INQUIRY_CANCEL, OP_CREATE_CONN = 0x0405, OP_DISCONNECT = 0x0406, OP_ACCEPT = 0x0409, OP_REJECT, OP_LINK_KEY_REPLY, OP_LINK_KEY_NEG, OP_PIN_REPLY, OP_PIN_NEG,
        OP_AUTH = 0x0411, OP_ENCRYPT = 0x0413, OP_REMOTE_NAME = 0x0419, OP_IO_CAP_REPLY = 0x042b, OP_CONFIRM_REPLY, OP_CONFIRM_NEG, OP_IO_CAP_NEG = 0x0434,
        OP_LINK_POLICY = 0x080f, OP_LOCAL_NAME = 0x0c13, OP_SCAN_ENABLE = 0x0c1a, OP_CLASS = 0x0c24, OP_INQUIRY_MODE = 0x0c45,
-       OP_EIR = 0x0c52, OP_SSP_MODE = 0x0c56, OP_READ_BUFFER = 0x1005, OP_ACCEPT_SYNC = 0x0429, OP_REJECT_SYNC = 0x042a };
+       OP_EIR = 0x0c52, OP_SSP_MODE = 0x0c56, OP_SUPERVISION = 0x0c37, OP_SNIFF = 0x0803, OP_EXIT_SNIFF = 0x0804, OP_READ_BUFFER = 0x1005,
+       OP_ACCEPT_SYNC = 0x0429, OP_REJECT_SYNC = 0x042a };
 enum { EV_SYNC_COMPLETE = 0x2c, EV_SYNC_CHANGED = 0x2d };
 enum { PSM_SDP = 0x0001, PSM_RFCOMM = 0x0003, PSM_AVCTP = 0x0017, PSM_AVDTP = 0x0019 };
 
@@ -188,6 +193,8 @@ struct frag { struct frag *next; int handle; size_t len; unsigned char b[]; };
 static struct frag *fhead, **ftail = &fhead;
 
 static int is_speaker(const struct link *l);            /* the one we play to (below) */
+static int is_clock(const struct link *l);              /* the Echo Wall Clock's (below) */
+static int clock_paging(void);                          /* a page for it in flight */
 static struct link *link_by(int handle) { for (int i = 0; i < MAX_LINKS; i++) if (links[i].used && links[i].handle == handle) return &links[i]; return NULL; }
 static struct chan *chan_by(struct link *l, int lcid) { for (int i = 0; i < MAX_CHANS; i++) if (l->ch[i].used && l->ch[i].lcid == lcid) return &l->ch[i]; return NULL; }
 
@@ -201,11 +208,25 @@ static void acl_flush(void)
     }
 }
 
+/* state/bt-trace present: every L2CAP packet to and from the Echo Wall Clock in the log (its quirks, PLAN.md) */
+static int clk_trace = -1;
+static void clk_dump(const char *dir, const unsigned char *p, size_t n)
+{
+    if (clk_trace < 0) { char t[300]; const char *d = getenv("HASSMIC_STATE"); snprintf(t, sizeof t, "%s/bt-trace", d ? d : "/data/local/hassmic/state"); clk_trace = !access(t, F_OK); }
+    if (!clk_trace || !dir) return;
+    char h[3 * 400 + 8] = ""; size_t k = n < 400 ? n : 400, o = 0;
+    for (size_t i = 0; i < k; i++) o += snprintf(h + o, sizeof h - o, "%02x ", p[i]);
+    fprintf(stderr, "a2dp: clock %s %zu: %s%s\n", dir, n, h, n > k ? "..." : "");
+}
+
+static int is_clock_link(const struct link *l);
+
 static void l2_send(struct link *l, unsigned cid, const void *pdu, size_t n)
 {
     unsigned char fr[4 + 1024];
     if (n > sizeof fr - 4) return;
     put16(fr, n); put16(fr + 2, cid); memcpy(fr + 4, pdu, n); n += 4;
+    if (is_clock_link(l)) clk_dump(">>", fr, n);
     for (size_t o = 0; o < n; o += acl_len) {
         size_t k = n - o < acl_len ? n - o : acl_len;
         struct frag *f = malloc(sizeof *f + 5 + k);
@@ -259,7 +280,7 @@ static void conn_request(struct link *l, unsigned id, const unsigned char *d, si
 {
     if (n < 4) return;
     unsigned psm = u16(d), rcid = u16(d + 2); struct chan *c = NULL;
-    if (psm != PSM_SDP && psm != PSM_AVDTP && psm != PSM_AVCTP && !(psm == PSM_RFCOMM && hfp_listed())) { conn_response(l, id, 0, rcid, 2, 0); return; }  /* not supported */
+    if (psm != PSM_SDP && psm != PSM_AVDTP && psm != PSM_AVCTP && !(psm == PSM_RFCOMM && (is_clock(l) || hfp_listed()))) { conn_response(l, id, 0, rcid, 2, 0); return; }  /* not supported */
     for (int i = 0; i < MAX_CHANS && !c; i++) if (!l->ch[i].used) c = &l->ch[i];
     if (!c) { conn_response(l, id, 0, rcid, 4, 0); return; }                                           /* no resources */
     memset(c, 0, sizeof *c);
@@ -267,6 +288,9 @@ static void conn_request(struct link *l, unsigned id, const unsigned char *d, si
     if (psm != PSM_SDP && !l->enc) {                       /* authenticated + encrypted first (security mode 4) */
         c->pending = 1; c->pend_id = id;
         if (!l->pend_until) { l->auth_at = ms() + 1000; l->pend_until = ms() + 15000; }   /* the phone may be at it already */
+        else if (!l->auth_sent && l->auth_at == LLONG_MAX / 2) {                         /* the clock's call: now */
+            l->auth_at = ms() + 1000; if (l->pend_until > ms() + 15000) l->pend_until = ms() + 15000;
+        }
         conn_response(l, id, c->lcid, rcid, 1, 1);           /* pending, authentication pending */
         return;
     }
@@ -403,6 +427,7 @@ static int rec_mask(void)                               /* the records listed no
     unsigned f = hfp_sdp_features(); hf_features[1] = f >> 8; hf_features[2] = f;
     return hfp_listed() ? (1 << NREC) - 1 : ((1 << NREC) - 1) & ~(1 << REC_HF);
 }
+
 
 /* data element header: type, length of the data; returns the header's length, 0 if malformed */
 static size_t de(const unsigned char *p, size_t n, unsigned *type, size_t *len)
@@ -1387,13 +1412,13 @@ static int out_upkeep(void)
             fprintf(stderr, "a2dp: no speaker found\n");
             if (inquiring && hci_cmd(OP_INQUIRY_CANCEL, NULL, 0) < 0) return -1;
             inquiring = 0; search_end();
-        } else if (!inquiring && !out.paging) {
+        } else if (!inquiring && !out.paging && !clock_paging()) {
             unsigned char p[5] = { 0x33, 0x8b, 0x9e, 4, 0 };    /* general inquiry, 5.12 s, any number of responses */
             if ((st = hci_cmd(OP_INQUIRY, p, 5)) < 0) return -1;
             if (!st) inquiring = 1; else { fprintf(stderr, "a2dp: inquiry refused (0x%02x)\n", st); search_until = 0; }
         }
     }
-    if (out.on && out.addr && !out.l && !out.paging && !inquiring && now >= out.next_page) {
+    if (out.on && out.addr && !out.l && !out.paging && !clock_paging() && !inquiring && now >= out.next_page) {
         unsigned char p[13];
         for (int i = 0; i < 6; i++) p[i] = out.addr >> 8 * i;
         put16(p + 6, 0xcc18); p[8] = out.psrm <= 2 ? out.psrm : 1; p[9] = 0; put16(p + 10, out.clock); p[12] = 1;   /* DM/DH 1-5; role switch ok */
@@ -1424,6 +1449,450 @@ static int out_upkeep(void)
     return 0;
 }
 
+/* ---------------------------------------------------------------- the Echo Wall Clock
+ * An Alexa Gadget on Bluetooth Classic that shows the Echo's time and timers (wallclock.c says what goes over the line).
+ * How an Echo pairs and keeps it is an Echo Show's HCI log (Fire OS's own stack, 2026-11-21; mpjanofsky/echo-wall-clock's
+ * PROTOCOL.md 2 agrees where it says):
+ *   - the clock is discoverable while its light pulses orange (its button held ~6 s; red blinks are a low battery,
+ *     which also made it refuse channel 4, ignore the time and drop links on the first clock tried);
+ *   - pairing: one connection, the Echo pages it, Secure Simple Pairing (Just Works), SDP, encryption, RFCOMM to its
+ *     channel 4 in a session of the Echo's, Discover;
+ *   - afterwards it calls the Echo now and then (light flashing blue) and after a battery change: it asks for a Serial
+ *     Port by SDP, which the Echo does not have (the call only says "here"); the Echo takes the master role, reads the
+ *     clock's SDP, authenticates with the key, encrypts and opens channel 4 again, as above;
+ *   - an idle paired clock also takes a page from its partner; one partner at a time, whoever paired last.
+ * So "Wall clock search" inquires for up to CLK_SEARCH_S for a device with the Alexa Gadget UUID (or Lab126's Echo Wall
+ * Clock product id) in its extended inquiry response, the strongest, pages it at once and pairs; then we keep a link:
+ * paged while away (backing off: it may be off the wall without batteries), and accepted when it calls.  The pairing is
+ * kept in state/bt_clock (address and name) beside the link key in state/bt_keys; the feature switch (setting
+ * wall_clock) only connects and lets go.  An authentication the clock refuses means it has paired with something else:
+ * it is forgotten.  state/bt-trace present: every L2CAP packet and link event of the clock's in the log. */
+
+#define CLK_SEARCH_S 60
+#define CLK_CHANNEL 4                   /* "SPP Port 4 DATA"; channel 2 is its firmware update, never touched */
+
+enum { C_NONE, C_OFF, C_AWAY, C_CONNECTING, C_READY };         /* clk_state for Home Assistant */
+
+static struct {
+    uint64_t addr; char name[64]; int on;               /* the clock (state/bt_clock); the feature */
+    struct link *l; int lcid, my_lcid;                  /* its link; our CID of the RFCOMM session's channel (0: none), of
+                                                           the one we asked for */
+    struct rfc rf; int rf_tries, fresh; long long rf_at, l2_at; /* when to open RFCOMM (0: not due); our channel request
+                                                           sent; fresh: the next try on an L2CAP channel of its own */
+    long long next_page; int paging, failures, pairing, psrm, clock;
+    int channel, sdp_lcid, sdp_done; long long sdp_at;  /* its data channel by SDP (CLK_CHANNEL until known); our SDP query */
+    unsigned char sdp[2048]; size_t sdpn;
+    int sniff, sniff_asked, exit_asked; long long active_at, sniff_at, exit_at;   /* sniff mode; asked in / out, when; traffic */
+    uint64_t page_addr;                                 /* whom the page in flight is for (the clock may change meanwhile) */
+    uint64_t prev_addr; char prev_name[64];             /* the clock paired before, kept until the new one is */
+    int sess_fails, was_ready; long long pair_until;    /* links that came up but never got a clock on the line; pairing's end */
+} clk;
+static pthread_mutex_t clk_lock = PTHREAD_MUTEX_INITIALIZER;          /* clk.name for other threads */
+static atomic_int clk_on_req = -1, clk_search_req = -1, clk_forget_req, clk_searching, clk_state;
+static long long clk_search_until;
+static struct { uint64_t addr; int rssi, psrm, clock; char name[64]; } clk_cand;
+
+static int is_clock(const struct link *l) { return clk.addr && l->addr == clk.addr; }
+static int is_clock_link(const struct link *l) { return clk.l == l; }
+static int clock_paging(void) { return clk.paging; }
+static int clk_may_pair(uint64_t a) { return clk.addr && a == clk.addr && clk.pairing; }
+
+static const char *clock_path(void)
+{
+    static char p[256]; const char *d = getenv("HASSMIC_STATE");
+    snprintf(p, sizeof p, "%s/bt_clock", d ? d : "/data/local/hassmic/state");
+    return p;
+}
+
+static void clock_load(void)                    /* address, name */
+{
+    char l[160]; unsigned long long a; int n = 0; FILE *f = fopen(clock_path(), "r");
+    if (!f) return;
+    if (fgets(l, sizeof l, f) && sscanf(l, "%llx %n", &a, &n) == 1 && n) {
+        l[strcspn(l, "\n")] = 0;
+        clk.addr = a; clk.psrm = 1;
+        snprintf(clk.name, sizeof clk.name, "%s", l + n);
+        fprintf(stderr, "a2dp: wall clock %012llx \"%s\"\n", a, clk.name);
+    }
+    fclose(f);
+}
+
+static void clock_save(void)
+{
+    struct statefile s;
+    if (!clk.addr) { if (unlink(clock_path()) && errno != ENOENT) fprintf(stderr, "a2dp: cannot remove %s\n", clock_path()); return; }
+    if (statefile_open(&s, clock_path(), 0600)) { fprintf(stderr, "a2dp: cannot write %s.tmp\n", clock_path()); return; }
+    pthread_mutex_lock(&clk_lock);
+    fprintf(s.f, "%012llx %s\n", (unsigned long long)clk.addr, clk.name);
+    pthread_mutex_unlock(&clk_lock);
+    if (statefile_commit(&s)) fprintf(stderr, "a2dp: cannot write %s\n", clock_path());
+}
+
+static void clk_name(const char *name)
+{
+    pthread_mutex_lock(&clk_lock); snprintf(clk.name, sizeof clk.name, "%s", name); pthread_mutex_unlock(&clk_lock);
+}
+
+/* an inquiry response: one of the clock's while a search runs?  Its EIR (PROTOCOL.md 1): the name EchoWallClk..., the
+ * 128-bit Alexa Gadget UUID 6088D2B3-983A-4EED-9F94-5AD1256816B7, manufacturer data Lab126 (0x1949) product 0x0842 */
+static void clock_found(const unsigned char *r, size_t n, int eir)
+{
+    static const unsigned char gadget[16] = { 0xb7, 0x16, 0x68, 0x25, 0xd1, 0x5a, 0x94, 0x9f, 0xed, 0x4e, 0x3a, 0x98, 0xb3, 0xd2, 0x88, 0x60 };
+    if (!atomic_load(&clk_searching) || n < 14 || !eir) return;
+    char name[64] = ""; int match = 0; uint64_t a = addr_of(r); int rssi = (signed char)r[13];
+    for (size_t i = 14; i + 1 < n && r[i]; i += 1 + r[i]) {
+        size_t len = r[i]; const unsigned char *d = r + i + 2;
+        if (i + 1 + len > n || len < 1) break;
+        if (r[i + 1] == 0x06 || r[i + 1] == 0x07) for (size_t k = 0; k + 16 <= len - 1; k += 16) match |= !memcmp(d + k, gadget, 16);
+        if (r[i + 1] == 0xff && len - 1 >= 4 && d[0] == 0x49 && d[1] == 0x19 && d[2] == 0x42 && d[3] == 0x08) match = 1;
+        if ((r[i + 1] == 0x09 || r[i + 1] == 0x08) && len >= 2) {
+            size_t k = len - 1 < sizeof name - 1 ? len - 1 : sizeof name - 1;
+            memcpy(name, d, k); name[k] = 0;
+            for (size_t j = 0; j < k; j++) if ((unsigned char)name[j] < 0x20) name[j] = ' ';
+        }
+    }
+    if (!match || (clk_cand.addr && rssi <= clk_cand.rssi && a != clk_cand.addr)) return;
+    if (a != clk_cand.addr) fprintf(stderr, "a2dp: found wall clock %012llx \"%s\", %d dBm\n", (unsigned long long)a, name, rssi);
+    clk_cand.addr = a; clk_cand.rssi = rssi; clk_cand.psrm = r[6]; clk_cand.clock = u16(r + 11) | 0x8000;
+    if (name[0] || !clk_cand.name[0]) snprintf(clk_cand.name, sizeof clk_cand.name, "%s", name);
+}
+
+static void clock_search_end(void)
+{
+    if (!atomic_exchange(&clk_searching, 0)) return;
+    if (notify) notify();
+}
+
+static void clk_disconnect(void)
+{
+    if (!clk.l || clk.l->dropping) return;
+    unsigned char d[3]; put16(d, clk.l->handle); d[2] = 0x13;      /* remote user terminated connection */
+    clk.l->dropping = 1; later(OP_DISCONNECT, d, 3);
+}
+
+static void clock_inquiry_done(void)
+{
+    if (!atomic_load(&clk_searching) || !clk_cand.addr) return;
+    if (clk.l && clk.l->addr != clk_cand.addr) clk_disconnect();
+    if (clk.addr && clk.addr != clk_cand.addr && !clk.prev_addr) {     /* the old clock: back if this one never pairs */
+        clk.prev_addr = clk.addr; pthread_mutex_lock(&clk_lock); snprintf(clk.prev_name, sizeof clk.prev_name, "%s", clk.name); pthread_mutex_unlock(&clk_lock);
+    }
+    key_forget(clk_cand.addr);                          /* in pairing mode: whatever it had with us is gone */
+    clk.addr = clk_cand.addr; clk_name(clk_cand.name[0] ? clk_cand.name : "Wall clock");
+    clk.pairing = 1; clk.pair_until = ms() + 120000; clk.failures = clk.sess_fails = 0; clk.next_page = ms(); clk.psrm = clk_cand.psrm; clk.clock = clk_cand.clock;
+    fprintf(stderr, "a2dp: pairing with wall clock %012llx \"%s\"\n", (unsigned long long)clk.addr, clk.name);
+    clock_save();
+    clock_search_end();
+}
+
+
+static void clk_rf_connect(void);
+
+/* pairing a clock failed: the one paired before back (its key was kept), or none; never a clock without a key */
+static void clock_pair_failed(void)
+{
+    clk.pairing = 0;
+    if (clk.l) clk_disconnect();
+    clk.addr = clk.prev_addr; clk_name(clk.prev_addr ? clk.prev_name : ""); clk.prev_addr = 0;
+    clk.failures = clk.sess_fails = 0; clk.next_page = ms();
+    if (clk.addr) fprintf(stderr, "a2dp: back to wall clock %012llx \"%s\"\n", (unsigned long long)clk.addr, clk.name);
+    clock_save();
+    if (notify) notify();
+}
+
+/* the RFCOMM session's callbacks: rfcomm.c to L2CAP, our channel to wallclock.c */
+static void clk_awake(void)                             /* traffic: out of sniff mode for it, back after 5 s quiet */
+{
+    clk.active_at = ms();
+    if (clk.l && (clk.sniff || clk.sniff_asked) && !clk.exit_asked) {
+        unsigned char d[2]; put16(d, clk.l->handle); later(OP_EXIT_SNIFF, d, 2); clk.sniff_asked = 0; clk.exit_asked = 1; clk.exit_at = ms();
+    }
+}
+static void clk_rf_out(void *ctx, const unsigned char *p, size_t n)
+{
+    (void)ctx; struct chan *c;
+    clk_awake();
+    if (clk.l && clk.lcid && (c = chan_by(clk.l, clk.lcid))) l2_send(clk.l, c->rcid, p, n);
+}
+static void clk_rf_data(void *ctx, const unsigned char *p, size_t n) { (void)ctx; clk.active_at = ms(); wallclock_rx(p, n, ms()); }
+static int clk_send(void *ctx, const void *p, size_t n) { (void)ctx; return rfc_send(&clk.rf, p, n); }
+static void clk_rf_state(void *ctx, int up)
+{
+    (void)ctx;
+    if (up) { fprintf(stderr, "a2dp: wall clock: channel %d open\n", clk.channel); clk.rf_tries = 0; wallclock_up(clk_send, NULL, ms()); }
+    else {                                              /* refused or closed: again soon, on a fresh session */
+        wallclock_down();
+        if (clk.l) { clk.fresh = 1; if (!clk.rf_at) clk.rf_at = ms() + 1000; }
+    }
+}
+
+static void clk_rf_reset(void)
+{
+    memset(&clk.rf, 0, sizeof clk.rf);
+    clk.rf.out = clk_rf_out; clk.rf.data = clk_rf_data; clk.rf.state = clk_rf_state; clk.rf.l2mtu = 672;
+    rfc_init(&clk.rf);
+}
+
+/* What an Echo Show did (its HCI log, 2026-11-21): pairing: Secure Simple Pairing, SDP of the clock, encryption,
+ * RFCOMM to channel 4 in a session of its own.  The clock's call: it takes the master role, answers the clock's SDP
+ * search for a Serial Port with no records (the call says only "here I am"), reads the clock's SDP, authenticates with
+ * the key, encrypts, the same RFCOMM.  Link supervision 8 s on both; sniff mode (500-656 ms) after 5 s of quiet, left
+ * for each message: what keeps a clock's AA batteries going for months */
+static void clk_link_up(struct link *l, int paged)
+{
+    clk.l = l; clk.lcid = clk.my_lcid = 0; clk.rf_tries = 0; clk.l2_at = 0; clk.fresh = 0;
+    clk.channel = CLK_CHANNEL; clk.sdp_lcid = 0; clk.sdp_done = 0; clk.sdpn = 0;
+    clk.sniff = clk.sniff_asked = clk.exit_asked = 0; clk.active_at = ms(); clk.failures = 0; clk.was_ready = 0;
+    clk_rf_reset();
+    l->auth_at = paged ? ms() : LLONG_MAX / 2;         /* its call: once its SDP is read (clock_upkeep) */
+    l->pend_until = paged ? ms() + 20000 : LLONG_MAX / 2;
+    clk.rf_at = ms();                                   /* SDP, then RFCOMM */
+    { unsigned char d[4]; put16(d, l->handle); put16(d + 2, 0x3200); later(OP_SUPERVISION, d, 4); }   /* 8 s, the Show's */
+}
+
+static void clk_link_gone(void)
+{
+    if (clk.lcid || wallclock_ready()) wallclock_down();
+    clk.l = NULL; clk.lcid = clk.my_lcid = 0; clk.rf_at = 0; clk.l2_at = 0; clk.sdp_lcid = 0;
+    clk_rf_reset();
+    /* a link that never got a clock on the line (channel refused, no answer: a low battery looks like that) backs off
+     * as failed pages do, so a sick clock is not run through the handshake every 15 s */
+    if (clk.was_ready) clk.sess_fails = 0; else clk.sess_fails++;
+    long long wait = !clk.sess_fails ? 15000 : clk.sess_fails < 3 ? 30000 : clk.sess_fails < 8 ? 120000 : 600000;
+    if (clk.next_page < ms() + wait) clk.next_page = ms() + wait;
+}
+
+/* an RFCOMM channel opened on the clock's link (ours or its own) */
+static void clk_chan_opened(struct link *l, struct chan *c)
+{
+    if (clk.lcid && clk.lcid != c->lcid) {              /* a second session: one is enough */
+        unsigned char d[4]; put16(d, c->rcid); put16(d + 2, c->lcid);
+        if (++l->next_id > 255) l->next_id = 1;
+        sig_send(l, 0x06, l->next_id, d, 4);
+        chan_free(l, c);
+        return;
+    }
+    clk.lcid = c->lcid; clk.l2_at = 0;
+    clk.rf.l2mtu = (unsigned)c->rmtu < RX_MTU ? (unsigned)c->rmtu : RX_MTU;
+    if (c->lcid == clk.my_lcid) clk_rf_connect();
+    else clk.rf_at = ms() + 1000;                       /* its own (none seen so far): its SABM first, then channel 4 in it */
+}
+
+static void clk_rf_connect(void) { rfc_connect(&clk.rf, clk.channel ? clk.channel : CLK_CHANNEL, ms()); }
+
+/* our RFCOMM session's L2CAP channel closed, for a fresh one */
+static void clk_l2_close(void)
+{
+    struct chan *c;
+    if (clk.l && clk.lcid && (c = chan_by(clk.l, clk.lcid))) {
+        unsigned char d[4]; put16(d, c->rcid); put16(d + 2, c->lcid);
+        if (++clk.l->next_id > 255) clk.l->next_id = 1;
+        sig_send(clk.l, 0x06, clk.l->next_id, d, 4);
+        long long at = clk.rf_at;
+        chan_free(clk.l, c);
+        clk.rf_at = at;
+    }
+    clk.lcid = 0; clk.l2_at = 0;
+    clk_rf_reset();
+}
+
+static void clk_chan_closed(struct link *l, struct chan *c)
+{
+    (void)l;
+    if (c->lcid != clk.lcid) return;
+    clk.lcid = 0;
+    int was = rfc_open(&clk.rf) || clk.rf.dlc;
+    clk_rf_reset();
+    if (was) clk_rf_state(NULL, 0);
+    else if (clk.l && !clk.rf_at) clk.rf_at = ms() + 3000;
+}
+
+/* SDP, as the Echo did it every time it connected (Amazon's archived Gadgets docs, "SDP database settings"): the
+ * clock's records, the channel of its data service (Generic Networking 0x1201, or the Alexa Gadget UUID) */
+static void clk_sdp_ask(struct chan *c, const unsigned char *cont, size_t cn)
+{
+    unsigned char r[19 + 1 + 16] = { 0x06, 0x00, 0x01, 0, 0, 0x35, 0x03, 0x19, 0x01, 0x00,   /* every record with L2CAP */
+                            0x03, 0xf0, 0x35, 0x05, 0x0a, 0x00, 0x00, 0xff, 0xff };     /* 1008 bytes a reply, all attributes */
+    size_t n = 19;
+    if (cn > 16) cn = 16;
+    r[n++] = cn; memcpy(r + n, cont, cn); n += cn;
+    r[3] = (n - 5) >> 8; r[4] = n - 5;
+    l2_send(clk.l, c->rcid, r, n);
+}
+
+/* the RFCOMM channel of a record (its 0x0004), 0 none */
+static int sdp_rfcomm(const unsigned char *p, size_t n)
+{
+    unsigned t; size_t len, h;
+    while (n) {                                         /* sequences in sequences: an RFCOMM UUID, then a uint8 */
+        if (!(h = de(p, n, &t, &len))) return 0;
+        if (t == 6 || t == 7) { int c = sdp_rfcomm(p + h, len); if (c) return c; }
+        else if (t == 3 && uuid16(p + h, len) == 0x0003 && h + len < n) {
+            unsigned t2; size_t l2, h2 = de(p + h + len, n - h - len, &t2, &l2);
+            if (h2 && t2 == 1 && l2 == 1) return p[h + len + h2];
+        }
+        p += h + len; n -= h + len;
+    }
+    return 0;
+}
+
+static void clk_sdp_done(void)
+{
+    static const unsigned char gadget[16] = { 0x60, 0x88, 0xd2, 0xb3, 0x98, 0x3a, 0x4e, 0xed, 0x9f, 0x94, 0x5a, 0xd1, 0x25, 0x68, 0x16, 0xb7 };
+    unsigned t; size_t len, h = de(clk.sdp, clk.sdpn, &t, &len), o; int data = 0, gad = 0;
+    for (o = h; h && t == 6 && o < h + len; ) {         /* each record: attribute ID, value, ... */
+        unsigned rt; size_t rl, rh = de(clk.sdp + o, h + len - o, &rt, &rl);
+        if (!rh || rt != 6) break;
+        const unsigned char *r = clk.sdp + o + rh; size_t i = 0; long cls = -1; int isg = 0, ch = 0;
+        while (i < rl) {
+            unsigned at, vt; size_t al, ah = de(r + i, rl - i, &at, &al), vl, vh;
+            if (!ah || at != 1 || al != 2) break;
+            unsigned id = r[i + ah] << 8 | r[i + ah + 1];
+            i += ah + al;
+            if (!(vh = de(r + i, rl - i, &vt, &vl))) break;
+            if (id == 0x0001 && vt == 6) {
+                for (size_t k = 0; k < vl; ) { unsigned ut; size_t ul, uh = de(r + i + vh + k, vl - k, &ut, &ul); if (!uh) break;
+                    if (ut == 3 && ul == 16 && !memcmp(r + i + vh + k + uh, gadget, 16)) isg = 1;
+                    else if (ut == 3 && cls < 0) cls = uuid16(r + i + vh + k + uh, ul);
+                    k += uh + ul; }
+            } else if (id == 0x0004) ch = sdp_rfcomm(r + i + vh, vl);
+            i += vh + vl;
+        }
+        fprintf(stderr, "a2dp: wall clock's SDP: %s%04lx on RFCOMM channel %d\n", isg ? "the Alexa Gadget record, " : "", cls < 0 ? 0 : cls, ch);
+        if (cls == 0x1201 && ch) data = ch;
+        if (isg && ch) gad = ch;
+        o += rh + rl;
+    }
+    clk.channel = data ? data : gad ? gad : CLK_CHANNEL;
+    if (clk.channel < 1 || clk.channel > 30) clk.channel = CLK_CHANNEL;           /* RFCOMM's server channels */
+    fprintf(stderr, "a2dp: wall clock: its data on channel %d\n", clk.channel);
+}
+
+/* our query over (answered, refused, timed out): its channel closed and forgotten, whatever comes next uses its CID */
+static void clk_sdp_close(void)
+{
+    struct chan *c;
+    clk.sdp_done = 1;
+    if (clk.l && clk.sdp_lcid && (c = chan_by(clk.l, clk.sdp_lcid))) {
+        if (c->cfg_in && c->cfg_out) {
+            unsigned char d[4]; put16(d, c->rcid); put16(d + 2, c->lcid);
+            if (++clk.l->next_id > 255) clk.l->next_id = 1;
+            sig_send(clk.l, 0x06, clk.l->next_id, d, 4);
+        }
+        clk.sdp_lcid = 0;
+        chan_free(clk.l, c);
+    }
+    clk.sdp_lcid = 0;
+}
+
+static void clk_sdp_rx(struct chan *c, const unsigned char *p, size_t n)
+{
+    if (n < 7 || p[0] != 0x07) { fprintf(stderr, "a2dp: wall clock's SDP answered 0x%02x\n", n ? p[0] : 0); clk_sdp_close(); return; }
+    size_t bc = (size_t)(p[5] << 8 | p[6]);
+    if (7 + bc + 1 > n) { clk_sdp_close(); return; }
+    if (clk.sdpn + bc <= sizeof clk.sdp) { memcpy(clk.sdp + clk.sdpn, p + 7, bc); clk.sdpn += bc; }
+    size_t cn = p[7 + bc];
+    if (cn && 8 + bc + cn <= n) { clk_sdp_ask(c, p + 8 + bc, cn); return; }
+    clk_sdp_done();
+    clk_sdp_close();
+}
+
+static int clock_upkeep(void)
+{
+    long long now = ms(); int r, st;
+    if ((r = atomic_exchange(&clk_search_req, -1)) >= 0) {
+        if (r && !atomic_load(&clk_searching)) {
+            atomic_store(&clk_searching, 1); clk_search_until = now + CLK_SEARCH_S * 1000LL; memset(&clk_cand, 0, sizeof clk_cand);
+            fprintf(stderr, "a2dp: looking for a wall clock\n");
+            if (notify) notify();
+        } else if (!r && atomic_load(&clk_searching)) {
+            if (inquiring && !atomic_load(&out_searching) && hci_cmd(OP_INQUIRY_CANCEL, NULL, 0) < 0) return -1;
+            if (!atomic_load(&out_searching)) inquiring = 0;
+            clock_search_end();
+        }
+    }
+    if (atomic_exchange(&clk_forget_req, 0) && clk.addr) {         /* the page's "Forget": unpaired here */
+        fprintf(stderr, "a2dp: wall clock %012llx forgotten\n", (unsigned long long)clk.addr);
+        clk_disconnect(); key_forget(clk.addr);
+        if (clk.prev_addr) { key_forget(clk.prev_addr); clk.prev_addr = 0; }
+        clk.addr = 0; clk.pairing = 0; clk.sess_fails = 0; clk_name(""); clock_save();
+        if (clk.l) clk_link_gone();
+    }
+    if (clk.pairing && now > clk.pair_until) { fprintf(stderr, "a2dp: pairing with the wall clock did not finish\n"); clock_pair_failed(); }
+    if ((r = atomic_exchange(&clk_on_req, -1)) >= 0 && r != clk.on) {
+        clk.on = r; clk.failures = clk.sess_fails = 0; clk.next_page = now;
+        if (clk.addr) fprintf(stderr, "a2dp: wall clock %s\n", r ? "on" : "off: letting it go");
+        if (!r) { clk.pairing = 0; clk_disconnect(); }
+    }
+    if (atomic_load(&clk_searching)) {
+        if (now > clk_search_until) {
+            if (inquiring && !atomic_load(&out_searching) && hci_cmd(OP_INQUIRY_CANCEL, NULL, 0) < 0) return -1;
+            if (!atomic_load(&out_searching)) inquiring = 0;
+            if (clk_cand.addr) clock_inquiry_done();        /* one answered in the inquiry cut short: taken */
+            else fprintf(stderr, "a2dp: no wall clock found\n");
+            clock_search_end();
+        } else if (!inquiring && !out.paging && !clk.paging) {
+            unsigned char p[5] = { 0x33, 0x8b, 0x9e, 4, 0 };    /* general inquiry, 5.12 s, any number of responses */
+            inquiring = 1;                                  /* before: hci_cmd handles events while it waits */
+            if ((st = hci_cmd(OP_INQUIRY, p, 5)) < 0) return -1;
+            if (st) { inquiring = 0; fprintf(stderr, "a2dp: inquiry refused (0x%02x)\n", st); clk_search_until = 0; }
+        }
+    }
+    if (clk.on && clk.addr && !clk.l && !clk.paging && !out.paging && !inquiring && now >= clk.next_page) {
+        unsigned char p[13];
+        for (int i = 0; i < 6; i++) p[i] = clk.addr >> 8 * i;
+        put16(p + 6, 0xcc18); p[8] = clk.psrm <= 2 ? clk.psrm : 1; p[9] = 0; put16(p + 10, clk.clock); p[12] = 1;   /* DM/DH 1-5; role switch ok */
+        clk.paging = 1; clk.page_addr = clk.addr;       /* before: the answer may come while hci_cmd waits */
+        clk_dump("page", NULL, 0);
+        if ((st = hci_cmd(OP_CREATE_CONN, p, 13)) < 0) return -1;
+        if (st) { clk.paging = 0; clk.next_page = now + 10000; }
+    }
+    struct link *l = clk.l;
+    int state = !clk.addr ? C_NONE : !clk.on ? C_OFF : wallclock_ready() ? C_READY : l || clk.paging ? C_CONNECTING : C_AWAY;
+    if (atomic_exchange(&clk_state, state) != state && notify) notify();
+    if (!l || l->dropping) return 0;
+    if (!clk.on) { clk_disconnect(); return 0; }
+    if (!clk.sdp_done) {                                /* its records first, encrypted or not */
+        if (!clk.sdp_lcid && clk.rf_at && now >= clk.rf_at) {
+            clk.sdpn = 0; clk.sdp_at = now;
+            if (!(clk.sdp_lcid = chan_open(l, PSM_SDP))) clk.sdp_done = 1;
+            return 0;
+        }
+        if (clk.sdp_lcid && !chan_by(l, clk.sdp_lcid)) { clk_sdp_close(); return 0; }        /* refused: channel 4 */
+        if (!clk.sdp_lcid || now - clk.sdp_at <= 5000) return 0;
+        fprintf(stderr, "a2dp: wall clock: no SDP answer, channel %d\n", CLK_CHANNEL); clk_sdp_close();
+    }
+    if (!l->enc) {
+        if (l->pend_until == LLONG_MAX / 2) { l->auth_at = now; l->pend_until = now + 20000; }   /* its call: security now */
+        else if (!l->pend_until) { fprintf(stderr, "a2dp: wall clock: link not encrypted\n"); clk_disconnect(); }
+        return 0;
+    }
+    if (clk.fresh && clk.lcid && clk.rf_at && now >= clk.rf_at) { clk.fresh = 0; clk_l2_close(); }
+    if (!clk.lcid && clk.rf_at && now >= clk.rf_at && !clk.l2_at) {
+        clk.fresh = 0;
+        if (++clk.rf_tries > 6) { fprintf(stderr, "a2dp: wall clock: no channel %d after %d tries\n", CLK_CHANNEL, clk.rf_tries - 1); clk_disconnect(); return 0; }
+        clk.rf_at = 0;
+        if ((clk.my_lcid = chan_open(l, PSM_RFCOMM))) clk.l2_at = now;
+        else clk.rf_at = now + 1000;                    /* no channel free: again (counted) */
+    } else if (!clk.lcid && clk.l2_at && now - clk.l2_at > 10000) { clk.l2_at = 0; clk.rf_at = now; }   /* no answer: again */
+    if (clk.lcid && !clk.rf.dlc && !clk.rf_at && clk.rf.mux != 1) {     /* a session, no channel: ours (again) */
+        if (++clk.rf_tries > 6) { fprintf(stderr, "a2dp: wall clock: no channel %d after %d tries\n", CLK_CHANNEL, clk.rf_tries - 1); clk_disconnect(); return 0; }
+        clk_rf_connect();
+    }
+    if (clk.rf_at && clk.lcid && now >= clk.rf_at) clk.rf_at = 0;
+    if (clk.lcid && rfc_tick(&clk.rf, now) < 0) { clk_disconnect(); return 0; }
+    if (wallclock_tick(now) < 0) { clk_disconnect(); return 0; }
+    if (wallclock_ready()) clk.was_ready = 1;
+    if (wallclock_ready() && !clk.sniff && !clk.sniff_asked && now - clk.active_at > 5000) {
+        unsigned char d[10]; put16(d, l->handle); put16(d + 2, 0x041a); put16(d + 4, 0x0320); put16(d + 6, 4); put16(d + 8, 1);   /* the Show's */
+        later(OP_SNIFF, d, 10); clk.sniff_asked = 1; clk.sniff_at = now;
+    }
+    /* a refusal (Command Status) brings no Mode Change: asked again after a while, not never */
+    if (clk.sniff_asked && !clk.sniff && now - clk.sniff_at > 10000) { clk.sniff_asked = 0; clk.active_at = now; }
+    if (clk.exit_asked && now - clk.exit_at > 3000) clk.exit_asked = 0;
+    return 0;
+}
+
 /* "Connected to <name>" like stock Alexa, once the device has opened AVDTP (a speaker connection, not just an ACL link)
  * and its name is in.  Phones ask for AVDTP a second or two after connecting; the name takes some 100 ms.  A Pixel
  * "disconnecting" in its Bluetooth settings closes AVDTP and AVRCP but keeps the ACL link up: the announcement follows
@@ -1437,7 +1906,9 @@ static void maybe_tell(struct link *l)
 
 static void chan_opened(struct link *l, struct chan *c)
 {
-    if (c->psm == PSM_RFCOMM) { hfp_rfcomm_up((int)(l - links), l->addr, l->cod); return; }
+    if (c->psm == PSM_RFCOMM && is_clock(l)) { if (l == clk.l) clk_chan_opened(l, c); return; }     /* the Echo Wall Clock's */
+    if (c->psm == PSM_RFCOMM) { hfp_rfcomm_up((int)(l - links), l->addr, l->cod); return; }        /* a phone's (hfp.c) */
+    if (c->psm == PSM_SDP && l == clk.l && c->lcid == clk.sdp_lcid) { clk_sdp_ask(c, NULL, 0); return; }
     if (c->psm == PSM_AVCTP && !l->avctp) { l->avctp = c->lcid; l->vol_label = -1; atomic_fetch_add(&avrcp_links, 1);
                                             fprintf(stderr, "a2dp: %012llx: remote control\n", (unsigned long long)l->addr); }
     if (c->psm != PSM_AVDTP) return;
@@ -1454,7 +1925,9 @@ static void chan_opened(struct link *l, struct chan *c)
 
 static void chan_closed(struct link *l, struct chan *c)
 {
+    if (c->psm == PSM_RFCOMM && is_clock(l)) { if (l == clk.l) clk_chan_closed(l, c); return; }
     if (c->psm == PSM_RFCOMM) { hfp_rfcomm_down((int)(l - links)); return; }
+    if (c->psm == PSM_SDP && l == clk.l && c->lcid == clk.sdp_lcid) { clk.sdp_lcid = 0; clk.sdp_done = 1; return; }
     if (c->lcid == l->avctp) {
         l->avctp = 0; atomic_fetch_sub(&avrcp_links, 1);
         if (l == out.l && out.absvol != A_UNKNOWN) { out.absvol = A_UNKNOWN; btout_absvol(0, 0); }
@@ -1471,10 +1944,13 @@ static void chan_closed(struct link *l, struct chan *c)
 static void l2_rx(struct link *l, const unsigned char *p, size_t n)
 {
     int cid = u16(p + 2); struct chan *c;
+    if (is_clock_link(l)) clk_dump("<<", p, n);
     p += 4; n -= 4;
     if (cid == 0x0001) { sig_rx(l, p, n); return; }
     if (!(c = chan_by(l, cid)) || !c->cfg_in || !c->cfg_out) return;
-    if (c->psm == PSM_SDP) sdp_rx(l, c, p, n);
+    if (c->psm == PSM_SDP && l == clk.l && c->lcid == clk.sdp_lcid) clk_sdp_rx(c, p, n);
+    else if (c->psm == PSM_SDP) sdp_rx(l, c, p, n);
+    else if (c->psm == PSM_RFCOMM && is_clock(l)) { if (l == clk.l && cid == clk.lcid) { clk.active_at = ms(); rfc_rx(&clk.rf, p, n, ms()); } }
     else if (c->psm == PSM_RFCOMM) hfp_rfcomm_rx((int)(l - links), p, n);
     else if (cid == l->av_sig) { if (is_speaker(l)) out_rx(l, p, n); else av_rx(l, p, n); }
     else if (cid == l->avctp) avrcp_rx(l, p, n);
@@ -1488,6 +1964,7 @@ static void link_gone(struct link *l)
     for (int i = 0; i < MAX_CHANS; i++) if (l->ch[i].used) chan_free(l, &l->ch[i]);
     if (av.l == l) av_reset();
     if (out.l == l) out_link_gone();
+    if (clk.l == l) clk_link_gone();
     for (struct frag **p = &fhead; *p; ) {
         struct frag *f = *p;
         if (f->handle == l->handle) { *p = f->next; free(f); } else p = &f->next;
@@ -1527,14 +2004,19 @@ int a2dp_event(const unsigned char *e, size_t n)
     if (n < 2) return 0;
     const unsigned char *q = e + 2; size_t qn = n - 2; struct link *l;
     int pairing = atomic_load(&pairing_on);
+    if (clk.addr && clk_trace > 0) {                    /* the clock's link events, for the trace */
+        static const unsigned char codes[] = { EV_CONN_COMPLETE, EV_DISCONNECT, EV_AUTH_COMPLETE, EV_ENC_CHANGE, 0x12, 0x14, EV_LINK_KEY_REQUEST, EV_IO_CAP_REQUEST, 0x1b };
+        if (memchr(codes, e[0], sizeof codes)) { char w[8]; snprintf(w, sizeof w, "ev %02x", e[0]); clk_dump(w, q, qn); }
+    }
     switch (e[0]) {
-    case EV_INQUIRY_COMPLETE: out_inquiry_done(); return 1;
+    case EV_INQUIRY_COMPLETE: out_inquiry_done(); clock_inquiry_done(); return 1;
     case EV_INQUIRY_RSSI: case EV_INQUIRY_EXT:              /* one response each: count, address, ... */
-        if (qn >= 15 && q[0]) out_found(q + 1, qn - 1, e[0] == EV_INQUIRY_EXT);
+        if (qn >= 15 && q[0]) { clock_found(q + 1, qn - 1, e[0] == EV_INQUIRY_EXT); out_found(q + 1, qn - 1, e[0] == EV_INQUIRY_EXT); }
         return 1;
     case EV_CONN_REQUEST:                                   /* address, class of device, link type */
         if (qn < 10) return 1;
         {   uint64_t a = addr_of(q); int free_slot = 0;
+            if (clk.addr == a) clk_dump("calls", q, qn);
             if (q[9] == 0 || q[9] == 2) {                       /* SCO / eSCO: a phone's call audio (hfp.c), CVSD */
                 int codec = hfp_sco_request(a, q[9] == 2);
                 if (codec) {                                    /* (scoaudio.c knows what this model's chip takes) */
@@ -1544,8 +2026,9 @@ int a2dp_event(const unsigned char *e, size_t n)
                 return 1;
             }
             for (int i = 0; i < MAX_LINKS; i++) free_slot |= !links[i].used;
-            if (q[9] == 1 && free_slot && (pairing || key_for(a))) {
-                unsigned char role = 0x01; later_addr(OP_ACCEPT, q, &role, 1);
+            if (q[9] == 1 && free_slot && (pairing || key_for(a)) && !(clk.addr == a && !clk.on) && !(clk.prev_addr && clk.prev_addr == a)) {
+                unsigned char role = clk.addr == a ? 0x00 : 0x01;   /* the clock's call: master, as the Echo Show takes it */
+                later_addr(OP_ACCEPT, q, &role, 1);
                 unsigned k = req_cod_n++ % 4;
                 req_cod[k].addr = a; req_cod[k].cod = q[6] | q[7] << 8 | q[8] << 16; req_cod[k].at = ms();
             }
@@ -1573,6 +2056,15 @@ int a2dp_event(const unsigned char *e, size_t n)
                 return 1;
             }
         }
+        if (clk.paging && addr_of(q + 3) == clk.page_addr) {
+            clk.paging = 0; paged = 1;
+            if (q[0]) {                                     /* away, no batteries, or paired with something else */
+                if (!clk.failures++) fprintf(stderr, "a2dp: wall clock %012llx not reachable (0x%02x)\n", (unsigned long long)clk.addr, q[0]);
+                clk.next_page = ms() + (clk.pairing ? 2000 : clk.failures < 4 ? 30000 : clk.failures < 12 ? 60000 : 300000);
+                if (clk.pairing && clk.failures >= 5) { fprintf(stderr, "a2dp: pairing with the wall clock failed\n"); clock_pair_failed(); }
+                return 1;
+            }
+        }
         if (q[0] || q[9] != 1) return 1;
         for (int i = 0; i < MAX_LINKS; i++) if (!links[i].used) {
             l = &links[i]; memset(l, 0, sizeof *l);
@@ -1581,6 +2073,10 @@ int a2dp_event(const unsigned char *e, size_t n)
             fprintf(stderr, "a2dp: %012llx connected\n", (unsigned long long)l->addr);
             { unsigned char r[4] = { 0x01, 0, 0, 0 }; later_addr(OP_REMOTE_NAME, q + 3, r, 4); }   /* page scan R1, clock offset unknown */
             if (is_speaker(l)) out_link_up(l, paged);
+            else if (is_clock(l) && clk.on) clk_link_up(l, paged);
+            else if (paged && clk.page_addr == l->addr) {   /* our page, but the clock was forgotten or switched off meanwhile */
+                unsigned char d[3]; put16(d, l->handle); d[2] = 0x13; l->dropping = 1; later(OP_DISCONNECT, d, 3);
+            }
             return 1;
         }
         { unsigned char d[3]; put16(d, u16(q + 1)); d[2] = 0x14; later(OP_DISCONNECT, d, 3); }  /* no room after all */
@@ -1624,21 +2120,26 @@ int a2dp_event(const unsigned char *e, size_t n)
         keys_save();
         fprintf(stderr, "a2dp: paired with %012llx (key type %u)\n", (unsigned long long)a, q[22]);
         if (out.addr && a == out.addr) out.pairing = 0;
+        else if (clk.addr && a == clk.addr) {
+            if (clk.pairing) fprintf(stderr, "a2dp: paired with the wall clock\n");
+            clk.pairing = 0;
+            if (clk.prev_addr && clk.prev_addr != a) { key_forget(clk.prev_addr); clk.prev_addr = 0; }   /* one clock at a time */
+        }
         else if (pairing) set_pairing(0);                   /* like the stock speaker: one device per "pair" */
         return 1; }
     case EV_IO_CAP_REQUEST:
         if (qn < 6) return 1;
-        if (pairing || out_may_pair(addr_of(q))) { unsigned char io[3] = { 0x03, 0x00, 0x04 }; later_addr(OP_IO_CAP_REPLY, q, io, 3); }   /* NoInputNoOutput, no OOB, general bonding */
+        if (pairing || out_may_pair(addr_of(q)) || clk_may_pair(addr_of(q))) { unsigned char io[3] = { 0x03, 0x00, 0x04 }; later_addr(OP_IO_CAP_REPLY, q, io, 3); }   /* NoInputNoOutput, no OOB, general bonding */
         else { unsigned char why = 0x18; later_addr(OP_IO_CAP_NEG, q, &why, 1);              /* pairing not allowed */
                fprintf(stderr, "a2dp: %012llx wants to pair, pairing is off\n", (unsigned long long)addr_of(q)); }
         return 1;
     case EV_USER_CONFIRM:
         if (qn < 6) return 1;
-        later_addr(pairing || out_may_pair(addr_of(q)) ? OP_CONFIRM_REPLY : OP_CONFIRM_NEG, q, NULL, 0);
+        later_addr(pairing || out_may_pair(addr_of(q)) || clk_may_pair(addr_of(q)) ? OP_CONFIRM_REPLY : OP_CONFIRM_NEG, q, NULL, 0);
         return 1;
     case EV_PIN_REQUEST:
         if (qn < 6) return 1;
-        if (pairing || out_may_pair(addr_of(q))) { unsigned char pin[17] = { 4, '0', '0', '0', '0' }; later_addr(OP_PIN_REPLY, q, pin, 17); }
+        if (pairing || out_may_pair(addr_of(q)) || clk_may_pair(addr_of(q))) { unsigned char pin[17] = { 4, '0', '0', '0', '0' }; later_addr(OP_PIN_REPLY, q, pin, 17); }
         else later_addr(OP_PIN_NEG, q, NULL, 0);
         return 1;
     case EV_IO_CAP_RESPONSE: return 1;
@@ -1649,8 +2150,14 @@ int a2dp_event(const unsigned char *e, size_t n)
         if (qn < 3 || !(l = link_by(u16(q + 1) & 0x0fff))) return 0;
         if (q[0]) {
             fprintf(stderr, "a2dp: %012llx: authentication failed (0x%02x)\n", (unsigned long long)l->addr, q[0]);
-            if (q[0] == 0x06 || (q[0] == 0x05 && is_speaker(l))) key_forget(l->addr);   /* key missing: the device forgot us
-                                                                (BlueZ says 0x05); our speaker pairs afresh next time */
+            if (q[0] == 0x06 || (q[0] == 0x05 && (is_speaker(l) || is_clock(l)))) key_forget(l->addr);   /* key missing: the device
+                                                                forgot us (BlueZ says 0x05); our speaker pairs afresh next time */
+            if ((q[0] == 0x05 || q[0] == 0x06) && is_clock(l) && !clk.pairing) {   /* the clock paired with another Echo */
+                fprintf(stderr, "a2dp: the wall clock no longer knows this Echo: forgotten\n");
+                clk_disconnect(); clk.addr = 0; clk_name(""); clock_save(); clk_link_gone();
+                atomic_store(&clk_state, C_NONE);
+                if (notify) notify();
+            }
             pending_resolve(l, 0);
         } else if (!l->enc) { unsigned char d[3]; put16(d, l->handle); d[2] = 1; later(OP_ENCRYPT, d, 3); }
         else pending_resolve(l, 1);
@@ -1662,6 +2169,11 @@ int a2dp_event(const unsigned char *e, size_t n)
         return 1;
     case EV_KEY_REFRESH:
         return qn >= 3 && link_by(u16(q + 1) & 0x0fff);
+    case EV_MODE_CHANGE:                                    /* status, handle, mode (0 active, 2 sniff), interval */
+        if (qn < 4 || !(l = link_by(u16(q + 1) & 0x0fff))) return 0;
+        if (l == clk.l && !q[0]) { clk.sniff = q[3] == 2; clk.exit_asked = 0; if (!clk.sniff) clk.sniff_asked = 0; }
+        else if (l == clk.l) clk.sniff_asked = clk.exit_asked = 0;
+        return 1;
     }
     return 0;
 }
@@ -1671,6 +2183,7 @@ int a2dp_upkeep(void)
     avrcp_upkeep();
     if (hfp_upkeep() < 0 || class_eir() < 0) return -1;
     if (out_upkeep() < 0) return -1;
+    if (clock_upkeep() < 0) return -1;
     for (int i = 0; i < npend; i++) {
         int st = hci_cmd(pend[i].op, pend[i].p, pend[i].n);
         if (st < 0) { npend = 0; return -1; }
@@ -1705,7 +2218,8 @@ int a2dp_streaming(void) { return atomic_load(&streaming) || (atomic_load(&out_l
 
 int a2dp_busy(void)
 {
-    int b = pair_until != 0 || npend > 0 || atomic_load(&out_searching) || out.paging || (out.on && out.addr) || out.l;
+    int b = pair_until != 0 || npend > 0 || atomic_load(&out_searching) || out.paging || (out.on && out.addr) || out.l
+            || atomic_load(&clk_searching) || clk.paging || (clk.on && clk.addr) || clk.l;
     for (int i = 0; i < MAX_LINKS; i++) b |= links[i].used && (links[i].pend_until || links[i].avctp_at);
     return b || hfp_busy() || hfp_listed() != hf_shown;
 }
@@ -1716,7 +2230,7 @@ void a2dp_lost(void)
     for (int i = 0; i < MAX_LINKS; i++) if (links[i].used) link_gone(&links[i]);
     for (struct frag *f = fhead, *n; f; f = n) { n = f->next; free(f); }
     fhead = NULL; ftail = &fhead; npend = 0; scan_mode = -1;
-    out.paging = 0; inquiring = 0;
+    out.paging = 0; inquiring = 0; clk.paging = 0;
 }
 
 /* Class of device and extended inquiry response, as the phone call feature has it now (hf_shown: what was sent, -1
@@ -1855,6 +2369,7 @@ void a2dp_start(void (*changed)(void))
     pthread_mutex_lock(&core_lock); atomic_store(&echo_volume, core_volume()); pthread_mutex_unlock(&core_lock);
     keys_load();
     speaker_load();
+    clock_load(); clk_rf_reset(); wallclock_poke(hci_poke); clk_dump(NULL, NULL, 0);   /* reads whether to trace */
     btout_start();
     for (int i = 0; i < a2dp_ncodecs && nseps < (int)(sizeof seps / sizeof *seps); i++) if (a2dp_codecs[i].usable()) seps[nseps++] = i;
     { char names[80] = ""; for (int i = 0; i < nseps; i++) snprintf(names + strlen(names), sizeof names - strlen(names), "%s%s", i ? ", " : "", a2dp_codecs[seps[i]].name);
@@ -1863,3 +2378,18 @@ void a2dp_start(void (*changed)(void))
     pthread_create(&t, NULL, volume_thread, NULL); pthread_detach(t);
     ble_start(NULL);
 }
+
+void a2dp_clock_search(int on) { atomic_store(&clk_search_req, on != 0); hci_poke(); }
+int  a2dp_clock_searching(void) { return atomic_load(&clk_searching); }
+void a2dp_clock_enable(int on) { atomic_store(&clk_on_req, on != 0); hci_poke(); }
+
+void a2dp_clock_status(char *buf, unsigned n)
+{
+    static const char *const words[] = { "None", "Off", "Not reachable", "Connecting", "Connected" };
+    int st = atomic_load(&clk_state);
+    if (atomic_load(&clk_searching)) { snprintf(buf, n, "Searching..."); return; }
+    if (st == C_NONE) { snprintf(buf, n, "%s", words[st]); return; }
+    pthread_mutex_lock(&clk_lock); snprintf(buf, n, "%s: %s", clk.name[0] ? clk.name : "Wall clock", words[st]); pthread_mutex_unlock(&clk_lock);
+}
+void a2dp_clock_forget(void) { atomic_store(&clk_forget_req, 1); hci_poke(); }
+int  a2dp_clock_paired(void) { return atomic_load(&clk_state) != C_NONE; }

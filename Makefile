@@ -374,7 +374,7 @@ $(OUT)/libmbedtls.a: $(patsubst $(MBEDTLS_DIR)/library/%.c,$(OUT)/mbedtls/%.o,$(
 build/libmbedtls-host.a: $(patsubst $(MBEDTLS_DIR)/library/%.c,build/mbedtls-host/%.o,$(MBEDTLS_C))
 	rm -f $@; ar rcsD $@ $^
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/hfp.c src/hassmic/scoaudio.c src/hassmic/cvsd.c src/hassmic/msbc.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/sources.c src/hassmic/tls.c src/hassmic/http.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/hfp.c src/hassmic/scoaudio.c src/hassmic/cvsd.c src/hassmic/msbc.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/rfcomm.c src/hassmic/wallclock.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/sources.c src/hassmic/tls.c src/hassmic/http.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/hassmic/plugin.c src/hassmic/plugin_store.c src/hassmic/plugin_fetch.c src/hassmic/plugin_index.c src/hassmic/plugin_net.c src/hassmic/logread.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
@@ -452,7 +452,7 @@ host: $(HOST_TESTS) $(OUT)/hassmic-qemu
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
 UNIT := $(MBEDTLS_INC) src/hassmic/hash.c src/hassmic/ws.c src/hassmic/tls.c src/hassmic/net.c src/hassmic/logread.c src/hassmic/noise.c src/third_party/monocypher.c build/libmbedtls-host.a
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
-UNIT_TESTS := hash http ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs cvsd msbc scoaudio \
+UNIT_TESTS := hash http ws noise ble_crypto rfcomm wallclock micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs cvsd msbc scoaudio \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff \
 	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall netio
 unit: $(addprefix unit-,$(UNIT_TESTS))
@@ -564,6 +564,14 @@ unit-noise: build/libmbedtls-host.a
 unit-ble_crypto:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/ble_crypto_test.c src/hassmic/ble_crypto.c -o build/ble_crypto_test && build/ble_crypto_test
+# the Echo Wall Clock's link: RFCOMM between two sessions and against frames from the spec; its Alexa Gadgets frames
+# byte for byte as captured from an Echo Dot, local time by POSIX rules against glibc's
+unit-rfcomm:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic tests/unit/rfcomm_test.c src/hassmic/rfcomm.c -o build/rfcomm_test && build/rfcomm_test
+unit-wallclock:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic tests/unit/wallclock_test.c src/hassmic/wallclock.c -lpthread -o build/wallclock_test && build/wallclock_test
 unit-micgain:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic tests/unit/micgain_test.c src/hassmic/micgain.c -lm -o build/micgain_test && build/micgain_test

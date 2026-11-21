@@ -60,6 +60,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Bluetooth speaker for your phone        | SBC                            | SBC, AAC, aptX, aptX HD                               |
 | Plays on a Bluetooth speaker            | ✅                             | ✅                                                    |
 | Bluetooth proxy for Home Assistant      | –                              | ✅                                                    |
+| Echo Wall Clock: time and timers        | ✅                             | ✅ [paired with the Echo](docs/GUIDE.md#echo-wall-clock) |
 | Do not disturb, equalizer, ring brightness | Alexa app                   | [entities in Home Assistant](docs/GUIDE.md#in-home-assistant) |
 | Buttons and light ring in automations   | –                              | [an event and a light in Home Assistant](docs/GUIDE.md#buttons-and-light-ring) |
 | Light ring animations of your own       | –                              | [drawn on the settings page](docs/GUIDE.md#buttons-and-light-ring), for each of the Echo's |

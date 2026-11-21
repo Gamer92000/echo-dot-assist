@@ -873,6 +873,32 @@ name and state.
   not measured yet.
 - SBC only (every speaker has it), one speaker at a time. Setting it up needs ESPHome mode.
 
+### Echo Wall Clock
+
+Amazon's Echo Wall Clock (the battery clock with 60 lights around its face) shows the Echo's time and its timers, as
+it did with Alexa.
+
+1. Switch on "Echo Wall Clock" on the settings page (Media) and press **Pair a clock**.
+2. Hold the button on the back of the clock until its light pulses orange (about 6 seconds).
+3. Within a minute the Echo pairs with the nearest clock in pairing mode and keeps it connected; the card shows its
+   name and "Connected".
+
+Home Assistant is not needed for any of it. With it, the feature adds "Wall clock search" (the same search as the
+page's button) and "Wall clock" (the state the card shows) for automations.
+
+- **Time**: from Home Assistant's time zone (until Home Assistant is there, the Echo's own, which it keeps from the last
+  time), set when the clock connects, every half hour, and at once when the zone or the Echo's clock changes. A clock
+  already right does not move its hands. Timers come from Home Assistant's voice assistant, so those need it.
+- **Timers**: each timer the Echo runs shows from its start: one light a minute, the soonest as a filled arc, the last
+  minute by the second. A paused timer goes dark until it runs again; time added moves it. When a timer rings the
+  ring pulses for about 10 seconds; stopping the ring clears it.
+- **One Echo per clock**: pairing it here takes it from the Echo (or Alexa) it had; to give it back, pair it there
+  again. Off on the settings page, the Echo lets the clock go and keeps the pairing, so on again reconnects;
+  **Forget** unpairs it.
+- **Batteries**: the Echo keeps the link in Bluetooth's low-power mode while nothing changes, as Alexa did. A red
+  blinking light means a low battery; a clock in that state pairs but then ignores the Echo, so change them first.
+- The clock talks Bluetooth Classic, so it pairs with the Echo itself (an ESPHome proxy could not).
+
 ## Bluetooth proxy
 
 Works like an ESPHome `bluetooth_proxy` with `active: true`: scanning, up to 3 connections, "Just Works" pairing only.

@@ -82,6 +82,7 @@ static int bt_stay;                                     /* a2dp.c gets it only w
 static int plugins;                                     /* off: no plugin runs (plugin.h, docs/plugins.md) */
 static int community;                                   /* off: only official plugins are installed and run (plugin_community) */
 static int loading;                                     /* settings_load reads state/config (put) */
+static int wall_clock;                                  /* off: no clock is paired on most Echos (a2dp.c keeps the pairing) */
 static int wake_events;                                 /* off: an event per near miss is HA history most homes never read */
 static int request_text;                                /* off: what people say kept in HA's history is theirs to choose */
 static int ring_live;                                   /* off: thirteen more entities only for those who want them */
@@ -114,7 +115,7 @@ static int colour_actual(void)
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, ANSWER_VOICE, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, WALL_CLOCK, DROPIN, DROPIN_ANSWER, BT_CALLS, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -238,6 +239,9 @@ static const struct setting table[NSET] = {
     [BT_OUT_AWAKE] = { "bluetooth_speaker_keep_awake", "Keep the speaker awake", "Features", NULL, S_BOOL, 0, 1, 0, 0 },
     /* a2dp.c keeps it; a battery speaker or a mains one, so per speaker as well */
     [BT_OUT_STAY] = { "bluetooth_speaker_stay_connected", "Stay connected when off", "Features", NULL, S_BOOL, 0, 1, 0, 0 },
+    /* a2dp.c and wallclock.c: the Echo Wall Clock paired with this Echo shows its time and timers; a clock has one
+     * partner, so not exported */
+    [WALL_CLOCK]  = { "wall_clock", "Echo Wall Clock", "Features", NULL, S_BOOL, 0, 1, 0, 1 },
     /* dropin.c keeps them in memory, state/config on disk */
     [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -298,7 +302,7 @@ static const struct setting table[NSET] = {
 static int present(enum id i)
 {
     switch (i) {
-    case BT_ANNOUNCE: case BT_LANG: case BT_PROXY: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: return ble_present();
+    case BT_ANNOUNCE: case BT_LANG: case BT_PROXY: case BT_AUDIO: case BT_SPEAKER: case BT_OUT_DELAY: case BT_OUT_AWAKE: case BT_OUT_STAY: case WALL_CLOCK: return ble_present();
     case WHISPER: return core_whisper_model();
     case SOUND: return sound_model() != SOUND_NONE;               /* the firmware has one on every model so far */
     case LIGHT_SENSOR: return core_lux() == core_lux();          /* a light sensor: not NAN */
@@ -441,6 +445,7 @@ int settings_get(const struct setting *s)
     case BT_OUT_DELAY: return a2dp_out_delay(-1);
     case BT_OUT_AWAKE: return btout_keep_awake(-1);
     case BT_OUT_STAY: return bt_stay;
+    case WALL_CLOCK: return wall_clock;
     case WHISPER: return whisper;
     case LIGHT_SENSOR: return light_sensor;
     case WAKE_EVENTS: return wake_events;
@@ -541,6 +546,7 @@ static void put(enum id i, int v)
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
     case BT_OUT_AWAKE: btout_keep_awake(v); break;
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;
+    case WALL_CLOCK: wall_clock = v; a2dp_clock_enable(v); if (!v) a2dp_clock_search(0); break;   /* off: the link goes, the pairing stays */
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
     case BT_CALLS: hfp_enable(v); break;

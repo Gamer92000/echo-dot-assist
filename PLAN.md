@@ -1977,6 +1977,36 @@ Run in this order. Each step says what it proves.
       speaker elsewhere (the wake word through loud music); choosing among several speakers (an ESPHome select's
       options reach Home Assistant only on connect, `manager.py` `device_info_and_list_entities`, so it would need a
       reconnect: kept as "strongest in pairing mode"); `BTUnpair` (line out) only switches playing on the speaker off.
+- [x] Echo Wall Clock (2026-11-21, `rfcomm.c`, `wallclock.c`, `a2dp.c`; setting `wall_clock`, set up on the page
+      (Media: Pair a clock, Forget; `POST /api/wallclock`), HA's "Wall clock search" and "Wall clock" optional): the clock is an Alexa Gadget on BR/EDR (FCC ID UUU-8459, firmware 102):
+      SSP Just Works, SDP records 0x1201 "SPP Port 4 DATA" on RFCOMM 4 (data), 0x1101 "SPP Port 2 OTA" on 2 (never
+      touched), two Alexa Gadget UUID records (4 and 2).  Its protocol from mpjanofsky/echo-wall-clock's PROTOCOL.md
+      (Apache 2.0) and a capture of our own: an Echo Show 5 on stock Fire OS (6574.1, Fluoride; `bluetooth_hci_log` in
+      settings_secure.xml set as root, restored after) pairing the clock, a timer started, paused, resumed, rung and
+      stopped, and a battery pull.  What the Echo does: pairing = page, SSP, SDP (three searches), encryption, RFCOMM
+      session of its own (PN 990 bytes, CFC; the clock answers 329 and 0 credits, then 3), channel 4 (DLCI 8), MSC both
+      ways, Discover; Discover.Response 380 bytes in two RFCOMM frames; timeinfo, ClearIndicator, timeinfo again;
+      credits ride on data frames; link supervision 8 s (0x3200); sniff 500-656 ms (0x0320/0x041a, attempt 4, timeout 1)
+      after 5 s quiet, Exit Sniff before each message.  The clock's call (after its battery came back, and now and then):
+      the Echo accepts as master, the clock's SDP ServiceSearch for 0x1101 gets 0 records (the Echo has no Serial Port),
+      the Echo reads the clock's SDP, authenticates with the key, encrypts, and opens channel 4 again as above; the
+      clock's SDP channel closed by the Echo 30 s later.  Timers: SetAlert {token, TIMER, end in local ISO 8601}, pause
+      = DeleteAlert, resume = SetAlert same token, the end: timers=active once (at the end second), stop: DeleteAlert +
+      timers=cleared.  All of it matches what hassmic sends, byte for byte where the capture has it (`unit-wallclock`:
+      Second Hand's golden frames from an Echo Dot; the Show's Discover carries an empty payload field 1 the Dot's did
+      not: both work).  Local time from Home Assistant's POSIX TZ rule, evaluated in wallclock.c (`unit-wallclock`:
+      2.9 M instants and every 2026 transition of 21 rules against glibc), the system's zone until it comes.
+      On the Echo 2 (radar), 2026-11-21: paired in 1.7 s from the page, time set; a timer's whole life watched on the
+      clock (started, paused: dark, resumed with the seconds left, rung: the pulse, stopped: cleared; another
+      cancelled), each message as the Show's; reconnects by itself ~1-2.5 min after hassmic restarts.
+      A trap: the first clock tried had low batteries (a red blink, easily taken for the pairing light's orange).
+      A low clock paired, answered Discover and then ignored timeinfo, refused channel 4 with DM on every later
+      connection, and fell silent seconds after each greeting; none of it is the protocol.  Diagnostics kept:
+      `state/bt-trace` present = every L2CAP packet and link event of the clock's in the log.  Tests:
+      `tests/fake_wall_clock.py` (a controller and the clock on a pty: pairing, SDP, RFCOMM, the messages, sniff, a
+      timer's life, its call, the feature off, a clock paired elsewhere forgotten), `unit-rfcomm`, `unit-wallclock`.
+      Not done: the yellow notification light (SetIndicator) from Home Assistant; alarms and reminders (the clock takes
+      them, Alexa never sent them); a clock's battery level (it sends none).
 - [~] Bluetooth speaker keep-awake (2026-10-12, issue #24: Echo Dot 2 + a speaker named "BT HIFI AUDIO", the first
       ~0.5 s of every reply missing, music fine, the wake sound no help). Not the stream: the mixer's keep-alive table
       (0x733e4, the names around `keepalive_strategy` in biscuit's `mixer`: Bose, UE, Tailgater, ~30) has no such name,

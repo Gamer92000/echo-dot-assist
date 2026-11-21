@@ -219,7 +219,7 @@ const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];          
 const IDLE = ['screen_sleep_minutes', 'screen_clock', 'screen_motion_keep', 'screen_motion_wake'];   // the screen's timeout, the clock in place of dark, Wi-Fi motion
 const MOVED = { plugins: 'plugins', plugins_community: 'plugins', light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
   screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen', screen_motion_keep: 'screen', screen_motion_wake: 'screen',
-  arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice',
+  arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wall_clock: 'media', wake_sound_removal: 'voice',
   ring_live: 'lights' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
@@ -446,6 +446,8 @@ const HELP = {
   bluetooth_calls: { icon: 'phone', ha: ['Phone call', 'Phone caller', 'Phone', 'Answer phone call', 'End phone call', 'Take the phone call here', 'the action phone_call'], help: 'The Echo as your phone\'s hands-free speakerphone over Bluetooth, as a car kit is. Turn this on, then pair the phone with the "Bluetooth pairing" switch in Home Assistant; a phone paired before it was on must be paired again, as a phone only looks at what the Echo offers when it pairs. Calls then ring on the Echo too (the phone rings as well): answer with the action button, end with it, "<wake word>, stop" or "hang up", or from Home Assistant ("Answer phone call", "End phone call"). Where a call talks is the phone\'s choice, as with a car kit: a call answered on the phone talks on the Echo when the phone sends its audio over Bluetooth, and its audio picker moves it back; "Take the phone call here" brings one that talks on the phone to the Echo. A paired phone can so turn on the Echo\'s microphone for a call: pair only your own. The action phone_call has the phone call a number, its audio on the Echo. The call uses the Echo\'s speaker and Amazon\'s call processing for its microphone (echo cancelling, noise reduction, an even level); wideband (HD voice) where the phone offers it, else narrowband. With do not disturb on or the microphones off the Echo does not ring; the phone does. One call at a time: during a Drop In a phone\'s call stays on the phone. Off by default: while it is on, every phone paired with the Echo sends its calls here whenever it is connected.' },
   drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button (or, on a Show, its screen) connects; nobody can listen into a room where nobody is. "<wake word>, answer" connects too where "Answer calls by voice" is on (Voice page).' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
+  wall_clock: { icon: 'timer', ha: ['Wall clock search', 'Wall clock'], help: 'Amazon\'s Echo Wall Clock, the battery clock with 60 lights around its face: this Echo sets its hands and shows its timers on the lights, as an Echo with Alexa did. Pair it here: "Pair a clock", then hold the button on the back of the clock until its light pulses orange (about 6 seconds); the Echo looks for a minute and pairs with the nearest one. Home Assistant is not needed for it (it can start the same search with "Wall clock search"). A red blinking light is a low battery: change them first, a clock in that state ignores the Echo. A clock has one partner, so it leaves the Echo it was paired with before; to give it back, pair it there again. The time comes from Home Assistant\'s time zone (the Echo\'s own until Home Assistant is there) and is set again every half hour. Each timer shows from its start, minute by minute, the last minute by the second; a paused one goes dark until it runs again, and the ring pulses when a timer rings. Off: the clock is let go (it keeps its time) and stays paired, so switching it on again reconnects. Forget unpairs it here.',
+    status: () => wallClockBox() },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
   // not a setting: the System card's Restart button (main.c core_reboot)
   restart: { help: 'Restarts the Echo, the same as pulling the plug and putting it back. For when it is stuck, for instance when Home Assistant cannot reach it any more but this page still can. It is gone for about a minute; nothing is forgotten. Home Assistant has the same as its "Restart" button.' },
@@ -528,6 +530,7 @@ const SUB = {
   bluetooth_speaker_delay: 'Keeps the speaker in step with your other players',
   bluetooth_speaker_keep_awake: 'For speakers that cut off the first word',
   bluetooth_speaker_stay_connected: 'Switching it on again is quick',
+  wall_clock: 'Time and timers on an Echo Wall Clock',
   drop_in: 'Talk between two of your Echos',
   bluetooth_calls: 'The Echo as your phone\'s speakerphone',
   drop_in_answer: 'How a call connects',
@@ -3282,6 +3285,38 @@ function infoRow(title, sub, help, ctl, extra, val) {
   return h('div', { class: 'row info' },
     h('div', { class: 'row-t' }, h('div', { class: 'row-label' }, h('span', {}, title), more ? more.btn : null), val || null, h('p', { class: 'help' }, sub)),
     h('div', { class: 'ctl btns' }, ctl), more ? more.panel : null, extra || null);
+}
+
+// ---------------------------------------------------------------- the Echo Wall Clock (a2dp.c, wallclock.c)
+
+let wcBox = null, wcPoll = null;
+function wallClockBox() {
+  const w = state.wall_clock;
+  if (!w || !w.present || !settingValue('wall_clock')) return null;
+  if (!wcBox) wcBox = h('div', { class: 'wc' });
+  const busy = w.searching;
+  wcBox.replaceChildren(...[                         // replaceChildren writes a null out as "null": filtered
+    h('p', { class: 'f-model' }, w.paired || busy ? w.status : 'No clock paired yet.'),
+    busy ? h('div', { class: 'callout info' }, icon('timer'), h('p', {}, 'Hold the button on the back of the clock until its light pulses orange (about 6 seconds). The Echo looks for a minute and pairs with the nearest one.')) : null,
+    h('div', { class: 'btns' },
+      h('button', { onclick: () => wallClock(busy ? 'stop' : 'search') }, icon(busy ? 'x' : 'plus'), busy ? 'Stop looking' : w.paired ? 'Pair another clock' : 'Pair a clock'),
+      w.paired && !busy ? h('button', { onclick: async () => {
+        if (await ask({ title: 'Forget the clock?', body: 'The Echo unpairs it and stops showing the time and timers on it. To use it again, pair it here or with another Echo.', ok: 'Forget', danger: true })) wallClock('forget');
+      } }, 'Forget…') : null)].filter(Boolean));
+  return wcBox;
+}
+
+async function wallClock(cmd) {
+  try { await echo.call('POST', '/api/wallclock', cmd); } catch (e) { toast(errText(e)); return; }
+  toast(cmd === 'search' ? 'Looking for a clock: hold its button until it pulses orange' : cmd === 'stop' ? 'Stopped looking' : 'Forgotten');
+  clearInterval(wcPoll);
+  let n = 0;          // the status while it searches and connects: every 2 s, for 90 s at most
+  const tick = async () => {
+    try { await load(); } catch (e) { /* the next tick */ }
+    const w = state.wall_clock;
+    if (++n > 45 || (n > 2 && w && !w.searching && !/Connecting/.test(w.status))) clearInterval(wcPoll);
+  };
+  tick(); wcPoll = setInterval(tick, 2000);
 }
 
 // ---------------------------------------------------------------- Music Assistant's API (mass.c: the screen's music pages)

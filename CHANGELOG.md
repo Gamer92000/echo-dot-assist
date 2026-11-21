@@ -2,6 +2,18 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-27 — The Echo Wall Clock
+
+- **The Echo Wall Clock works with the Echo again.** Amazon's battery clock with 60 lights around its face, paired to
+  an Echo, shows the Echo's time and its timers, as it did with Alexa. Switch on "Echo Wall Clock" on the settings page
+  (Media), press "Pair a clock" and hold the button on the back of the clock until its light pulses orange: the Echo
+  pairs with it within a minute and keeps it connected. Home Assistant is not needed for that. The hands follow Home Assistant's
+  time zone (set again every half hour and when the zone changes); each timer lights up minute by minute, the last
+  minute by the second, goes dark while paused, and the ring pulses when it rings. The card shows whether it is
+  connected; in Home Assistant "Wall clock" says the same and "Wall clock search" starts a search. A clock has one Echo: pairing it here takes it from the Echo it had. The Echo talks to it
+  exactly as an Echo Show with Alexa did, down to the low-power link that keeps its batteries going for months. A red
+  blinking light on the clock is a low battery: then it ignores the Echo, so change them first.
+
 ## 2026-11-26 — Calls: Amazon's call processing on every Echo, quick replies, the phone before a TV box
 
 - **A phone gets the calls when a TV box connected first** (issue #233). An Android TV box paired for music also

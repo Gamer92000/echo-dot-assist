@@ -90,6 +90,7 @@
 #include "board.h"
 #include "clock.h"
 #include "statefile.h"
+#include "wallclock.h"
 
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
@@ -2764,6 +2765,19 @@ static struct { char id[40], name[64]; unsigned total; int active; long long end
 static int nrunning;                                            /* lock held; end: mono_ms (active), left: ms (paused) */
 static atomic_llong timers_stale_at = LLONG_MAX;                /* mono_ms the first active one is overdue */
 
+/* lock held: the screen and the Echo Wall Clock (wallclock.c: running ones by their end, paused, ringing) follow */
+static void timers_tell(void)
+{
+    struct wc_timer w[RUNNING_MAX + RINGING_MAX]; int n = 0;
+    for (int i = 0; i < nrunning; i++, n++) {
+        snprintf(w[n].id, sizeof w[n].id, "%s", running[i].id);
+        w[n].state = running[i].active ? WC_RUNNING : WC_PAUSED; w[n].end_ms = running[i].end;
+    }
+    for (int i = 0; i < nringing; i++, n++) { snprintf(w[n].id, sizeof w[n].id, "%s", ringing[i].id); w[n].state = WC_RINGING; w[n].end_ms = 0; }
+    wallclock_timers(w, n);
+    screen_timers_changed();
+}
+
 static void running_drop(int i)         /* lock held */
 {
     memmove(running + i, running + i + 1, sizeof running[0] * (size_t)(nrunning - i - 1));
@@ -2799,7 +2813,7 @@ void core_timer_running(const char *id, const char *name, unsigned total, unsign
     running[i].total = total; running[i].active = active;
     running[i].left = left * 1000LL; running[i].end = mono_ms() + running[i].left;
     running_stale_at();
-    screen_timers_changed();
+    timers_tell();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2844,7 +2858,7 @@ static void timers_prune(void)          /* lock held */
         running_drop(i); gone = 1;
     } else i++;
     running_stale_at();
-    if (gone) screen_timers_changed();
+    if (gone) timers_tell();
     if (gone && connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2873,7 +2887,7 @@ void core_timer_finished(const char *id, const char *name, unsigned total)
     atomic_store(&alarm_until, timer_ring_s ? mono_ms() + timer_ring_s * 1000LL : LLONG_MAX);
     log_private("alarm: %s rings (%d ringing)", ringing[i].name, nringing);       /* (a timer's name, as it was said) */
     alarm_set(1);
-    screen_timers_changed();
+    timers_tell();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
@@ -2882,13 +2896,13 @@ void core_timer_cancelled(const char *id)
     int r = running_find(id);
     if (r >= 0) {
         running_drop(r); running_stale_at();
-        screen_timers_changed();
+        timers_tell();
         if (connected && proto->timers_changed) proto->timers_changed();
     }
     for (int i = 0; i < nringing; i++) if (!strcmp(ringing[i].id, id)) {
         memmove(ringing + i, ringing + i + 1, sizeof ringing[0] * (size_t)(nringing - i - 1));
         if (!--nringing) alarm_set(0);
-        screen_timers_changed();
+        timers_tell();
         if (connected && proto->timers_changed) proto->timers_changed();
         return;
     }
@@ -2900,7 +2914,7 @@ void core_alarm_stop(const char *why)
     fprintf(stderr, "alarm: off (%s)\n", why);
     nringing = 0;
     alarm_set(0);
-    screen_timers_changed();
+    timers_tell();
     if (connected && proto->timers_changed) proto->timers_changed();
 }
 
