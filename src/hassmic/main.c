@@ -1750,7 +1750,16 @@ static void speech_locale(const struct core_wake_word *w, int aligner, char *out
         { "Europe/Berlin", "de-DE" }, { "Europe/Vienna", "de-DE" }, { "Europe/Zurich", "de-DE" }, { "Europe/Busingen", "de-DE" },
         { "Europe/Vaduz", "de-DE" }, { "Europe/Paris", "fr-FR" }, { "Europe/Monaco", "fr-FR" }, { "Europe/Madrid", "es-ES" },
         { "Atlantic/Canary", "es-ES" }, { "America/Mexico_City", "es-MX" }, { "America/Monterrey", "es-MX" }, { "America/Tijuana", "es-MX" },
-        { "America/Cancun", "es-MX" }, { "America/Merida", "es-MX" }, { "America/Chihuahua", "es-MX" }, { "Asia/Tokyo", "ja-JP" },
+        { "America/Cancun", "es-MX" }, { "America/Merida", "es-MX" }, { "America/Chihuahua", "es-MX" },
+        /* the rest of Spanish-speaking America: Latin American Spanish, Mexico's (es-MX: seseo, as there; the aligner
+         * has no other), not "America/"'s English, which a Spanish "Alexa" in Buenos Aires was aligned with */
+        { "America/Argentina/", "es-MX" }, { "America/La_Paz", "es-MX" }, { "America/Santiago", "es-MX" },
+        { "America/Punta_Arenas", "es-MX" }, { "Pacific/Easter", "es-MX" }, { "Chile/", "es-MX" }, { "America/Bogota", "es-MX" },
+        { "America/Costa_Rica", "es-MX" }, { "America/Havana", "es-MX" }, { "Cuba", "es-MX" }, { "America/Santo_Domingo", "es-MX" },
+        { "America/Guayaquil", "es-MX" }, { "Pacific/Galapagos", "es-MX" }, { "America/El_Salvador", "es-MX" },
+        { "America/Guatemala", "es-MX" }, { "America/Tegucigalpa", "es-MX" }, { "America/Managua", "es-MX" },
+        { "America/Panama", "es-MX" }, { "America/Asuncion", "es-MX" }, { "America/Lima", "es-MX" },
+        { "America/Montevideo", "es-MX" }, { "America/Caracas", "es-MX" }, { "Asia/Tokyo", "ja-JP" },
         /* languages the aligner has no model for (it skips them: align_lang), for the screen's date
          * (core_speech_language); Brazil's zones before "America/" */
         { "Europe/Rome", "it-IT" }, { "Europe/San_Marino", "it-IT" }, { "Europe/Vatican", "it-IT" }, { "Europe/Lisbon", "pt-PT" },

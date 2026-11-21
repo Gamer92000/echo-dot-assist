@@ -2,6 +2,16 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-21 — Latin American Spanish across Spanish-speaking America
+
+- **An Echo in Argentina, Chile, Colombia, Peru and the rest of Spanish-speaking America finds where the wake word
+  ends with Spanish sounds.** Since the Echo takes its country from Home Assistant's home location (2026-11-18), it
+  knows its real time zone there, and "Language you speak" on Automatic took English for every one of them: only
+  Spain's and Mexico's zones were listed. Their zones now give Latin American Spanish (Mexico's sounds, the closest the
+  Echo has), as does picking Spanish on the page there: Argentina, Bolivia, Chile, Colombia, Costa Rica, Cuba, the
+  Dominican Republic, Ecuador, El Salvador, Guatemala, Honduras, Nicaragua, Panama, Paraguay, Peru, Uruguay and
+  Venezuela. The Echo Show's date is in Spanish there too.
+
 ## 2026-11-18 — The language you speak, from the right time zone
 
 - **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to

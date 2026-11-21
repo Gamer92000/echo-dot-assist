@@ -3664,6 +3664,17 @@ Run in this order. Each step says what it proves.
       apelul", "încheie apelul".  Blueprint: ro sentences and replies.  Checked on the PC: `ui_test` (each language's
       date, cut at the end, `lg`), `fake_screen_words.py` (`lg`), `fake_ha_dropin.py` ("Închide apelul!"),
       `blueprint_dropin.py` (ro-RO).  Open: seen on an Echo; the page and the screen's other words stay English.
+      Spanish-speaking America (2026-11-21): once the country came from HA's home location, an Echo in Buenos Aires
+      had its real zone, America/Argentina/Buenos_Aires, and that fell into "America/": an "Alexa" said in Spanish
+      aligned with English sounds (before, America/Araguaina had given pt-BR, skipped, and the word's own es-MX by
+      luck; a Dot 3 there, 2026-11-20: `alexa-es-MX aligned by .../alexa-es-MX.wa`).  `speech_locale` now names
+      Argentina (its folder), Bolivia, Chile, Colombia, Costa Rica, Cuba, the Dominican Republic, Ecuador, El
+      Salvador, Guatemala, Honduras, Nicaragua, Panama, Paraguay, Peru, Uruguay and Venezuela: es-MX, Latin American
+      Spanish (seseo; the aligner has only es-MX and es-ES).  Over every zone of tzdata 35 change, all of these (13
+      Argentina's); Spanish picked on the page there takes es-MX too (the zone's variety).  `fake_ha_wakealign.py`
+      (Buenos Aires on Automatic, Madrid and Bogota with es picked) and `fake_screen_words.py` (Buenos Aires: lg es)
+      fail on the code before.  Left: Mexico's zones the table never named (Mazatlan, Hermosillo, Bahia_Banderas,
+      Matamoros, Ojinaga, Ciudad_Juarez: "America/"'s en-US; Bahia_Banderas is the test's English case), Puerto Rico.
 - [~] Echo Show 5 2nd gen (`cronos`, 2026-10-26; `docs/re-cronos.md`).  checkers' platform and its pinned build: Fire OS
       6574.1 NS65741/8149 (same `ro.build.version.incremental`, cronos' own image), kernel 4.9.77 (20 config lines from
       checkers', 74 from crown's), `libpryon.so` byte-identical to checkers', stubs identical in symbols and order,

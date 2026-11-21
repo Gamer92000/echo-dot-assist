@@ -64,7 +64,12 @@ async def main(e):
     # a language the aligner has no model for counts as unsaid, the zone's as the page's (issue #176): Amazon's
     # Brazilian "Alexa" (its own pt-BR has no file either) in Brazil by "America/"'s en-US, as before Portuguese was
     # listed; each a file other than the one before, or the log says nothing
+    # Spanish-speaking America: Latin American Spanish (es-MX's files), on Automatic and with Spanish picked; Spain's
+    # in Madrid (each a file other than the one before)
     for word, z, lang, want in ((None, "Europe/London", "en", r"alexa aligned by \S*/alexa-en-GB\.wa \(en-GB spoken\)"),
+                                (None, "America/Argentina/Buenos_Aires", "auto", r"alexa aligned by \S*/alexa-es-MX\.wa \(es-MX spoken\)"),
+                                (None, "Europe/Madrid", "es", r"alexa aligned by \S*/alexa-es-ES\.wa \(es-ES spoken\)"),
+                                (None, "America/Bogota", "es", r"alexa aligned by \S*/alexa-es-MX\.wa \(es-MX spoken\)"),
                                 ("alexa-pt-BR", "America/Sao_Paulo", "auto", r"alexa-pt-BR aligned by \S*/alexa-en-US\.wa \(en-US spoken\)"),
                                 (None, "Europe/London", "en", r"alexa-pt-BR aligned by \S*/alexa-en-GB\.wa \(en-GB spoken\)"),
                                 (None, "America/Sao_Paulo", "pt", r"alexa-pt-BR aligned by \S*/alexa-en-US\.wa \(en-US spoken\)"),

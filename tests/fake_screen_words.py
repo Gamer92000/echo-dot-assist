@@ -186,7 +186,8 @@ async def main(e):
     # the zone by its whole name or folder, never by prefix: America/Bahia is Brazil's, America/Bahia_Banderas (tz.c's
     # pick for Mexico's CST6) only "America/"'s (state/zone written as clock.c keeps it, the setting set to tell it); a
     # zone guessed among those of a rule says no language
-    for z, want in (("America/Bahia home BR BR -", "lg pt"), ("America/Bahia_Banderas kept", "lg en"), ("America/Bahia guess", "lg -")):
+    for z, want in (("America/Bahia home BR BR -", "lg pt"), ("America/Bahia_Banderas kept", "lg en"),
+                    ("America/Argentina/Buenos_Aires home AR AR -", "lg es"), ("America/Bahia guess", "lg -")):
         open(os.path.join(e.state, "zone"), "w").write(z + "\n")
         e.page.set(speech_language="ro"); await until(lambda: last("lg ") == "lg ro", 5)
         e.page.set(speech_language="auto")
