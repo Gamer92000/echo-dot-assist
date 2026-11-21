@@ -273,6 +273,9 @@ avahi_start() {
         { echo "[server]"; echo "host-name=$node"; echo "enable-dbus=warn"; grep -v -e '^\[server\]' -e '^enable-dbus=' $conf; } > /data/misc/avahi/avahi-daemon.conf
         conf=/data/misc/avahi/avahi-daemon.conf
     fi
+    # avahi leaves an interface without IFF_MULTICAST alone, and Android 5.1's Broadcom Wi-Fi comes up without it (rook,
+    # 2026-11-20: <BROADCAST,UP,LOWER_UP>, no mDNS, Home Assistant never found the Echo): set again at every (re)start
+    [ -z "$WLAN" ] || ip link set $WLAN multicast on > /dev/null 2>&1
     stop avahi-daemon; pkill avahi-daemon
     while [ $i -lt 5 ] && pidof avahi-daemon > /dev/null; do sleep 1; i=$((i + 1)); done
     sleep 2
