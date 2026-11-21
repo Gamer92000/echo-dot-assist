@@ -40,8 +40,9 @@ System) off takes any certificate, but then anyone on your network could slip th
   Hindi (no usable models for them). It hears the word best in the language you *speak*,
   which need not be the wake word's: German voices saying the English "Alexa" were found in 48 of 75 tests with
   German sounds, in 23 with English ones. So "Language you speak" (settings page, Wake word) picks it; automatic goes
-  by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain, Mexico: Spanish;
-  Japan; the UK, Ireland, the US, Canada, Australia, India: English), then by the wake word's own language. Home
+  by your time zone in Home Assistant (Germany, Austria, Switzerland: German; France: French; Spain: Spanish; Mexico,
+  Central and South America's Spanish-speaking countries, Cuba, the Dominican Republic: Latin American Spanish; Japan;
+  the UK, Ireland, the US, Canada, Australia, India: English), then by the wake word's own language. Home
   Assistant tells the Echo only the zone's offset and summer time, which Germany shares with France, the Netherlands
   and others, so the country comes from Home Assistant's home location, near a border from your Wi-Fi router (see
   "Time and time zone" below); the settings page shows under the setting what Automatic found and from what. The list also has Italian, Portuguese, Dutch, Swedish,
