@@ -217,7 +217,8 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
  * constants in its boot oat) up to Android 7; Android 9 (athena, SDK 28) has four more methods before them (the player
  * tracking calls), so setStreamVolume = 7 and getStreamMaxVolume = 14 (14 answers 30 as "dumpsys audio" says; 3 is a
  * one-way call there, which gets no reply at all, and 10 answers 0; read off the replies' types and the audio log,
- * 2026-10-15).  Every player of ours is on the music stream, and Fire OS aliases system, voice call and TTS
+ * 2026-10-15).  Android 5.1 (rook, SDK 22) has no player tracking and two more mute methods before them: setStreamVolume = 4,
+ * getStreamMaxVolume = 15 (its boot oat's TRANSACTION_* constants, 2026-11-20).  Every player of ours is on the music stream, and Fire OS aliases system, voice call and TTS
  * to it ("dumpsys audio": one index for all of them), so it is the one volume, as MainVolume is the Dots' mixer's.  Not
  * the player's own volume (SLVolumeItf, AudioTrack::setVolume): Amazon's audio stack put a track back to 1.0 some 70 ms
  * after it started on the first Echo Show ("TrackVolumeChanged ... track_volume=1.0"), so a sound began at our level and
@@ -229,6 +230,8 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
 #define TX_SET_STREAM_VOLUME_A9 "7"
 #define TX_GET_STREAM_MAX_VOLUME_A7 "10"
 #define TX_GET_STREAM_MAX_VOLUME_A9 "14"
+#define TX_SET_STREAM_VOLUME_A5 "4"
+#define TX_GET_STREAM_MAX_VOLUME_A5 "15"
 #define STREAM_MUSIC "3"
 static pthread_mutex_t vol_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t vol_cond = PTHREAD_COND_INITIALIZER;
@@ -254,15 +257,18 @@ static int parcel_int(const char *out, int *v)
     return 0;
 }
 
-/* the transaction numbers follow the Android release: Android 7.1 (SDK 25: checkers, crown) and 9 (SDK 28: athena) are the
- * ones verified; SDK 28 and newer take 9's, older ones 7's.  A wrong number is somebody else's method: a model on another
- * release checks them first (service call audio, as above) */
-static int a9;
+/* the transaction numbers follow the Android release: Android 5.1 (SDK 22: rook), 7.1 (SDK 25: checkers, crown) and 9
+ * (SDK 28: athena) are the ones verified; SDK 28 and newer take 9's, SDK 22 and older 5.1's, between them 7's.  A wrong
+ * number is somebody else's method: a model on another release checks them first (service call audio, as above) */
+static char *tx_set = TX_SET_STREAM_VOLUME_A7, *tx_max = TX_GET_STREAM_MAX_VOLUME_A7;
 static void tx_init(void)
 {
     char sdk[PROP_VALUE_MAX] = "";
+    int n;
     __system_property_get("ro.build.version.sdk", sdk);
-    a9 = atoi(sdk) >= 28;
+    n = atoi(sdk);
+    if (n >= 28) { tx_set = TX_SET_STREAM_VOLUME_A9; tx_max = TX_GET_STREAM_MAX_VOLUME_A9; }
+    else if (n > 0 && n <= 22) { tx_set = TX_SET_STREAM_VOLUME_A5; tx_max = TX_GET_STREAM_MAX_VOLUME_A5; }
 }
 
 static void *vol_thread(void *arg)
@@ -282,12 +288,12 @@ static void *vol_thread(void *arg)
         if (v < 0) continue;
         char out[256], idx[12];
         if (max <= 0) {
-            char *get[] = { "/system/bin/service", "call", "audio", a9 ? TX_GET_STREAM_MAX_VOLUME_A9 : TX_GET_STREAM_MAX_VOLUME_A7, "i32", STREAM_MUSIC, NULL };
+            char *get[] = { "/system/bin/service", "call", "audio", tx_max, "i32", STREAM_MUSIC, NULL };
             core_run(get, out, sizeof out);
             if (parcel_int(out, &max) || max <= 0 || max > 100) { fprintf(stderr, "audio: no maximum for the music stream (%s)\n", out); max = 0; continue; }
         }
         snprintf(idx, sizeof idx, "%d", (v * max + 50) / 100);
-        char *set[] = { "/system/bin/service", "call", "audio", a9 ? TX_SET_STREAM_VOLUME_A9 : TX_SET_STREAM_VOLUME_A7, "i32", STREAM_MUSIC, "i32", idx,
+        char *set[] = { "/system/bin/service", "call", "audio", tx_set, "i32", STREAM_MUSIC, "i32", idx,
                         "i32", "0", "s16", "android", NULL };
         core_run(set, out, sizeof out);
         if (parcel_int(out, NULL)) fprintf(stderr, "audio: setting the music stream to %s of %d failed (%s)\n", idx, max, out);
@@ -625,6 +631,11 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
     size_t len = samples * 2;
     unsigned lead_ms = 0;
     unsigned want = cold_lead_ms();
+    /* The first player after boot took 2.5 s to play 0.47 s of audio on the Echo Spot (slplay, 2026-11-20; 1.25 s after a few
+     * seconds of idle): the HAL opens its output lazily.  With only 1 s of slack the wait below ended before the first
+     * sample was out and s_close dropped the queue: no wake sound at all, once a boot.  The wait ends as soon as the
+     * player drained, so room costs nothing */
+    if (now_ms() - atomic_load(&last_out) > COLD_MS) end += board.cold_slack_ms;
     if (want && now_ms() - atomic_load(&last_out) > COLD_MS) {
         static short lead[48000 * LEAD_MAX_MS / 1000];
         size_t n = (size_t)rate * want / 1000 < sizeof lead / 2 ? (size_t)rate * want / 1000 : sizeof lead / 2;

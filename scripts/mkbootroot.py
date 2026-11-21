@@ -2,7 +2,7 @@
 """mkbootroot: a rooted boot.img from the device's own stock one, in the standard library only.
 
   mkbootroot.py --check BOOT.img            prove the rebuild: stock image in, the same out but for the ID
-  mkbootroot.py BOOT.img OUT.img [--sepolicy FILE] [--adbd FILE] [--no-verity]
+  mkbootroot.py BOOT.img OUT.img [--sepolicy FILE] [--adbd FILE] [--init-rc NAME FILE] [--no-verity]
                                             build the rooted image
   mkbootroot.py --extract BOOT.img NAME OUT a file of the ramdisk (e.g. sepolicy, to patch it)
   mkbootroot.py --cpio BOOT.img OUT         the whole ramdisk, uncompressed (cpio -id < OUT unpacks it)
@@ -43,6 +43,10 @@ In the ramdisk:
   every boot, until lockdown.sh closed it again; adb over Wi-Fi is hassmic's to open (adb_gate in lockdown.sh).
   The same for "start bootsound_anim" (bootanim_playback.sh, Amazon's boot chime): it plays at the media stream's
   volume, which a satellite keeps at full (hassmic's own gain is the volume), so every boot was deafening
+- with --init-rc NAME FILE: FILE (the model's hassmic.rc) appended to the ramdisk's NAME (init.rook.rc).  Android 5.1's init
+  reads rc files from the ramdisk only (7.0's reads /system/etc/init too: hassmic.rc goes there on the other models)
+- init.fosflags.sh is replaced where the ramdisk has it (checkers, crown: stock's init.rc runs it from there); rook's
+  stock init.rc runs /system/etc/init.fosflags.sh instead and the ramdisk has none, so there the edit is skipped
 - with --no-verity: "verify" taken out of the fs_mgr flags in every fstab.* that has it, so
   /system mounts without dm-verity and can be written (hassmic's install).  Once it has been
   written, only a boot image without verify may boot it: the stock one finds the hashes wrong.
@@ -152,6 +156,8 @@ def rc_lines_out(data):
 
 def pattern(name, edit):
     """the key of EDIT that NAME falls under: itself, or the glob of its kind (fstab.*, init.*.rc)"""
+    if name in edit:
+        return name
     if name.startswith(b"fstab.") and b"fstab.*" in edit:
         return b"fstab.*"
     if name.startswith(b"init.") and name.endswith(b".rc") and b"/" not in name and b"init.*.rc" in edit:
@@ -175,9 +181,27 @@ def no_verity(data):
     return b"\n".join(lines) if n else None
 
 
-def edits(sepolicy=None, verity=True, adbd=None):
+OPTIONAL = set()        # with --init-rc (rook): init.fosflags.sh and init.*.rc edited where the ramdisk has them, skipped where it has none
+
+
+RC_OUT_RC = {b"start bootsound": b"# hassmic: no boot chime (rook's init.rook.rc: the same one, bootanim_playback.sh)"}
+
+
+def rc_append(name, text):
+    """init.*.rc: the lines of RC_OUT out as above, and for NAME the model's services after them (and rook's chime out)"""
+    def edit(data):
+        data = rc_lines_out(data) or data
+        data = b"\n".join(l[:len(l) - len(l.lstrip())] + RC_OUT_RC[l.strip()] if l.strip() in RC_OUT_RC else l for l in data.split(b"\n"))
+        return data + (b"" if data.endswith(b"\n") else b"\n") + b"\n# hassmic (scripts/mkbootroot.py --init-rc)\n" + text
+    return edit
+
+
+def edits(sepolicy=None, verity=True, adbd=None, rc=None):
     """name -> function(data) -> new data, or None to leave that one as it is"""
     e = {b"default.prop": default_prop, b"init.fosflags.sh": lambda d: FOSFLAGS, b"init.*.rc": rc_lines_out}
+    if rc is not None:
+        e[rc[0]] = rc_append(*rc)
+        OPTIONAL.update({b"init.fosflags.sh", b"init.*.rc"})
     if sepolicy is not None:
         e[b"sepolicy"] = lambda d: sepolicy
     if adbd is not None:
@@ -219,7 +243,7 @@ def edit_cpio(cpio, edit):
         else:
             out.append(cpio[off:data_off + size + (-size % 4)])
         off = data_off + size + (-size % 4)
-    missing = set(edit) - done
+    missing = set(edit) - done - OPTIONAL
     assert not missing, "not in the ramdisk: %s" % b", ".join(sorted(missing)).decode()
     return b"".join(out)
 
@@ -265,7 +289,12 @@ def main(argv):
                 return
         sys.exit("%s: no %s in the ramdisk" % (argv[1], argv[2]))
     sepolicy, verity = None, True
-    adbd = None
+    adbd = rc = None
+    while "--init-rc" in argv:
+        i = argv.index("--init-rc")
+        assert i + 2 < len(argv), "--init-rc needs a ramdisk file name and a file"
+        rc = (argv[i + 1].encode(), open(argv[i + 2], "rb").read())
+        del argv[i:i + 3]
     while "--adbd" in argv:
         i = argv.index("--adbd")
         assert i + 1 < len(argv), "--adbd needs a file"
@@ -297,7 +326,7 @@ def main(argv):
         print("check: %d of %d bytes differ, all inside the ID" % (len(diff), len(stock)))
         return
 
-    edit = edits(sepolicy, verity, adbd)
+    edit = edits(sepolicy, verity, adbd, rc)
     cpio = edit_cpio(boot.cpio(), edit)
     boot.trailing = b""  # the stock image's certificate: its sha256 is not ours
     out = boot.assemble(gzip_mem(cpio))

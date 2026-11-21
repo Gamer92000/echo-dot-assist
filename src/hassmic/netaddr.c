@@ -35,6 +35,7 @@
  * peer). */
 #define _GNU_SOURCE
 #include "netaddr.h"
+#include "compat.h"
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>

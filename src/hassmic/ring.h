@@ -93,4 +93,5 @@ int  ring_rotation(int set);                /* LEDs the fill's start is turned b
  * all the apps'); -1 where the ring is LEDs.  set < 0 reads. */
 void ring_level(int dbfs10);
 int  ring_band_rows(int set);
+int  ring_band_max(void);         /* the most rows it takes: 40, a round display (board.round_px) 120 */
 #endif

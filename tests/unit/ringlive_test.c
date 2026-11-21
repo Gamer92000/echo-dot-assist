@@ -34,6 +34,7 @@ int ring_designs_live(void) { return 0; }
 char *ring_stock(int i, size_t *n) { (void)i; (void)n; return NULL; }
 void ring_reload(void) {}
 int ring_band_rows(int set) { (void)set; return -1; }
+int ring_band_max(void) { return 40; }
 /* ring.c's light, as Home Assistant set it: the bottom layer while the live ring draws it */
 static struct ring_light light = { .brightness = 1, .color_brightness = 1, .r = 1, .g = 1, .b = 1, .fill = 100 };
 static int flashing, light_live;

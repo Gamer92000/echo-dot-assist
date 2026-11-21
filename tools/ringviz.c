@@ -29,6 +29,7 @@ int ring_designs_live(void) { return 0; }
 char *ring_stock(int i, size_t *n) { (void)i; (void)n; return NULL; }
 void ring_reload(void) {}
 int ring_band_rows(int set) { (void)set; return -1; }
+int ring_band_max(void) { return 40; }
 int ring_custom(void) { return 1; }
 int ring_light_now(struct ring_light *l) { memset(l, 0, sizeof *l); return 0; }
 void ring_light_live(int on) { (void)on; }

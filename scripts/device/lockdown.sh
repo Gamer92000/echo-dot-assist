@@ -285,7 +285,7 @@ adb_gate() {
     # only a plain file with one name, as main.sh's take()
     rm -rf $ADB_REQ_TAKEN 2>/dev/null
     if { [ -e $ADB_REQ ] || [ -L $ADB_REQ ]; } && mv -f $ADB_REQ $ADB_REQ_TAKEN 2>/dev/null &&
-            [ -f $ADB_REQ_TAKEN ] && [ ! -L $ADB_REQ_TAKEN ] && set -- $(ls -ld $ADB_REQ_TAKEN 2>/dev/null) && [ "$2" = 1 ]; then
+            [ -f $ADB_REQ_TAKEN ] && [ ! -L $ADB_REQ_TAKEN ] && [ "$(stat -c %h $ADB_REQ_TAKEN 2>/dev/null || { set -- $(ls -ld $ADB_REQ_TAKEN 2>/dev/null); echo $2; })" = 1 ]; then
         got=1; read -r req < $ADB_REQ_TAKEN
         if [ "$req" = 1 ]; then setprop hassmic.adb.until $(($(up) + ADB_SECS)); else setprop hassmic.adb.until 0; fi
     fi

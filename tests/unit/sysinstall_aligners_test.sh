@@ -10,7 +10,7 @@ cd "$(dirname "$0")/../.."; Q=$(mktemp -d); trap 'rm -rf "$Q"' EXIT; fail=0
 ok_() { if [ "$1" = 0 ]; then echo "ok   $2"; else echo "FAIL $2"; sed 's/^/     /' $Q/out; fail=1; fi; }
 
 R=$Q/root; H=$R/system/hassmic; mkdir -p $Q/bin $R/system/etc/init $R/system/app
-printf '#!/bin/sh\necho 0\n' > $Q/bin/id
+printf '#!/bin/sh\necho "uid=0(root) gid=0(root)"\n' > $Q/bin/id
 printf '#!/bin/sh\necho donut\n' > $Q/bin/getprop
 printf '#!/bin/sh\nexit 0\n' > $Q/bin/chown
 # chcon fails on a file whose name ends in FAKE_FAIL: a write that fails half way

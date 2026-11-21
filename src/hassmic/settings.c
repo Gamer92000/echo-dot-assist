@@ -163,7 +163,7 @@ static const struct setting table[NSET] = {
      * too, while a track plays; only where the model has the UI */
     [MUSIC_PAGE]  = { "music_on_screen", "Music on the screen while it plays", "Lights", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* ring_band.c: the screen's rows kept for the light band (stock's attention line is 10) */
-    [BAND]        = { "light_band", "Light band", "Lights", "px", S_INT, 0, 40, 1, 0 },
+    [BAND]        = { "light_band", "Light band", "Lights", "px", S_INT, 0, 40, 1, 0 },   /* settings_max() */
     /* the backlight (backlight_auto above): the level with adaptive off, the shift of Amazon's lux curve with it on
      * (-100..100 = screen_auto_brightness_adj -1..1) */
     [SCR_AUTO]    = { "screen_brightness_auto", "Adaptive brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -323,7 +323,7 @@ const struct setting *settings_find(const char *name)
 int settings_min(const struct setting *s) { return s - table == SPK_GAIN ? spkgain_min() : s->min; }
 int settings_max(const struct setting *s)
 {
-    return s - table == SPK_GAIN ? spkgain_max() : s - table == RING_ROT ? ring_leds() - 1 : s->max;
+    return s - table == SPK_GAIN ? spkgain_max() : s - table == RING_ROT ? ring_leds() - 1 : s - table == BAND ? ring_band_max() : s->max;
 }
 
 int settings_choices(const struct setting *s, const char *const **names)

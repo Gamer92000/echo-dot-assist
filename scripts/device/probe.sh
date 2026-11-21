@@ -1,6 +1,15 @@
 #!/system/bin/sh
 # Phase 3: record stock state before changing anything.  Output goes to stdout; run via scripts/probe.sh on the PC.
 # Arguments: stock files (relative to /system) to checksum.
+D=/data/local/hassmic
+# A model whose Android has no toybox (rook, Android 5.1) ships ours (tools/toybox.sh): the applets the system lacks go on
+# PATH, after the system's own, so nothing that exists changes
+if [ -x $D/toybox ]; then
+    TB=/data/local/hassmic/tb; mkdir -p $TB
+    for a in $($D/toybox); do [ -e /system/bin/$a ] || [ -e /system/xbin/$a ] || ln -sf $D/toybox $TB/$a; done
+    PATH=$PATH:$TB
+fi
+md5sum() { if [ -x /system/bin/md5 ] && ! type md5sum >/dev/null 2>&1; then md5 "$@"; else command md5sum "$@"; fi; }
 sec() { echo; echo "######## $*"; }
 sec build;      getprop ro.product.device; getprop ro.build.display.id; getprop ro.build.fingerprint; getprop ro.build.version.number; uname -a
 sec selinux;    getenforce 2>&1; id

@@ -14,6 +14,7 @@
  * HASSMIC_FAKE_COUNTRY (tests) names a file with the two letters instead ("" or no file: none).
  */
 #include "apcountry.h"
+#include "compat.h"
 #include <errno.h>
 #include <linux/genetlink.h>
 #include <linux/netlink.h>

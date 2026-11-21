@@ -301,7 +301,7 @@ take)
     # that holds the run), and only a plain file with one name (/data has no protected_hardlinks: a hard link to a
     # file of root's would be a plain file too); what it says goes into the log and to wpa_supplicant
     rm -rf $T; mv -f $R $T 2>/dev/null || exit 0
-    if ! { [ -f $T ] && [ ! -L $T ] && set -- $(ls -ld $T 2>/dev/null) && [ "$2" = 1 ]; }; then
+    if ! { [ -f $T ] && [ ! -L $T ] && [ "$(stat -c %h $T 2>/dev/null || { set -- $(ls -ld $T 2>/dev/null); echo $2; })" = 1 ]; }; then
         rm -rf $T; say "request not a plain file, dropped"; exit 0
     fi
     read -r what id ssid psk < $T; rm -f $T
