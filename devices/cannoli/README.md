@@ -104,12 +104,12 @@ Hold the **action button** (the circle) while powering on → fastboot; `fastboo
 
 ### 4. Build the recovery
 
-In the TWRP checkout, build the pinned recovery as its README says — the source sync is 26 GB and
-the build can take several hours on a typical PC (about 8 minutes on 32 cores). Before running
-its `build.sh`, point it at the verified stock images from step 1 instead of its own download:
-`export STOCK_IMAGES=../cannoli-os-builder/work/inputs/images`. Then package the recovery for
-your serial:
-
+Change to TWRP checkout folder, build the pinned recovery as its README says — the source sync is 26 GB and
+the build can take several hours on a typical PC (about 8 minutes on 32 cores). 
+First export the path to the stock images with:
+`export STOCK_IMAGES=../cannoli-os-builder/work/inputs/images`
+Then run `build.sh`. 
+Finally, package the recovery for your serial:
 ```sh
 python3 -m cannoli_twrp.pack --images ../cannoli-os-builder/work/inputs/images \
   --ramdisk work/twrp/out/target/product/cannoli/ramdisk-recovery.img \
@@ -119,7 +119,8 @@ python3 -m cannoli_twrp.pack --images ../cannoli-os-builder/work/inputs/images \
 
 ### 5. Build this port's update bundle
 
-In this checkout — right before the OS bundle in the next step, so it cannot go stale: a stale
+
+Change directory to the echo-dot-assist checkout folder. In this checkout — right before the OS bundle in the next step, so it cannot go stale: a stale
 `build/cannoli/hassmic.bundle` bakes a stale port, and the builder cannot tell. `STUBS=1` links
 against stand-ins for Amazon's libraries (the binaries come out byte-identical; CI builds this
 way, no firmware unpacking needed), and `NDK=` reuses the toolchain step 1 downloaded:
@@ -136,7 +137,7 @@ Back `secrets/update.key` up somewhere safe: it signs every future update and op
 
 ### 6. Build the OS bundle
 
-In the OS-builder checkout, with the port baked in:
+Change directory to the cannoli-os-builder checkout folder. In the OS-builder checkout, with the port baked in:
 
 ```sh
 sudo python3 -m cannoli_os.build \
@@ -155,7 +156,7 @@ old one) when you rebuild.
 
 ### 7. Unlock and install
 
-The Dot keeps two system slots: A runs Fire OS, B holds the recovery this install puts there. From
+Change directory to the firebreak checkout folder. The Dot keeps two system slots: A runs Fire OS, B holds the recovery this install puts there. From
 the firebreak checkout:
 
 ```sh
@@ -214,12 +215,17 @@ is pinned against. The installer has already put the recovery in slot B at that 
 at power-on), so the fix is to upgrade the stock volumes from that recovery and then rerun the
 install. Unpack the pinned 8349 OTA first (in this checkout):
 
+Run each command from the `firebreak` checkout directory.
+
 ```sh
-cd firmware/cannoli
-python3 ../../tools/payload_dump.py update-kindle-cannoli-NS6575_user_8349_0013323246980.bin unpack
+mkdir -p ../echo-dot-assist/firmware/cannoli/unpack/parts
+unzip -o ../cannoli-os-builder/work/inputs/stock.zip payload.bin -d ../echo-dot-assist/firmware/cannoli/unpack
+python3 ../echo-dot-assist/tools/payload_dump.py ../echo-dot-assist/firmware/cannoli/unpack/payload.bin ../echo-dot-assist/firmware/cannoli/unpack/parts
 ```
 
-Then, from the firebreak checkout:
+
+
+Then, flash the dot to the previously extracted 8349 firmware:
 
 ```sh
 uv run firebreak cannoli-upgrade --device cannoli \
@@ -238,24 +244,28 @@ any Amazon update to 8349 would make.
 The 2022 launch boot loader (BL2) never starts the 8349 LED co-processor, so nothing ever owns the
 ring: dark on the satellite port, an endless boot swirl on rooted stock. The fix flashes the four
 `brhgptlk_0..3` partitions with the 8349 image — unlike everything above they are **raw MTD
-partitions, not UBI**. First unpack the OTA into parts (in this checkout):
+partitions, not UBI**. First unpack the OTA into parts if not already done in the unsupported firmware step.
 
+Run each command from the `firebreak` checkout directory.
+
+If the command `ls ../echo-dot-assist/firmware/cannoli/unpack/parts/brhgptlk*` returns four entries, then skip this command otherwise you need to unpack the OTA with:
 ```sh
-cd firmware/cannoli
-python3 ../../tools/payload_dump.py update-kindle-cannoli-NS6575_user_8349_0013323246980.bin unpack
+mkdir -p ../echo-dot-assist/firmware/cannoli/unpack/parts
+unzip -o ../cannoli-os-builder/work/inputs/stock.zip payload.bin -d ../echo-dot-assist/firmware/cannoli/unpack
+python3 ../echo-dot-assist/tools/payload_dump.py ../echo-dot-assist/firmware/cannoli/unpack/payload.bin ../echo-dot-assist/firmware/cannoli/unpack/parts
 ```
 
-Then, per partition N of 0, 1, 2, 3 — back the launch copy up to the PC first, flash, and verify
+Then, per partition <partitionNumber> of 0, 1, 2, 3 — back the launch copy up to the PC first, flash, and verify
 before moving to the next:
 
 ```sh
-adb push unpack/parts/brhgptlk_0.img /tmp/
-adb shell dump_image brhgptlk_0 /tmp/before
-adb pull /tmp/before lk-launch-backup/brhgptlk_0-launch.bin
-adb shell flash_image brhgptlk_0 /tmp/brhgptlk_0.img
-adb shell dump_image brhgptlk_0 /tmp/after
+adb push unpack/parts/brhgptlk_<partitionNumber>.img /tmp/
+adb shell dump_image brhgptlk_<partitionNumber> /tmp/before
+adb pull /tmp/before lk-launch-backup/brhgptlk_<partitionNumber>-launch.bin
+adb shell flash_image brhgptlk_<partitionNumber> /tmp/brhgptlk_0.img
+adb shell dump_image brhgptlk_<partitionNumber> /tmp/after
 adb shell 'head -c 249856 /tmp/after | sha256sum'   # must equal the next line
-sha256sum unpack/parts/brhgptlk_0.img               # 86e7da8927151fd5…
+sha256sum unpack/parts/brhgptlk_<partitionNumber>.img               # 86e7da8927151fd5…
 ```
 
 Hash only the image's 249856 bytes: `flash_image` zero-fills the rest of the last erase block of
