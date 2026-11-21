@@ -15,6 +15,7 @@
 # Once /system has been written only a boot image without verify may boot it: the stock boot.img would find its hashes
 # wrong.  Back to stock means flashing the firmware .bin in TWRP (system and boot together).
 #   install-boot.sh                 the Echo names itself (model and MAC address); name it in Home Assistant
+#   install-boot.sh --image-only    only the boot image on the PC (build/<codename>/boot-hassmic.img), nothing written
 #   install-boot.sh --boot-only     only part 1: root adb, e.g. for scripts/deploy.sh trial runs before installing
 #   install-boot.sh --uninstall     Alexa's apps back on, hassmic off the system partition, cache and data wiped in TWRP
 #                                   (the root boot image stays); --uninstall --yes without asking
@@ -45,6 +46,11 @@ boot_image() {
     { command -v qemu-arm > /dev/null || [ -x toolchain/qemu-arm ]; } || die "no qemu-arm (qemu user mode; $DDIR/setup.sh puts one in toolchain/)"
     python3 scripts/mkbootroot.py --extract $OUT/boot.stock.img sepolicy $OUT/sepolicy.stock
     rm -f $OUT/sepolicy.hassmic
+    # a model whose own linker cannot run the tool (rook) borrows another model's: tools/qrun.sh QRUN_ROOTFS
+    if [ -n "$SEPOLICY_ROOTFS" ]; then
+        [ -e $SEPOLICY_ROOTFS/system/bin/linker ] || die "no $SEPOLICY_ROOTFS (another model's unpacked firmware, for its linker: $DDIR/README.md)"
+        export QRUN_ROOTFS=$PWD/$SEPOLICY_ROOTFS
+    fi
     chmod 755 $SEPOLICY_TOOL
     # the model's rules, then hassmic's own domain with what other domains may do to su copied over to it, from the
     # policy as it is by then (scripts/system/sepolicy-hassmic.rules, sepolicy-mirror.sh)
@@ -67,7 +73,8 @@ boot_image() {
         grep -q '^type hassmic ' $OUT/sepolicy.rules.txt && ! grep -q '^allow hassmic [^ ]* property_service' $OUT/sepolicy.rules.txt &&
         ! grep -qx 'permissive hassmic' $OUT/sepolicy.rules.txt ||
         die "the patched policy lacks its rules ($OUT/sepolicy.rules.txt)"
-    python3 scripts/mkbootroot.py $OUT/boot.stock.img $IMG --sepolicy $OUT/sepolicy.hassmic --adbd $ADBD --no-verity > /dev/null
+    python3 scripts/mkbootroot.py $OUT/boot.stock.img $IMG --sepolicy $OUT/sepolicy.hassmic --adbd $ADBD \
+        ${RAMDISK_RC:+--init-rc $RAMDISK_RC $DDIR/hassmic.rc} --no-verity > /dev/null
     echo "boot image: $IMG ($(sha $IMG | cut -c1-16)...)"
 }
 
@@ -80,10 +87,12 @@ system_build() {
     esac
 }
 
-# the boot partition holds IMG already (read as root: our root adb or TWRP; the image's toybox has md5sum, no sha256sum)
+# the boot partition holds IMG already (read as root: our root adb or TWRP).  Compared on the PC: Android 5.1's toolbox (rook)
+# has no head, stat or md5sum, and every image's toolbox has dd
 boot_is_ours() {
     [ "$(state)" = device ] || [ "$(state)" = recovery ] || return 1
-    [ "$(t "head -c $(stat -c %s $IMG) $BOOT_DEV 2>/dev/null | md5sum" | cut -c1-32)" = "$(md5sum $IMG | cut -c1-32)" ]
+    n=$(stat -c %s $IMG)
+    [ "$(adb exec-out "dd if=$BOOT_DEV bs=4096 count=$((n / 4096 + 1)) 2>/dev/null" | head -c $n | md5sum | cut -c1-32)" = "$(md5sum $IMG | cut -c1-32)" ]
 }
 
 wait_for() {   # wait_for SECONDS CONDITION...
@@ -215,6 +224,7 @@ if [ "$1" = --uninstall ]; then
 fi
 
 boot_image
+[ "$1" = --image-only ] && exit 0
 [ "$1" = --boot-only ] && BOOT_ONLY=1 && shift
 # TWRP's "Keep System Read only?" screen: answering it restarts TWRP's USB, and adb is gone for a few seconds
 if ! on_adb; then
@@ -226,8 +236,8 @@ if boot_is_ours; then
     [ "$(state)" = recovery ] && flash_boot --boot-only      # in TWRP: boot it
 else flash_boot; fi
 wait_for 600 booted || die "the Echo is not booted with adb"
-[ "$(t id -u)" = 0 ] && [ "$(t cat /proc/self/attr/current | tr -d '\0')" = u:r:su:s0 ] ||
-    die "adb is not a root shell in the su domain ($(t id); $(t cat /proc/self/attr/current | tr -d "\\0"))"
+# whole "id", not "id -u": Android 5.1's toolbox (rook) has no -u; it prints "uid=0(root) ... context=u:r:su:s0"
+case "$(t id)" in uid=0\(root\)*context=u:r:su:s0*) ;; *) die "adb is not a root shell in the su domain ($(t id))";; esac
 echo "root adb: ok"
 [ -n "$BOOT_ONLY" ] && exit 0
 
@@ -240,7 +250,7 @@ printf 'ARGS="%s"\n' "$DEFAULT_ARGS" > $OUT/hassmic.conf
 t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf > /dev/null
 t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers those; the fresh install wins
 # the wake word aligners too, as bundle.sh ships them (sysinstall.sh leaves them out where /system has no room)
-FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/*.ko $OUT/libhmui.so 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
+FILES="$OUT/hassmic $OUT/runas $(ls $OUT/pryon_test $OUT/*.ko $OUT/libhmui.so $OUT/toybox 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
        scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh scripts/device/wifictl.dex scripts/device/ringbar.dex scripts/device/screen.dex
        ${HOME_APK:+scripts/device/$HOME_APK} $(echo wakealign/*.wa wakealign/*.was)"
 t "rm -rf $STAGE; mkdir -p $STAGE"

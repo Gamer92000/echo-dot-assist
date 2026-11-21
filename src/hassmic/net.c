@@ -1,6 +1,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE                     /* getresgid on glibc */
 #endif
+#include "compat.h"
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>

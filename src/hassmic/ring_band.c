@@ -36,6 +36,7 @@
 #include "ringdesign.h"
 #include "screen.h"
 #include "afe_parcel.h"
+#include "compat.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -59,7 +60,7 @@ enum { E_NONE, E_PULSE, E_SPIN, E_BLINK, E_RAINBOW };
 
 #define FRAME_MS     33                 /* 30 frames a second while something moves */
 #define MAX_W        2048
-#define MAX_ROWS     40
+#define MAX_ROWS     120           /* a round display's arc (board.round_px); the other models' band takes 40 (ring_band_max) */
 #define TIMEOUT_MS   300000             /* stock's screen_off_timeout_standard (Arcus default): without a screen UI */
 #define QUIET_MS     60000              /* stock's _dnd and _privacy */
 #define NEVER_MS     INT_MAX            /* "Screen sleeps after" 0: AOSP Settings' own "never" (Integer.MAX_VALUE);
@@ -221,7 +222,7 @@ static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static struct { long long at; int arg, on, ms; } act[P_COUNT];     /* ms: how long it shows (pats', or its design's) */
 static struct ring_light light = { .on = 0, .brightness = 1, .color_brightness = 1, .r = 1, .g = 1, .b = 1, .effect = E_NONE, .fill = 100 }, flash;
 static long long flash_until;
-static int rows = 10, wake_req, started;
+static int rows = 10, rows_set, wake_req, started;
 
 static int find(const char *pattern, int *arg)
 {
@@ -425,10 +426,18 @@ static void light_draw(const struct ring_light *l, int blink, struct rgb *led, l
 
 static void run_quiet(char *const argv[]) { core_spawn(argv); }
 
+/* A Parcel's long is two little-endian int32s: written so, not as "i64", which Android 5.1's service tool does not know.
+ * Signed: the tool reads an i32 with atoi, which clamps a decimal over 2^31 - 1 (half of every 49.7 days of uptime) */
+static void long_words(char lo[12], char hi[12])
+{
+    long long t = now_ms();                                           /* uptimeMillis is CLOCK_MONOTONIC */
+    snprintf(lo, 12, "%d", (int)(int32_t)(uint32_t)(t & 0xffffffffu)); snprintf(hi, 12, "%d", (int)(t >> 32));
+}
+
 static void screen_activity(void)
 {
-    char ms[24]; snprintf(ms, sizeof ms, "%lld", now_ms());           /* uptimeMillis is CLOCK_MONOTONIC */
-    char *act_[] = { "/system/bin/service", "call", "power", "8", "i64", ms, "i32", "0", "i32", "0", NULL };   /* userActivity */
+    char lo[12], hi[12]; long_words(lo, hi);
+    char *act_[] = { "/system/bin/service", "call", "power", "8", "i32", lo, "i32", hi, "i32", "0", "i32", "0", NULL };   /* userActivity */
     run_quiet(act_);
 }
 
@@ -443,8 +452,8 @@ static int screen_interactive(void)
 
 static void screen_wake(void)
 {
-    char ms[24]; snprintf(ms, sizeof ms, "%lld", now_ms());
-    char *wake[] = { "/system/bin/service", "call", "power", "9", "i64", ms, "s16", "hassmic", "s16", "android", NULL };
+    char lo[12], hi[12]; long_words(lo, hi);
+    char *wake[] = { "/system/bin/service", "call", "power", "9", "i32", lo, "i32", hi, "s16", "hassmic", "s16", "android", NULL };
     run_quiet(wake); screen_activity();
 }
 
@@ -559,9 +568,42 @@ static int ringbar(int n, int *in, int *w)
     return 0;
 }
 
+/* A round display (board.round_px): the strip of n rows at the bottom of the panel holds a chord of the circle, and the
+ * band is the ring's arc along its edge, RING_PX thick, the 12 LEDs spread over the arc's visible part (the ring's middle,
+ * the talker's side, at the bottom).  The rest of the strip is black: the panel's corners are not seen, and the strip's
+ * rows are the overscan's. */
+#define RING_PX 16
+static void arc_frame(uint8_t *buf, const struct rgb *row, int w, int n, float k)
+{
+    float R = w / 2.0f, edge = (R - n) / R, tmax = acosf(edge < -1 ? -1 : edge > 1 ? 1 : edge);
+    for (int y = 0; y < n; y++) {
+        float dy = (float)(w - n + y) + 0.5f - R;
+        for (int x = 0; x < w; x++) {
+            float dx = x + 0.5f - R, d = hypotf(dx, dy);
+            float a = clamp01(R - d) * clamp01(d - (R - RING_PX));          /* an edge of one pixel each side */
+            int xr = (int)floorf(R + atan2f(dx, dy) / tmax * R);
+            xr = xr < 0 ? 0 : xr > w - 1 ? w - 1 : xr;
+            uint8_t *p = buf + 4 * ((size_t)y * w + x);
+            p[0] = (uint8_t)lroundf(clamp01(row[xr].b * k * a) * 255); p[1] = (uint8_t)lroundf(clamp01(row[xr].g * k * a) * 255);
+            p[2] = (uint8_t)lroundf(clamp01(row[xr].r * k * a) * 255); p[3] = 255;
+        }
+    }
+}
+
 static int send_frame(int fd, const struct rgb *row, int w, int n, float k)
 {
     static uint8_t buf[MAX_W * MAX_ROWS * 4];
+    if (board.round_px && fd != VIA_SCREEN) {
+        arc_frame(buf, row, w, n, k);
+        size_t len = (size_t)w * n * 4, off = 0;
+        while (off < len) {
+            ssize_t r = write(fd, buf + off, len - off);
+            if (r < 0 && errno == EINTR) continue;
+            if (r <= 0) return -1;
+            off += (size_t)r;
+        }
+        return 0;
+    }
     for (int x = 0; x < w; x++) {
         uint8_t *p = buf + 4 * x;                   /* 0xAARRGGBB, little-endian */
         p[0] = (uint8_t)lroundf(clamp01(row[x].b * k) * 255); p[1] = (uint8_t)lroundf(clamp01(row[x].g * k) * 255);
@@ -699,6 +741,7 @@ void ring_start(void (*run)(const char *op, const char *name), void (*reloaded)(
     (void)run; (void)reloaded;                      /* no ledctrl here, and no set root installs */
     pthread_mutex_lock(&lock);
     int go = !started; started = 1;
+    if (!rows_set && board.round_px) rows = 40;                  /* a chord of 10 rows of a circle is a sliver; 40 shows 66 degrees of the ring and leaves a dialog's buttons above it */
     pthread_mutex_unlock(&lock);
     if (!go) return;
     ring_reload();                                  /* the designs applied before */
@@ -827,10 +870,12 @@ void ring_light_set(const struct ring_light *l, unsigned flash_ms)
 
 void ring_level(int dbfs10) { atomic_store(&level_db, dbfs10); }
 
+int ring_band_max(void) { return board.round_px ? MAX_ROWS : 40; }
+
 int ring_band_rows(int set)
 {
     pthread_mutex_lock(&lock);
-    if (set >= 0) { rows = set > MAX_ROWS ? MAX_ROWS : set; pthread_cond_signal(&cv); }
+    if (set >= 0) { rows = set > ring_band_max() ? ring_band_max() : set; rows_set = 1; pthread_cond_signal(&cv); }
     int r = rows;
     pthread_mutex_unlock(&lock);
     return r;

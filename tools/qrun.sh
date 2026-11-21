@@ -2,7 +2,8 @@
 # Run an armv7 bionic binary on the PC against the extracted rootfs.
 # New PID namespace is required: bionic mutexes store a 16-bit owner tid and deadlock when pid > 65535.
 # Usage: [DEVICE=<codename>] tools/qrun.sh [-t seconds] <binary> [args...]   (paths inside args are resolved inside the
-# rootfs of that model's firmware, firmware/$DEVICE/rootfs, default donut)
+# rootfs of that model's firmware, firmware/$DEVICE/rootfs, default donut; QRUN_ROOTFS=<dir>: that rootfs instead, for a
+# binary that needs a newer bionic linker than the firmware's: rook's Android 5.1 linker has no DT_GNU_HASH)
 #        tools/qrun.sh --userns   the sysctl and value that let users make namespaces here, if one is known (the setup)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # What refuses users a namespace: Ubuntu 24.04 and later by AppArmor ("write failed /proc/self/uid_map: Operation not
@@ -28,4 +29,4 @@ if ! unshare --user --map-root-user --pid --fork true 2> /dev/null; then
     exit 1
 fi
 exec timeout -s KILL "$T" unshare --user --map-root-user --pid --fork \
-    "$QEMU" -L "$ROOT/firmware/${DEVICE:-donut}/rootfs" -E LD_LIBRARY_PATH=/system/lib:/system/vendor/lib "$@"
+    "$QEMU" -L "${QRUN_ROOTFS:-$ROOT/firmware/${DEVICE:-donut}/rootfs}" -E LD_LIBRARY_PATH=/system/lib:/system/vendor/lib "$@"

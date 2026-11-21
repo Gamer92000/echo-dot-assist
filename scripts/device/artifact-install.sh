@@ -69,7 +69,10 @@ fi
 A=.
 rm -rf $REQ $RES
 # a rename moves a link as a link; one name only (/data has no protected_hardlinks: a hard link to a file of root's)
-mv $A/request $REQ && [ -f $REQ ] && [ ! -L $REQ ] && set -- $(ls -ld $REQ 2>/dev/null) && [ "$2" = 1 ] ||
+# (the link count: stat where there is one; Android 5.1's toolbox has no stat, and its ls -l no count column: our toybox's
+# stat, on main.sh's PATH)
+links() { l=$(stat -c %h "$1" 2>/dev/null) && { echo $l; return; }; set -- $(ls -ld "$1" 2>/dev/null); echo $2; }
+mv $A/request $REQ && [ -f $REQ ] && [ ! -L $REQ ] && [ "$(links $REQ)" = 1 ] ||
     { rm -rf $REQ; exit 1; }
 ok=0
 : > $RES

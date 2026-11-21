@@ -833,8 +833,24 @@ def emit():
         m.append(("volmax", c))
 
     def wifion():
-        # w=0, w2's arguments 1..6 (as startscan)
+        # w=0, w2's arguments 1..6 (as startscan); Android 5.1 (sdk 22, rook) has setWifiEnabled(boolean): w1's arguments 1..4
         c = Code(7, 1)
+        c.const_string(1, "android.os.SystemProperties")
+        c.const_string(2, "get")
+        c.const_string(3, "java.lang.String")
+        c.const_string(4, "ro.build.version.sdk")
+        c.invoke(STATIC, "sinv", [1, 2, 3, 4]); c.move_result(1, True)
+        c.check_cast(1, STR)
+        c.const_string(2, "22")
+        c.invoke(VIRT, "str.eq", [1, 2]); c.move_result(1)
+        c.ifz(IFEQZ, 1, "new")
+        c.move(1, 0, True)
+        c.const_string(2, "setWifiEnabled")
+        c.const_string(3, "boolean")
+        c.sget_obj(4, "bool.T")
+        c.invoke_range(STATIC_RANGE, "w1", 1, 4); c.move_result(1, True)
+        c.goto_("done")
+        c.label("new")
         c.move(1, 0, True)
         c.const_string(2, "setWifiEnabled")
         c.const_string(3, "java.lang.String")
@@ -842,6 +858,7 @@ def emit():
         c.invoke(STATIC, "pkg", []); c.move_result(5, True)
         c.sget_obj(6, "bool.T")
         c.invoke_range(STATIC_RANGE, "w2", 1, 6); c.move_result(1, True)
+        c.label("done")
         okfail(c, 1, 2)
         m.append(("wifion", c))
 
@@ -877,6 +894,7 @@ REFLECTED = [
     ("Landroid/net/wifi/IWifiManager;", "removeNetwork", ["I", "Ljava/lang/String;"], False),
     ("Landroid/net/wifi/IWifiManager;", "reconnect", ["Ljava/lang/String;"], False),
     ("Landroid/net/wifi/IWifiManager;", "setWifiEnabled", ["Ljava/lang/String;", "Z"], False),
+    ("Landroid/net/wifi/IWifiManager;", "setWifiEnabled", ["Z"], False),                  # Android 5.1 (rook)
     ("Landroid/media/IAudioService$Stub;", "asInterface", ["Landroid/os/IBinder;"], True),
     ("Landroid/media/IAudioService;", "getStreamMaxVolume", ["I"], False),
     ("Landroid/media/IAudioService;", "setStreamVolume", ["I", "I", "I", "Ljava/lang/String;"], False),
@@ -913,6 +931,10 @@ for _m, _p in (("getConnectionInfo", (STR9,)), ("startScan", (STR9,)),
                ("addOrUpdateNetwork", ("Landroid/net/wifi/WifiConfiguration;", STR9)), ("enableNetwork", ("I", "Z", STR9)),
                ("removeNetwork", ("I", STR9)), ("reconnect", (STR9,))):
     ONLY_IF[("Landroid/net/wifi/IWifiManager;", _m, _p)] = API9
+
+API5 = "Landroid/net/wifi/BatchedScanSettings;"      # Android 5.1's: gone from 6.0 on
+ONLY_IF[("Landroid/net/wifi/IWifiManager;", "setWifiEnabled", ("Ljava/lang/String;", "Z"))] = "!" + API5
+ONLY_IF[("Landroid/net/wifi/IWifiManager;", "setWifiEnabled", ("Z",))] = API5
 
 PROG = Program(ME, SELF, reflected=REFLECTED, reflected_fields=REFLECTED_FIELDS, constants=CONSTANTS, only_if=ONLY_IF)
 

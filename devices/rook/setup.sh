@@ -1,0 +1,254 @@
+# Guided installation for the Echo Spot 1st gen (rook), run by scripts/setup.sh (bash, from the repository
+# root, with device.conf loaded and the helpers of scripts/lib/setup.sh).  The same steps, written out: README.md
+# next to this file.  Each step_<id> returns non-zero when it did not finish; the runner then offers retry, skip or
+# quit.  A step checks first whether its result is there already, so a rerun (or work done by hand) passes through
+# quietly.
+
+XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-spot-2017-rook.4754878/
+QEMU=toolchain/qemu-arm                     # magiskpolicy runs under it, against the unpacked firmware
+QEMU_URL=https://github.com/multiarch/qemu-user-static/releases/download/v7.2.0-1/qemu-arm-static
+QEMU_SHA256=9f07762a3cd0f8a199cb5471a92402a4765f8e2fcb7fe91a87ee75da9616a806
+NDK=toolchain/android-ndk-r21e
+NDK_URL=https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
+
+STEPS="
+tools|Tools on this PC
+files|Downloads
+udev|USB access to the Echo
+usb|Power and USB to the Echo
+unlock|Unlock, boot TWRP
+system|System partition
+root|Root boot image
+build|Build
+network|Lock down, join Wi-Fi
+install|Install
+"
+ROOTED_SKIP="usb unlock root"     # done on an Echo that is rooted already (scripts/setup.sh asks)
+NOTES=(
+    "The screen shows the light band; hassmic's own screen (the face, the drawer) is not built for this model (Android 5.1). Alexa's apps stay off while hassmic runs ($DDIR/README.md)."
+    "No Bluetooth and no Wi-Fi setup from a phone (Improv) on this model yet: the Wi-Fi is joined from this PC (scripts/wifi-join.sh) or on the settings page."
+    "adb over Wi-Fi: the settings page's debug access (http://<echo-ip>:28931/), as on the other Echos, opens it for 30 min."
+    "Updates: git pull, then scripts/ota-push.sh <echo-ip>."
+)
+
+# The firmware unpacked, whatever the build mode: the build links against its libraries, and every boot image is
+# made from it (install-boot.sh: qemu runs the policy tool against its linker), at the root step as at the install.
+# debugfs exits 0 whatever happens and rdump does not create its target (issue #4): the result is checked by hand.
+rootfs() {
+    [ -e $FW/rootfs/system/bin/linker ] && return 0
+    system_img && need_space 2500 "Unpacking the firmware" || return 1
+    task "Unpacking the firmware" sh -c "mkdir -p $FW/rootfs/system &&
+        debugfs -R 'rdump / $FW/rootfs/system' $FW/images/system.img && [ -e $FW/rootfs/system/bin/linker ]"
+}
+# The system partition's image, from the firmware's block OTA (system.new.dat), checked against SYSTEM_IMG_SHA256
+system_img() {
+    [ -f $FW/images/system.img ] && return 0
+    # system.new.dat (2.57-2.64 GB in checkers', crown's and cronos' .bin) and the image made from it (2.4 GB of
+    # data) side by side, until the first goes
+    need_space 5500 "Unpacking the system image" || return 1
+    task "Unpacking the system image" sh -c "unzip -o -q $FW/$FIRMWARE_FILE system.new.dat system.transfer.list -d $FW &&
+        mkdir -p $FW/images && python3 tools/sdat2img.py $FW/system.transfer.list $FW/system.new.dat $FW/images/system.img &&
+        rm -f $FW/system.new.dat $FW/system.transfer.list" || return 1
+}
+
+step_tools() {
+    command -v curl > /dev/null || need_tools curl || return 1
+    build_mode
+    space_ahead 7000 2500                 # the .bin, system.new.dat and the image; then the rootfs
+    # fastboot for the root step (install-boot.sh), python3 for otatool.py; what the unlock needs on this PC is the
+    # XDA thread's to say (step_unlock)
+    local unlock="fastboot python3"
+    rooted_already && unlock=python3
+    if [ "$BUILD_MODE" = prebuilt ]; then need_tools adb $unlock unzip debugfs sqlite3 curl sha256sum || return 1; return 0; fi
+    need_tools adb $unlock unzip make cc debugfs sqlite3 curl sha256sum || return 1
+}
+
+step_files() {
+    local need=()
+    # the firmware, rooted Echo or not, built here or not: the boot image is made from its boot.img and policy
+    need+=($FW/$FIRMWARE_FILE $FIRMWARE_SHA256 "Fire OS $FIRMWARE_ID, from Amazon: the link is in $DDIR/README.md")
+    # the unlock's files are not asked for here: the XDA thread says which (step_unlock)
+    need_files "${need[@]}" || return 1
+    # the policy is patched on the PC, under qemu against the unpacked firmware (qemu_arm: scripts/lib/setup.sh)
+    qemu_arm || return 1
+    # rook's own linker cannot run the policy tool: another model's unpacked firmware lends its linker (device.conf SEPOLICY_ROOTFS)
+    [ -n "$DRY" ] || [ -e $SEPOLICY_ROOTFS/system/bin/linker ] ||
+        { fail "no $SEPOLICY_ROOTFS: unpack another model's firmware there, for its linker ($DDIR/README.md)"; return 1; }
+    [ "$BUILD_MODE" = prebuilt ] && return 0          # nothing to build with
+    if [ -x $NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang ]; then ok "Android NDK r21e"; else
+        mkdir -p toolchain
+        need_space $NDK_MB "The Android NDK" || return 1
+        TASK_NOTE="du -h toolchain/ndk.zip | cut -f1" task "Downloading Android NDK r21e (1 GB)" curl -fsSL -o toolchain/ndk.zip $NDK_URL &&
+            task "Unpacking the NDK" unzip -q -o toolchain/ndk.zip -d toolchain && rm -f toolchain/ndk.zip || return 1
+    fi
+}
+
+# lets adb and fastboot reach the Echo without sudo (scripts/51-echo-unlock.rules: the Shows' fastboot id too)
+step_udev() { udev_rules; }      # scripts/lib/setup.sh
+
+step_usb() {
+    [ -z "$DRY" ] && { adb_is recovery || adb_is device; } && { ok "the Echo is on USB already"; return 0; }
+    todo "Sit the Echo near this PC, with its power supply and a micro-USB cable" \
+        "" \
+        "Nothing has to be opened: this model unlocks through its USB port." \
+        "Leave the Echo running normally for now; the cable goes in when the unlock step says so."
+}
+
+# TWRP's first screen: amonet's TWRP asks "Keep System Read only?" at every start until told otherwise.  Nothing here
+# writes /system from TWRP (the boot image goes in through fastboot, the files from the running Fire OS), and a system
+# mounted read-write by TWRP loses its dm-verity hashes for a stock boot image.  Its adb answers meanwhile; the answer
+# restarts TWRP's USB (MTP), so adb is gone for a few seconds after it (install-boot.sh waits for it).
+twrp_screen() {
+    tell "On the Echo's screen, TWRP may ask \"Keep System Read only?\"" \
+        "Tap \"Keep Read Only\" (tick \"Never show this screen during boot again\" if you like)." \
+        "Do not swipe to allow modifications: this setup needs none from TWRP."
+}
+
+step_unlock() {
+    twrp_or_unlocked "" twrp_screen; case $? in 0) return 0;; 2) return 1;; esac
+    unlock_thread amonet-rook "TWRP shows on the Echo's screen" || return 1
+    twrp_screen
+    [ -n "$DRY" ] || twrp_or_unlocked || return 1
+    warn "Leave the Echo in TWRP for now: stock Fire OS has no adb."
+}
+
+# ro.build.version.incremental of the system partition, read from TWRP (its own getprop is TWRP's build)
+twrp_system_build() {
+    ashell "mkdir -p /mnt/hm_sys; mount -o ro $SYSTEM_DEV /mnt/hm_sys 2>/dev/null
+            sed -n 's/^ro.build.version.incremental=//p' /mnt/hm_sys/build.prop; umount /mnt/hm_sys 2>/dev/null"
+}
+
+# The system partition must be the pinned build's: the root boot image is that build's boot.img, and hassmic links
+# against its libraries (an Echo Show 5 came out of the unlock with another build, 2026-10-13).  Written from TWRP
+# with dd, the image on the PC, and read back; nothing else is written.  Not TWRP's install of the .bin: its
+# updater-script also writes lk, tee1/tee2, the preloader (mmcblk0boot0) and an MBR.  amonet's TWRP points lk and tee
+# at /dev/null and boot0 is force_ro there, but a brick of those is permanent (README.md), so nothing rests on that.
+# The boot partition keeps the old build's image until the root step writes ours: no reboot in between.
+step_system() {
+    local b
+    if [ -z "$DRY" ] && adb_is device; then
+        b=$(ashell getprop ro.build.version.incremental)
+        [ "$b" = "$FIRMWARE_BUILD" ] && ! wipe_asked && { ok "the system is $FIRMWARE_ID already"; return 0; }
+        [ "$b" = "$FIRMWARE_BUILD" ] || info "the Echo runs build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD"
+        task "Restarting into TWRP" adb reboot recovery || return 1
+        twrp_screen
+    fi
+    wait_adb recovery || return 1
+    if [ -z "$DRY" ]; then
+        # build.prop lies in the first pieces: a write cut short says the right build too (an Echo Show 5, 2026-10-13: the step
+        # passed on that, and Fire OS found half its /system missing).  Only the whole partition's digest counts.
+        b=$(twrp_system_build)
+        if [ "$b" = "$FIRMWARE_BUILD" ]; then
+            task "Checking the system partition (1.7 GB, 2 min)" sh -c "[ \"\$(adb shell sha256sum $SYSTEM_DEV | tr -d '\r' | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" &&
+                { ok "the system is $FIRMWARE_ID already"; ! wipe_asked || wipe_data; return; }
+            info "its build.prop says $FIRMWARE_BUILD, but the partition is not all $FIRMWARE_ID's (a write cut short): it is completed"
+        else info "the Echo's system is build ${b:-unknown}, not $FIRMWARE_ID's $FIRMWARE_BUILD: it is replaced"; fi
+    fi
+    system_img || return 1
+    task "Checking the system image" sh -c "[ \"\$(sha256sum < $FW/images/system.img | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" ||
+        { fail "$FW/images/system.img is not $FIRMWARE_ID's: delete it and run this again"; return 1; }
+    if [ -z "$DRY" ]; then
+        local have want
+        have=$(ashell blockdev --getsize64 $SYSTEM_DEV) want=$(stat -c %s $FW/images/system.img)
+        [ "$have" = "$want" ] || { fail "the system partition holds $have bytes, the image $want: nothing written"; return 1; }
+    fi
+    wipe_data || return 1           # before the write: a run cut off after it finds the right system and stops above
+    warn "Keep the Echo on power and USB until the boot image is in (next step): until then it would not boot."
+    rm -f $OUT/system.progress
+    TASK_NOTE="cat $OUT/system.progress" task "Writing the system partition (1.7 GB, a few minutes)" write_system || return 1
+    task "Reading it back" sh -c "adb shell 'sync; echo 3 > /proc/sys/vm/drop_caches' &&
+        [ \"\$(adb shell sha256sum $SYSTEM_DEV | tr -d '\r' | cut -c1-64)\" = $SYSTEM_IMG_SHA256 ]" ||
+        { fail "the system partition does not read back as written: run this step again"; return 1; }
+}
+
+# write_system: the image in 64 MB pieces.  Each is compared first (sha256 of its range on the Echo, 2 s) and only a
+# different one is sent: adb push into TWRP's /tmp (tmpfs, 487 MB), dd into place, compared again.  So a write cut
+# short goes on where it stopped.  Not adb exec-in into dd: TWRP's adbd runs it on a pty, and the stream stalled for
+# good at 2.94 of 3.25 GB on the first Echo (2026-10-13; dd asleep in its read, adb asleep on the PC).  toybox's dd:
+# TWRP's own /sbin/dd refuses conv ("conv option disabled") and, given seek, truncates where it stopped writing.
+PIECE_MB=64
+write_system() {
+    local img=$FW/images/system.img tmp=$OUT/system.piece size n i want have
+    size=$(stat -c %s $img); n=$(( (size + PIECE_MB * 1048576 - 1) / (PIECE_MB * 1048576) ))
+    adb shell 'umount /system_root /system /mnt/hm_sys 2>/dev/null; true'
+    piece() { adb shell "toybox dd if=$SYSTEM_DEV bs=1048576 skip=$(( $1 * PIECE_MB )) count=$PIECE_MB 2>/dev/null | sha256sum" | tr -d '\r' | cut -c1-64; }
+    for ((i = 0; i < n; i++)); do
+        echo "$((i + 1))/$n" > $OUT/system.progress
+        dd if=$img of=$tmp bs=1048576 skip=$((i * PIECE_MB)) count=$PIECE_MB 2>/dev/null || return 1
+        want=$(sha256sum < $tmp | cut -c1-64)
+        [ "$(piece $i)" = "$want" ] && { echo "piece $i: as it should be"; continue; }
+        adb push $tmp /tmp/hm-piece > /dev/null || return 1
+        [ "$(adb shell sha256sum /tmp/hm-piece | tr -d '\r' | cut -c1-64)" = "$want" ] || { echo "piece $i: arrived damaged"; return 1; }
+        adb shell "toybox dd if=/tmp/hm-piece of=$SYSTEM_DEV bs=1048576 seek=$((i * PIECE_MB)) conv=notrunc 2>/dev/null; r=\$?; rm -f /tmp/hm-piece; sync; echo 3 > /proc/sys/vm/drop_caches; exit \$r" || return 1
+        have=$(piece $i)
+        [ "$have" = "$want" ] || { echo "piece $i: reads back as $have, not $want"; return 1; }
+        echo "piece $i: written"
+    done
+    rm -f $tmp $OUT/system.progress
+}
+
+step_root() {
+    [ -z "$DRY" ] && adb_is device && [ "$(ashell id -u)" = 0 ] && { ok "root adb already"; return 0; }
+    rootfs && magiskpolicy_get && adbd_get || return 1
+    # booted, adb as shell: an older boot image of ours (NS6570's own adbd never stays root) or stock with adb on;
+    # install-boot.sh takes it from the running OS as well as from TWRP
+    if [ -z "$DRY" ] && adb_is device; then info "adb is not root on the running Echo: its boot image is replaced"
+    else twrp_screen; wait_adb recovery || return 1; fi
+    # the rooted boot image from the firmware's own (root adb, no verify, the policy patched for our services);
+    # flashed in amonet's hacked fastboot, then the Echo boots Fire OS with root adb.  In the foreground: it may ask
+    # for the power to be replugged
+    live "Flashing the rooted boot image (the Echo reboots)" bash -o pipefail -c "scripts/install-boot.sh --boot-only 2>&1 | tee -a '$LOG'" || return 1
+    ok "root adb"
+    # online with Amazon it would update itself, and an update can close the way in
+    warn "Do not set the Echo up with the Alexa app or its touchscreen."
+}
+
+step_build() {
+    rootfs || return 1                  # the libraries to link against (the root step unpacked it already, as a rule)
+    if [ "$BUILD_MODE" = prebuilt ]; then task "Downloading the release build of this commit" build_binaries || return 1
+    else task "Building" build_binaries || return 1; fi
+    wait_adb device || return 1
+    task "Checking the Echo's firmware" sh -c 'out=$(scripts/probe.sh) && echo "$out" && ! echo "$out" | grep -q DIFFERENT' ||
+        { fail "the Echo runs another firmware than $FIRMWARE_ID: flash $FIRMWARE_FILE in TWRP first ($DDIR/README.md)"; return 1; }
+}
+
+step_network() {
+    local ssid pass new=
+    wait_adb device || return 1
+    task "Copying hassmic to the Echo" scripts/deploy.sh || return 1
+    # adb can drop out for a moment here, shortly after the boot (seen on an Echo Dot 2, issue #2)
+    wait_adb device || return 1
+    # Stock's init.rook.rc opens adb over Wi-Fi at every boot ("setprop service.adb.tcp.port 5555", on boot).
+    # lockdown.sh closes it by restarting adbd, and init kills adbd's process group with it: the adb shell that runs
+    # lockdown.sh, before it says a word (an Echo Show 5, 2026-10-13: "Service 'adbd' killed by signal 9 ... killing
+    # any children").  So it is closed here first, and adb waited for.
+    if [ -z "$DRY" ] && [ "$(ashell getprop service.adb.tcp.port)" = 5555 ]; then
+        info "closing adb over Wi-Fi (stock opens it at boot); adb restarts"
+        adb shell 'setprop service.adb.tcp.port 0; setprop ctl.restart adbd' > /dev/null 2>&1; sleep 3
+        wait_adb device || return 1
+    fi
+    task "Locking down the Echo's internet access" sh -c 'adb shell sh /data/local/hassmic/lockdown.sh &&
+        adb shell iptables -S hassmic_out | grep -q -- "-j DROP"' || return 1
+    # Before the Echo is online: Amazon's setup screen would ask to be set up on the touchscreen (a wiped Fire OS shows
+    # it), and Alexa's apps would start talking.  alexa-off.sh disables both (noted for alexa-on.sh) and tells Android
+    # setup is done; the install's satellite start runs it again and finds nothing left to do.
+    task "Switching off Alexa's apps and Amazon's setup screen" sh -c 'adb shell sh /data/local/hassmic/alexa-off.sh;
+        [ "$(adb shell settings get global device_provisioned | tr -d "\r")" = 1 ] &&
+        ! adb shell pm list packages -e | tr -d "\r" | grep -qx package:com.amazon.ds2.oobe.efd' || return 1
+    if [ ! -f secrets/wifi.conf ]; then
+        prompt ssid "Wi-Fi name (WPA2, same network as Home Assistant)"
+        prompt pass "Wi-Fi password" "" -s
+        [ -n "$DRY" ] || { mkdir -p secrets; ( umask 077; printf '%s\n%s\n' "$ssid" "$pass" > secrets/wifi.conf ); new=1; }
+    fi
+    # a typo in what was just typed would otherwise be retried forever
+    task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$new" ] && rm -f secrets/wifi.conf; return 1; }
+    # the Wi-Fi profile survives a reboot (Android's WifiConfigStore), the egress lock does not until the install
+    warn "Do not restart the Echo until it is installed."
+    info "Tip: give it a fixed address in your router (DHCP reservation)."
+}
+
+step_install() {
+    rootfs && magiskpolicy_get && adbd_get || return 1        # again: the steps before may have been skipped
+    install_satellite       # no Kiosk Satellite: Android 5.1
+}
+

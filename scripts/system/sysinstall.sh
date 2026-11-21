@@ -34,10 +34,19 @@ LSTOCK=/system/etc/layer_config_common.json.pre-hassmic
 ACSIDX="acs_animation_list.txt acs_animation_count.txt acs_animation_name_list.txt acs_auto_stop_conf.txt layer_config_common.txt"
 ours_in() { if [ -f "$1/acs_animation_list.txt" ] && ls "$1"/*.hassmic_*.animation_bin > /dev/null 2>&1; then ls "$1"/*.hassmic_*.animation_bin; else ls "$1"/hassmic_*.animation 2>/dev/null; fi; }
 SYSLABEL=u:object_r:system_file:s0
+# Android 5's toolbox (rook) has no stat, cut, wc, tail and its cmp no -s: the toybox that comes with us (main.sh does the
+# same) fills in what the system lacks, after the system's own applets
+if [ -x "$SRC/toybox" ]; then
+    TB=/data/local/tmp/hm-sysinstall-tb; rm -rf $TB; mkdir -p $TB; trap 'rm -rf /data/local/tmp/hm-sysinstall-tb' EXIT   # not main.sh's: these point at SRC
+    for a in $("$SRC/toybox"); do [ -e /system/bin/$a ] || [ -e /system/xbin/$a ] || ln -sf "$SRC/toybox" $TB/$a; done
+    PATH=$PATH:$TB
+    # their du and df lack -k (the room checks below read kilobytes): ours, by name
+    du() { "$SRC/toybox" du "$@"; }; df() { "$SRC/toybox" df "$@"; }
+fi
 say() { echo "sysinstall $MODE: $*"; }
 case "$MODE" in install|factory|uninstall|leds) ;; *) say "usage: sysinstall.sh install|factory|uninstall|leds SRC [DIR]"; exit 2;; esac
 [ -x "$SRC/otatool" ] || { say "no $SRC/otatool"; exit 1; }
-[ "$(id -u)" = 0 ] || { say "needs root"; exit 1; }
+case "$(id)" in uid=0\(*) ;; *) say "needs root"; exit 1;; esac       # not id -u: Android 5's id ignores the flag
 
 if [ "$MODE" = leds ]; then
     L=$3
@@ -82,6 +91,8 @@ if [ "$(conf_get INSTALL)" = cannoli-ubi ]; then
         { say "Cannoli boot integration changed; install a matching TWRP ZIP first"; exit 1; }
     KEEP_INIT=1
 fi
+# Android 5 (rook) starts services only from the rc files of the boot ramdisk, where install-boot.sh appended ours
+[ -z "$(conf_get RAMDISK_RC)" ] || KEEP_INIT=1
 POLICY=$(conf_get SEPOLICY_FILE); POLICY=${POLICY:-/sepolicy}
 PVOL=; case "$POLICY" in /vendor/*) PVOL=/vendor;; esac       # the partition the policy is on, when it is not /system's
 # that partition writable only when the policy is written: a factory copy (every promoted update) or leds never touch it
@@ -92,7 +103,7 @@ PLABEL=$SYSLABEL; [ -z "$PVOL" ] || PLABEL=$(ls -dZ $POLICY 2>/dev/null | cut -d
 # /system, not $H: otatool resolves the path it is given, and $H does not exist before the first install or after uninstall
 "$SRC/otatool" remount rw /system > /dev/null || exit 1
 [ -z "$PVOL" ] || "$SRC/otatool" remount rw $PVOL > /dev/null || { "$SRC/otatool" remount ro /system > /dev/null; exit 1; }
-trap '"$SRC/otatool" remount ro /system > /dev/null || say "partition still writable, the next boot mounts it read-only"
+trap '[ -z "$TB" ] || rm -rf "$TB"; "$SRC/otatool" remount ro /system > /dev/null || say "partition still writable, the next boot mounts it read-only"
       [ -z "$PVOL" ] || "$SRC/otatool" remount ro $PVOL > /dev/null || say "$PVOL still writable, the next boot mounts it read-only"' EXIT
 
 # new DEST from FILE with MODE OWNER LABEL: written beside DEST as DEST.new; nothing if DEST already has that content.
@@ -103,7 +114,7 @@ trap '"$SRC/otatool" remount ro /system > /dev/null || say "partition still writ
 # same way, so files in / end up system_file, as TWRP's install has left /sepolicy.pre-hassmic.
 staged=
 new() {
-    cmp -s "$2" "$1" && [ "$(stat -c %a:%u:%g "$1")" = "$3:$4" ] && return 0
+    cmp "$2" "$1" > /dev/null 2>&1 && [ "$(stat -c %a:%u:%g "$1")" = "$3:$4" ] && return 0
     tmp=$1.new; [ -n "${1%/*}" ] || tmp=/system$1.new
     rm -f "$1.new" "$tmp"
     cp "$2" "$tmp" && chown "$4" "$tmp" && chmod "$3" "$tmp" && chcon "$5" "$tmp" &&
@@ -191,7 +202,7 @@ home=$(. "$SRC/device.conf" 2>/dev/null && echo "$HOME_APK")
 kb=0
 cost() {        # cost FILE DEST: kb + what FILE takes on /system written as DEST
     [ -f "$1" ] || return 0
-    [ -f "$2" ] && cmp -s "$1" "$2" && return 0
+    [ -f "$2" ] && cmp "$1" "$2" > /dev/null 2>&1 && return 0
     k=$(du -k "$1"); k=${k%%[!0-9]*}; kb=$((kb + ${k:-0}))
 }
 wa=
@@ -265,7 +276,7 @@ commit
 # left no room for new ones: a word file whose .was is gone or another is refused by its checks, never read wrong
 if [ "$SRC" != $H ]; then
     for f in $H/*.wa $H/*.was; do
-        [ -e "$f" ] && ! cmp -s "$f" "$SRC/${f##*/}" && rm -f "$f"
+        [ -e "$f" ] && ! cmp "$f" "$SRC/${f##*/}" > /dev/null 2>&1 && rm -f "$f"
     done
 fi
 stock_apps "$(. "$SRC/device.conf" 2>/dev/null && echo "$STOCK_APPS_OUT")"

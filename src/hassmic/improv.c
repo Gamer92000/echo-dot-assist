@@ -33,6 +33,7 @@
 #include "board.h"
 #include "core.h"
 #include "wifi.h"
+#include "compat.h"
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>

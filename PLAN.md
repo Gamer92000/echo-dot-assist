@@ -3595,6 +3595,27 @@ Run in this order. Each step says what it proves.
       1280 x 800 at rotation 1 (`user_rotation`; `ro.sf.hwrotation` 90 only MediaTek's hwcomposer and magd read, below
       Android: the band laid out by DisplayInfo was right), FocalTech touch; the layout
       drawn at 1280 x 774 by uishot (docs/re-crown.md "Screen UI").  Not yet on the Echo.
+- [~] Echo Spot 1st gen (`rook`, 2026-11-20; issue #69).  MT8163 with Android 5.1.1 (API 22), Fire OS 5.5.6.9
+      (304.6.9.0_user_690918120, LVY48F on every 5.5.x build: `ro.build.version.incremental` and `probe.md5` tell them apart),
+      aarch64 3.18.19 kernel under a 32-bit userland, Broadcom Wi-Fi/Bluetooth, round 480x480 screen, OpenSL ES audio (as
+      checkers; the front end in the audio HAL), no ring and no action button (the light band; volume keys on `keys`, mute
+      = KEY_POWER on `mtk-kpd` with the latch `privacy_state`).  `devices/rook/` from crown's; stubs byte-identical, in CI.
+      Android 5.1 differences: init reads rc files from the boot ramdisk only (`RAMDISK_RC`: `mkbootroot.py --init-rc`
+      appends `hassmic.rc` to `init.rook.rc`), binder numbers of API 22 (`audio_android.c`), a toolbox without sed, tr, cut,
+      head, tail, wc, pkill, pidof, timeout, awk (our toybox 0.8.4, `tools/toybox.sh`, on `main.sh`'s PATH), no
+      getifaddrs/if_nameindex/open_memstream (`compat.c`).  Installed on a real Spot: boots in 40-50 s, adb root, SELinux
+      enforcing, HA (ESPHome, encrypted), wake word, TTS, volume, mute; Amazon's OOBE kept off by `pm disable` (it ignores the
+      provisioning flags), Settings' boot dialog stopped, the Wi-Fi bounce stopped (`smartconn_status`).
+      System UI and tcomm are taken off /system (STOCK_APPS_OUT): both crash at
+      boot/10 min without Alexa's client and pm disable does not hold persistent apps; "System UI has stopped" and "Amazon
+      Communication Services has stopped" dialogs, whose buttons the band's rows hid.  The band is an arc on the round glass
+      (board.round_px, ring_band.c arc_frame, 40 rows default).  Android 5.1's ls -l has no link count column: the root
+      helpers' hard-link checks use stat (toybox).  The newer Alexa model (DETECTION_AUXILIARY) does not load on this libpryon.
+      Open: a segfault twice right after the first model install (whisper/aed copied, no backtrace: debuggerd failed to attach;
+      stable since), the policy tool needs a modern bionic linker (rook's lacks DT_GNU_HASH: SEPOLICY_ROOTFS borrows another
+      model's), `--uninstall` untried on the unit,
+      volume curve (the Dot 2's), light sensor, speaker gain, Bluetooth (no /dev/stpbt; ttyMT1), Wi-Fi motion (Broadcom),
+      DHA token for "Download from Amazon", Amazon's wake sound, arbitration with other Echos.
 - [~] Echo Show: speech on screen (2026-11-03, PR #104 by taucher4000).  What was said, the reply and the timers, as
       stock's Alexa screens and Kiosk Satellite show them.  The PR's first form drew with stb_truetype in hassmic and
       showed it through a second ringbar.dex in a text mode, one layer over the screen UI's (drawer and music under the

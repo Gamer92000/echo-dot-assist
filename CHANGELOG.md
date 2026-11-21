@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-20
+
+- **Echo Spot 1st gen (`rook`): first support.** The Spot becomes a Home Assistant voice satellite: wake word, replies,
+  volume keys, mic mute, and the light ring as a band on the round screen. Install by hand or with `scripts/setup.sh rook`,
+  after the unlock by its XDA thread. Not yet: Bluetooth (so no Wi-Fi setup from a phone: join Wi-Fi from the PC or the
+  settings page), Wi-Fi motion, "Download from Amazon", hassmic's own screen. The light ring is an arc along the round glass's
+  lower edge ("Light band", 40 rows by default). [devices/rook/README.md](devices/rook/README.md)
+
 ## 2026-11-18 — The language you speak, from the right time zone
 
 - **A Portuguese "Alexa" in Brazil finds where the wake word ends by its sounds again.** Since more languages came to

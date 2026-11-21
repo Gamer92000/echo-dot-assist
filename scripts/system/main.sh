@@ -18,6 +18,13 @@ SYS=${HASSMIC_SYS:-/system/hassmic}
 OTA=/data/local/hassmic/ota
 CONF=/data/local/hassmic/hassmic.conf
 LOG=/data/local/hassmic/boot.log
+# A model whose Android has no toybox (rook, Android 5.1) ships ours (tools/toybox.sh): the applets the system lacks go on
+# PATH, after the system's own, so nothing that exists changes
+if [ -x $D/toybox ]; then
+    TB=/data/local/hassmic/tb; mkdir -p $TB
+    for a in $($D/toybox); do [ -e /system/bin/$a ] || [ -e /system/xbin/$a ] || ln -sf $D/toybox $TB/$a; done
+    PATH=$PATH:$TB
+fi
 # Every line of the log starts with when it was written (src/hassmic/clock.c says why): UTC once the clock was set from
 # Home Assistant since boot (property hassmic.clock.synced, set below), else seconds since boot.  hassmic stamps its own
 # lines; say for single lines from here, stamped for what a long-running piece writes.  Not for what goes on a pipe
@@ -184,7 +191,7 @@ take() {
     local t=$TAKEN.$1
     [ -e /data/local/hassmic/state/$1 ] || [ -L /data/local/hassmic/state/$1 ] || return 1
     rm -rf $t; mv -f /data/local/hassmic/state/$1 $t 2>/dev/null || return 1      # rm -rf: never follows a link
-    if [ -f $t ] && [ ! -L $t ] && set -- $(ls -ld $t 2>/dev/null) && [ "$2" = 1 ]; then echo $t; return 0; fi
+    if [ -f $t ] && [ ! -L $t ] && [ "$(stat -c %h $t 2>/dev/null || { set -- $(ls -ld $t 2>/dev/null); echo $2; })" = 1 ]; then echo $t; return 0; fi
     rm -rf $t; return 1
 }
 clock_set() {
@@ -266,6 +273,9 @@ avahi_start() {
         { echo "[server]"; echo "host-name=$node"; echo "enable-dbus=warn"; grep -v -e '^\[server\]' -e '^enable-dbus=' $conf; } > /data/misc/avahi/avahi-daemon.conf
         conf=/data/misc/avahi/avahi-daemon.conf
     fi
+    # avahi leaves an interface without IFF_MULTICAST alone, and Android 5.1's Broadcom Wi-Fi comes up without it (rook,
+    # 2026-11-20: <BROADCAST,UP,LOWER_UP>, no mDNS, Home Assistant never found the Echo): set again at every (re)start
+    [ -z "$WLAN" ] || ip link set $WLAN multicast on > /dev/null 2>&1
     stop avahi-daemon; pkill avahi-daemon
     while [ $i -lt 5 ] && pidof avahi-daemon > /dev/null; do sleep 1; i=$((i + 1)); done
     sleep 2

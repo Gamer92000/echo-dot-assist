@@ -2,6 +2,13 @@
 # Start the satellite in the foreground.  Extra arguments go to hassmic (e.g. -P wyoming, -w remote, -E, -V).
 D=/data/local/hassmic
 . $D/device.conf || exit 1
+# A model whose Android has no toybox (rook, Android 5.1) ships ours (tools/toybox.sh): the applets the system lacks go on
+# PATH, after the system's own, so nothing that exists changes
+if [ -x $D/toybox ]; then
+    TB=/data/local/hassmic/tb; mkdir -p $TB
+    for a in $($D/toybox); do [ -e /system/bin/$a ] || [ -e /system/xbin/$a ] || ln -sf $D/toybox $TB/$a; done
+    PATH=$PATH:$TB
+fi
 sh $D/alexa-off.sh >/dev/null
 mkdir -p $D/state && chown $DAEMON_USER $D/state    # settings changed from Home Assistant (runs as DAEMON_USER)
 [ -n "$UX_SERVICE" ] && stop $UX_SERVICE

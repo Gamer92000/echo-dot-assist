@@ -1,0 +1,13 @@
+U __aeabi_unwind_cpp_pr0
+U __aeabi_unwind_cpp_pr1
+T opus_decoder_create
+T opus_decoder_destroy
+T opus_decode
+T opus_encoder_create
+T opus_encode
+T opus_encoder_ctl
+T opus_encoder_destroy
+T main
+T _edata
+T __bss_start
+T _end
