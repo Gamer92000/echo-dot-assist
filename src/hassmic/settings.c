@@ -195,9 +195,11 @@ static const struct setting table[NSET] = {
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* proto_esphome.c's "Wake word" event entity (core_wake_events, issue #48) */
     [WAKE_EVENTS] = { "wake_events", "Wake word events", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
-    /* plugin.c: programs beside hassmic, in a sandbox.  Not exported: what it switches on is what this Echo has
-     * installed.  A feature: proto_esphome.c's "Plugin" event entity is listed while it is on (docs/plugins.md 5.4) */
-    [PLUGINS]     = { "plugins", "Plugins", "Features", NULL, S_BOOL, 0, 1, 0, 1 },
+    /* plugin.c: programs beside hassmic, in a sandbox.  Exported, copied by Compare & copy and taken from an import
+     * and a preset (the owner's decision, 2026-11-24): switched on, it runs what this Echo has installed, which its
+     * owner accepted there with its action button, and installs nothing by itself: every install still takes that
+     * Echo's button.  A feature: proto_esphome.c's "Plugin" event entity is listed while it is on (docs/plugins.md 5.4) */
+    [PLUGINS]     = { "plugins", "Plugins", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* plugin.c, plugin_store.c: plugins the plugin index does not list as official (its community listings, files)
      * installed and run at all (docs/plugins.md 2.7, 3.3).  Off by default; a setting of the page's as any other, on
      * and off from an approved browser (no press: every such plugin is installed with the action button all the
@@ -576,11 +578,16 @@ static size_t format(const struct setting *s, char *out, size_t cap)
 
 /* Applied before the rest, whatever order a file has them in (state/config by hand, an import): switching seeds what
  * comes after it (separate volumes the levels, following the music the offset), and the saved values must then win.
- * Community plugins too: the wake word engine is judged by that switch (plugin_store.c ps_engine_refused), and an
- * export lists the engine first, so an import, "make like this Echo" or a preset that switches them on and chooses a
+ * Community plugins too: the wake word engine is judged by that switch (plugin_store.c ps_engine_refused), and the
+ * table lists the engine first, so an import, "make like this Echo" or a preset that switches them on and chooses a
  * community plugin as the engine had the engine refused (a review of 00d492a, 1); first, one request ends the same
- * whatever order its lines come in */
+ * whatever order its lines come in.  And plugins themselves before all of them (rank 0): the community switch and the
+ * engine are about plugins, and an Echo with plugins off that takes plugins=on, plugins_community=on and
+ * wake_engine=plugin:<id> in one request ends as one that took them one by one in that order.  An export lists the two
+ * plugin switches first as well (settings_text), so the file reads in the order it is applied */
 static int switches(int i) { return i == VOL_SPLIT || i == ASSIST_LINK || i == SOUNDS_LINK || i == TIMER_LINK || i == CALL_LINK || i == COMMUNITY; }
+#define RANKS 3
+static int rank(int i) { return i == PLUGINS ? 0 : switches(i) ? 1 : 2; }
 
 /* What state/config holds: the settings no other module keeps */
 static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS && i != EQ_MID && i != EQ_TREBLE && i != BT_OUT_DELAY && i != VOLUME; }
@@ -679,12 +686,12 @@ void settings_load(void)
         return;
     }
     loading = 1;
-    for (int pass = 0; pass < 2; pass++, rewind(f)) while (line_of(line, sizeof line, f)) {
+    for (int pass = 0; pass < RANKS; pass++, rewind(f)) while (line_of(line, sizeof line, f)) {
         char *eq = strchr(line, '='), *v; int x;
         if (line[0] == '#' || !eq) continue;
         *eq = 0; v = eq + 1; v[strcspn(v, "\r\n")] = 0;
         for (int i = 0; i < NSET; i++) {
-            if (strcmp(table[i].name, line) || !ours(i) || switches(i) != !pass || parse(&table[i], v, &x)) continue;
+            if (strcmp(table[i].name, line) || !ours(i) || rank(i) != pass || parse(&table[i], v, &x)) continue;
             /* the ring's level only counts with auto off: ledcontroller started its own auto at boot.  The band's
              * height main.c set before the band started (settings_peek: a preset not applied yet included); the
              * config's here would flip it to that and back to the preset's */
@@ -708,7 +715,10 @@ void settings_preset(void)
     /* plugins and community plugins as this start ends up with them, told once: settings_load only noted state/config's
      * (put), and the preset's went through settings_set to plugin.c and the store, which had it already from main.c
      * (settings_peek: config, then the preset).  Nothing changes here then, but where the preset could not be applied
-     * after all (unreadable), state/config's value is the one that stands, and they follow it now, once */
+     * after all (unreadable), state/config's value is the one that stands, and they follow it now, once.  The store's
+     * community switch before plugin.c's own: plugin_feature starts what may run (start_all), and the store has the
+     * switch it judges that by.  The order an import applies them in (rank: plugins, then community) is the engine's
+     * concern (settings_set's wake_engine, judged by the switch as it is then), and the engine is chosen by now */
     plugin_community(community);
     plugin_feature(plugins);
 }
@@ -808,8 +818,11 @@ size_t settings_text(char *out, size_t cap, int export_only)
 {
     size_t n = 0; char v[48];
     index_table();
-    for (int i = 0; i < nids && n < cap; i++) {
+    /* an export: the two plugin switches first, in the order settings_apply_text applies them (rank), then the table's
+     * (the wake word engine its first row) */
+    for (int pass = 0; pass < (export_only ? 2 : 1); pass++) for (int i = 0; i < nids && n < cap; i++) {
         const struct setting *s = &table[ids[i]];
+        if (export_only && (ids[i] == PLUGINS || ids[i] == COMMUNITY) != !pass) continue;
         if (export_only && !s->export_) continue;
         /* a level fixes it (auto off): with auto on, the level is only what the room made it */
         if (export_only && ids[i] == LED_LEVEL && present(LED_AUTO) && core_led_auto(-1)) continue;
@@ -854,7 +867,7 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
 {
     int applied = 0; size_t en = 0;
     if (errsz) err[0] = 0;
-    for (int pass = 0; pass < 2; pass++) for (const char *p = text; *p; ) {
+    for (int pass = 0; pass < RANKS; pass++) for (const char *p = text; *p; ) {
         char line[SETTINGS_LINE_MAX], *eq, *v; size_t l = strcspn(p, "\n");
         snprintf(line, sizeof line, "%.*s", (int)(l < sizeof line - 1 ? l : sizeof line - 1), p);
         p += l + (p[l] == '\n');
@@ -863,7 +876,7 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
         if (!*k || *k == '#' || !(eq = strchr(k, '='))) continue;
         *eq = 0; v = eq + 1;
         const struct setting *s = settings_find(k);
-        if ((s && switches((int)(s - table))) != !pass) continue;      /* switches first */
+        if ((s ? rank((int)(s - table)) : RANKS - 1) != pass) continue;   /* plugins, the switches, then the rest */
         char e[160];
         if (!settings_set(k, v, e, sizeof e)) applied++;
         else if (en < errsz) en += (size_t)snprintf(err + en, errsz - en, "%s\n", e);

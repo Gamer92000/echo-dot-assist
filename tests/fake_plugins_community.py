@@ -9,7 +9,9 @@ the plugin index does not list as official (a file, a community listing) refused
 (switched off between the two), such a plugin installed already stopped and kept, its card saying why, an official one
 untouched; such a wake word engine down with words that say which switch, and not chosen as the engine; on again, it
 runs without being installed again; one request (an export's lines) that switches them on and chooses such an engine
-takes both, one that switches them off refuses the engine, in either order.  Over restarts: the switch as it was left;
+takes both, one that switches them off refuses the engine, in either order; the plugins switch exported as well (the
+owner's decision, 2026-11-24), an export listing plugins, community plugins and the engine in that order, and one
+request with all three taken on an Echo with plugins off, whatever order its lines come in.  Over restarts: the switch as it was left;
 no line for it in state/config: off, whatever is installed (no first start's rule); a preset that says otherwise than
 state/config settles the start once (never turned and back); on, with a community wake word engine: started in main(),
 never refused at the start.  The sandbox's state line and what the page reads for the warning (in /api/plugins and in
@@ -138,7 +140,8 @@ def main():
         check(r.get("applied") == 2 and plugins(b).get("community") is True and until(lambda: (plug(b, "sideplug") or {}).get("state") == "running"),
               f"one saying on switches it on, and the plugin installed here runs: {r}")
         st, _, body = b.call("GET", "/api/export")
-        check(re.search(rb"(?m)^plugins_community=on$", body) and not re.search(rb"(?m)^plugins=", body), "(the plugins switch itself stays out of exports: what it runs is this Echo's)")
+        check(re.search(rb"(?m)^plugins_community=on$", body) and re.search(rb"(?m)^plugins=on$", body),
+              "the plugins switch itself is exported too (the owner's decision, 2026-11-24: each install still takes the Echo's button)")
 
         # ---- the wake word engine a community plugin
         st, r = install(b, proc, package("file", id="sidewake", name="Side wake word"), "sidewake")
@@ -161,8 +164,11 @@ def main():
         check(until(lambda: (plug(b, "sidewake") or {}).get("community_off") is True), "(the plugin marked by the scan while they are off)")
         st, _, exp = b.call("GET", "/api/export")
         exp = exp.decode(); keys = [l.split("=", 1)[0] for l in exp.splitlines()]
-        check("wake_engine" in keys and "plugins_community" in keys and keys.index("wake_engine") < keys.index("plugins_community"),
-              "(an export lists the engine before the switch)")
+        check("wake_engine" in keys and "plugins_community" in keys and "plugins" in keys and keys.index("plugins") < keys.index("plugins_community") < keys.index("wake_engine"),
+              f"an export lists plugins, then community plugins, then the engine, the order they are applied in: {[k for k in keys if k in ('plugins', 'plugins_community', 'wake_engine')]}")
+        # (the order on the wire is no help: the lines below are put back in the table's, the engine first, as an export
+        # of before and a file edited by hand may have them)
+        exp = "\n".join([l for l in exp.splitlines() if l.startswith("wake_engine=")] + [l for l in exp.splitlines() if not l.startswith("wake_engine=")]) + "\n"
         on = re.sub(r"(?m)^wake_engine=.*$", "wake_engine=plugin:sidewake", re.sub(r"(?m)^plugins_community=.*$", "plugins_community=on", exp))
         st, _, body = b.call("POST", "/api/set", on.encode()); r = json.loads(body)
         check(st == 200 and not r.get("errors") and cfg().get("wake_engine") == "plugin:sidewake" and cfg().get("plugins_community") == "on" and plugins(b).get("community") is True,
@@ -174,6 +180,19 @@ def main():
             st, _, rb = b.call("POST", "/api/set", body); r = json.loads(rb)
             check(r.get("applied") == 1 and "community plugins are switched off" in r.get("errors", "") and cfg().get("wake_engine") == "amazon" and cfg().get("plugins_community") == "off",
                   f"off and the community plugin as the engine in one request ({body.splitlines()[0].decode()} first): off taken, the engine refused: {r}")
+        # ---- the same onto an Echo with plugins off: plugins, community plugins and the engine in one request, the
+        # engine's line first and plugins' last: all three taken, and the engine's plugin runs
+        b.set(wake_engine="amazon"); community(b, "off")
+        check(b.set(plugins="off").get("applied") == 1 and until(lambda: not fp.plugin_pids(state)), "plugins off: none runs")
+        three = re.sub(r"(?m)^plugins=.*\n", "", re.sub(r"(?m)^wake_engine=.*\n", "", on)); three = "wake_engine=plugin:sidewake\n" + three + "plugins=on\n"
+        check(re.search(r"(?m)^plugins_community=on$", three) and not re.search(r"(?m)^plugins=off$", three), "(the request says on for both switches)")
+        st, _, body = b.call("POST", "/api/set", three.encode()); r = json.loads(body)
+        check(st == 200 and not r.get("errors") and cfg().get("plugins") == "on" and cfg().get("plugins_community") == "on" and cfg().get("wake_engine") == "plugin:sidewake"
+              and plugins(b).get("community") is True,
+              f"an export saying plugins on, community plugins on and the community plugin as the engine, applied where plugins are off: all three taken in one request: {r.get('errors')} {cfg().get('plugins')} {cfg().get('plugins_community')} {cfg().get('wake_engine')}")
+        check(until(lambda: (plug(b, "sidewake") or {}).get("state") == "running", 15) and not re.search("switched off", plugins(b).get("wake_why", "")),
+              f"and the engine's plugin runs: {(plug(b, 'sidewake') or {}).get('state')} {plugins(b).get('wake_why')}")
+        b.set(wake_engine="amazon"); community(b, "off")
         st, r = post(b, "/api/plugins/sidewake/remove", "remove")
         check(st == 200 and not plug(b, "sidewake"), f"removed while off, without the button (two plugins run at once on the PC's build: room for the rest): {st} {r}")
     finally:

@@ -1205,7 +1205,11 @@ hassmic also has built in, deprecated there: [Move to the plugin](#microwakeword
 
 - **Switching them on**: the settings page's Plugins page, "Plugins". Off, no plugin runs. Below the switch: the
   plugins installed on this Echo, one card each ("Update" on a card where the plugin index has a newer version for
-  this hassmic, with a button on its foot), "Browse plugins" and "Install from file…".
+  this hassmic, with a button on its foot), "Browse plugins" and "Install from file…". The switch is exported and
+  copied between Echos with your other settings ("Compare & copy", "make like this Echo", an import, a preset): on
+  another Echo it runs only the plugins installed there, and every install there takes that Echo's action button.
+  A file that switches plugins and community plugins on and picks a plugin as the wake word engine is applied in
+  that order, whatever order its lines are in.
 - **Community plugins** (a switch of its own under "Plugins", **off by default**): everything the plugin index does
   not list as official, which is its community listings and any package from a file. Off, the Echo installs none of
   them, whichever way they come (a file, the index, a copy from another Echo, a push), and stops the ones it has:

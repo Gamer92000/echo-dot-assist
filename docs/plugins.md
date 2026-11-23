@@ -578,10 +578,15 @@ included, as for `plugins`) before the first scan, so nothing it keeps off start
 notes `state/config`'s value of both switches, and `settings_preset` tells them once at its end, so a preset that says
 otherwise than `state/config` no longer turns them to the config's and back on the way (a review of 00d492a, 4; a
 preset too long to apply leaves the config's, told then, once).  In one request (an import, Compare & copy, "make like
-this Echo", a preset) the switch is applied before the other lines (`settings.c` `switches()`), and the wake word
+this Echo", a preset) the switch is applied before the other lines but one (`settings.c` `switches()`, `rank()`:
+`plugins` first of all, then the community switch with the other switches, then the rest; an export lists the two
+plugin switches first, the engine after them), and the wake word
 engine is judged by the switch as it is then (`ps_community_keeps_off`), never by the scan's mark alone, which lags it
-until the broker rescans: an export saying on with a community plugin as the engine (its lines in the export's order,
-the engine first) had the engine refused (a review of 00d492a, 1).  The switch's dialog, and the install dialog of
+until the broker rescans: an export saying on with a community plugin as the engine (its lines in the export's order
+then, the engine first) had the engine refused (a review of 00d492a, 1).  **The plugins switch** (`plugins`) is
+exported the same way since 2026-11-24 (the owner's decision: switching plugins on is no risk by itself; on another
+Echo it runs only what that Echo's owner installed there, and every install still takes its action button); it was
+kept out of exports before, as "what it switches on is this Echo's".  The switch's dialog, and the install dialog of
 every plugin that is not official (`web/plugins.js` `hmwall.of`, from the installing Echo's check: `check_json`
 `sandbox`, `install_method`), have the warning above in full where the sandbox is "hassmic" or "su", worded by
 `install_method` (the Makefile's `INSTALL_METHOD`, device.conf `INSTALL`): `twrp-ab` and `running` "run the system install again: `scripts/install-system.sh` (or `scripts/setup.sh

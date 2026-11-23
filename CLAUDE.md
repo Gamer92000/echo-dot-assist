@@ -727,7 +727,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   crown with its drvV3 2026-10-14, checkers with Java MAP's drvV1 2026-10-13 (whisper not allowlisted for its device type), all amazon.de; what it answers in docs/re-davs-login.md, which also has the drvV3 analysis).  The page offers
   every Amazon site with Alexa (davs.c's list), any of the account's region works.
 - **Plugins** (`plugin.c`, `plugin_store.c`, `src/tools/plugrun.c`, `sdk/`, `plugins/`; design and state in
-  `docs/plugins.md`, section 13 what is built; experimental, setting `plugins`, off): programs beside hassmic, each
+  `docs/plugins.md`, section 13 what is built; experimental, setting `plugins`, off, exported like the community switch since 2026-11-24: the owner's decision,
+  every install still takes the Echo's button): programs beside hassmic, each
   a static binary in a sandbox.  `main.sh` starts hassmic as `plugrun -L -- runas ...` (`PLUGINS=0` in hassmic.conf:
   without): plugrun leaves a root launcher behind (init's child) and becomes runas; hassmic finds the socketpair as
   `HASSMIC_PLUGIN_FD` (`src/include/plugrun.h`: READY, SPAWN with three descriptors, SPAWNED/FAILED, KILL, EXITED,
@@ -854,7 +855,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   decision, docs/plugins.md 12's eighth round): on and off by `/api/set` from an approved browser, exported, copied,
   taken from an import and a preset; `plugin.c` `plugin_community` sets the store's flag
   and leaves the rescan to the broker's thread (`community_due`: the caller holds `core_lock`); `settings.c` applies it
-  before the other lines of one request (`switches()`: an export lists `wake_engine` first); `main.c` sets it before
+  before the other lines of one request but `plugins`, which goes first of all (`switches()`, `rank()`: plugins, the
+  switches, the rest; an export lists `plugins`, `plugins_community`, then the table's rows, `wake_engine` first); `main.c` sets it before
   the first scan (`settings_peek`, as this start will have it), off unless set; `settings_load` only notes it and
   `plugins` (`loading`), `settings_preset` tells both once at its end.  The page's dialog before "on", and the install
   dialog of every plugin that is not official (`plgDialog`, `hmwall.of`: the step an import, a preset or a copy does

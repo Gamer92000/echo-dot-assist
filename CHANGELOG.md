@@ -34,6 +34,12 @@ Plugins are experimental; nothing of the plugin system is released yet.
   that uses something of a newer part of hassmic than it says it needs is refused, by the Echo and by the plugin
   index alike. The plugins' C client also holds hassmic's answers to its requests to these rules (it took a broken
   one as the answer).
+- **The "Plugins" switch now travels with your other settings**: it is in an export, "Compare & copy" and "make like
+  this Echo" copy it, and an import or a preset (`scripts/setup.sh --preset`) takes it, as the "Community plugins"
+  switch already was. Switching plugins on installs nothing: on another Echo it runs only what that Echo has
+  installed, and every install there still asks for its action button. One import that switches plugins and
+  community plugins on and picks a community plugin as the wake word engine takes all three, in that order, whatever
+  order the file has them in.
 - **Room for any number of plugin features for good**: the first words between hassmic and a plugin no longer hold
   the features as a set of 32 bits (which would have run out); a plugin's own C and Rust clients changed with it, so
   plugins built before today need a rebuild with the new SDK (none was released).
