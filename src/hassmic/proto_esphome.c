@@ -103,6 +103,10 @@ extern int l09g_bt_power(int set);
 #define KEY_L09G_BLUETOOTH 0x4c303942
 #define KEY_L09G_LIGHT 0x4c30394c
 #endif
+#ifdef LX05_PORT
+extern int lx05_bt_pair(int set);
+#define KEY_LX05_BT_PAIR 0x4c583542
+#endif
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
 #include "../third_party/minimp3.h"
@@ -407,6 +411,9 @@ static void send_setting(int key)       /* lock held */
     case KEY_MIC_LEVEL: pb_float(&b, 2, settings_mic_level()); send_state(NUMBER_STATE, &b); break;
     case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
+#ifdef LX05_PORT
+    case KEY_LX05_BT_PAIR: pb_uint(&b, 2, lx05_bt_pair(-1)); send_state(SWITCH_STATE, &b); break;
+#endif
 #ifdef L09G_PORT
     case KEY_L09G_BLUETOOTH: pb_uint(&b, 2, l09g_bt_power(-1)); send_state(SWITCH_STATE, &b); break;
     case KEY_L09G_LIGHT: { struct l09g_light l; l09g_light_get(&l); PB(t, 96);
@@ -719,6 +726,9 @@ static void send_setting_entities(void)
         pb_float(&b, 6, -6); pb_float(&b, 7, 6); pb_float(&b, 8, 1); pb_str(&b, 11, "dB"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b);
     }
     { PB(b, 128); pb_str(&b, 1, "mute"); pb_fixed32(&b, 2, KEY_MUTE); pb_str(&b, 3, "Mute"); pb_str(&b, 5, "mdi:microphone-off"); send_msg(LIST_SWITCH, &b); }
+#ifdef LX05_PORT
+    { PB(b, 128); pb_str(&b, 1, "lx05_bluetooth_pairing"); pb_fixed32(&b, 2, KEY_LX05_BT_PAIR); pb_str(&b, 3, "Bluetooth pairing"); pb_str(&b, 5, "mdi:bluetooth"); send_msg(LIST_SWITCH, &b); }
+#endif
 #ifdef L09G_PORT
     { PB(b, 128); pb_str(&b, 1, "l09g_bluetooth"); pb_fixed32(&b, 2, KEY_L09G_BLUETOOTH); pb_str(&b, 3, "Bluetooth pairing"); pb_str(&b, 5, "mdi:bluetooth"); send_msg(LIST_SWITCH, &b); }
 #endif
@@ -882,6 +892,9 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     }
     else if (type == SWITCH_COMMAND && key == KEY_MUTE) { core_soft_mute(on); settings_save(); send_setting(KEY_MUTE); return; }
     else if (type == SWITCH_COMMAND && key == KEY_WAKE_SOUND) core_wake_sound(on);
+#ifdef LX05_PORT
+    else if (type == SWITCH_COMMAND && key == KEY_LX05_BT_PAIR) { lx05_bt_pair(on); send_setting(key); return; }
+#endif
 #ifdef L09G_PORT
     else if (type == SWITCH_COMMAND && key == KEY_L09G_BLUETOOTH) { l09g_bt_power(on); send_setting(key); return; }
 #endif
@@ -1777,6 +1790,9 @@ static void on_va_set_config(const unsigned char *p, const unsigned char *end)
 static void send_all_settings(void)
 {
     send_setting(KEY_MIC_LEVEL); send_setting(KEY_DENOISE); send_setting(KEY_MUTE); send_setting(KEY_WAKE_SOUND); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_setting(KEY_DND); send_setting(KEY_SOUND_DETECTION);
+#ifdef LX05_PORT
+    send_setting(KEY_LX05_BT_PAIR);
+#endif
 #ifdef L09G_PORT
     send_setting(KEY_L09G_BLUETOOTH);
 #endif

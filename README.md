@@ -1,3 +1,11 @@
+# Xiaomi XiaoAI Speaker Play LX05 — experimental port
+
+This branch adds an **experimental LX05 port** of echo-dot-assist. Start with the [LX05 documentation](devices/lx05/README.md) ([по-русски](devices/lx05/README_RU.md)). It is a development snapshot, **not an installer for a fresh device**. The Echo instructions below must not be used on LX05.
+
+**Vibecoded:** the LX05-specific code, integration and notes were developed with OpenAI Codex and tested iteratively on one speaker. Review them before use. This is a community project, not an official Xiaomi or upstream release.
+
+This branch builds on the fork's L09G work, described below.
+
 # Xiaomi Mi Smart Speaker L09G — experimental port
 
 This branch contains an experimental port of echo-dot-assist to the Xiaomi Mi Smart Speaker L09G. Start with the [L09G documentation](devices/l09g/README.md) ([по-русски](devices/l09g/README_RU.md)). The Echo installation instructions below do **not** install this port.

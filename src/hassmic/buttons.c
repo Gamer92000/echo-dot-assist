@@ -1,5 +1,8 @@
 #include "buttons.h"
 #include "board.h"
+#ifdef LX05_PORT
+#include "statefile.h"
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
@@ -36,6 +39,26 @@ static void taps_done(int n)           /* n presses in a row: 1 is the press its
 }
 static int muted_state;                /* latch: what was last reported; no latch: the software toggle */
 static pthread_mutex_t muted_lock = PTHREAD_MUTEX_INITIALIZER;
+
+#ifdef LX05_PORT
+static void lx05_mute_path(char *path, size_t size)
+{
+    const char *state = getenv("HASSMIC_STATE");
+    snprintf(path, size, "%s/mic-button-muted", state ? state : "/data/lx05-assist/state");
+}
+static void lx05_mute_load(void)
+{
+    char path[320]; lx05_mute_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (f) { muted_state = fgetc(f) == '1'; fclose(f); }
+}
+static void lx05_mute_save(int muted)
+{
+    char path[320]; lx05_mute_path(path, sizeof path);
+    const char *v = muted ? "1\n" : "0\n";
+    if (statefile_write(path, 0600, v, 2)) fprintf(stderr, "buttons: cannot save microphone mute state\n");
+}
+#endif
 
 /* 1 if the kernel tells the mute state (board.privacy_state).  Without that file the mute key can only be counted, and
  * the count is wrong as soon as the latch moved while nobody counted: radar was run that way, and a daemon restarted
@@ -168,6 +191,12 @@ static void *reader(void *arg)
         }
         if (read(rfd, &ev, sizeof ev) != sizeof ev) break;
         if (ev.type != EV_KEY) continue;
+#ifdef LX05_PORT
+        /* LX05 labels do not match the kernel key codes: its microphone
+         * button reports VOLUMEDOWN and its volume-minus button reports MENU. */
+        if (ev.code == KEY_VOLUMEDOWN) ev.code = KEY_MUTE;
+        else if (ev.code == KEY_MENU) ev.code = KEY_VOLUMEDOWN;
+#endif
         if (action_key > 0 && ev.code == action_key) ev.code = KEY_HELP;
         now = now_ms();
         switch (ev.code) {
@@ -191,6 +220,9 @@ static void *reader(void *arg)
                     muted_state = !muted_state;
                     int m = muted_state;
                     pthread_mutex_unlock(&muted_lock);
+#ifdef LX05_PORT
+                    lx05_mute_save(m);
+#endif
                     handler.mute_changed(m);
                 }
             }
@@ -318,6 +350,9 @@ static void grab(const struct input *in)
 int buttons_start(const char *device, const struct button_handler *h)
 {
     pthread_t t; int pfd, f2;
+#ifdef LX05_PORT
+    lx05_mute_load();
+#endif
     const char *times = getenv("HASSMIC_HOLD_TIMES");
     handler = *h;
     if (times) sscanf(times, "%d %d", &HOLD_WARN_MS, &HOLD_RESET_MS);

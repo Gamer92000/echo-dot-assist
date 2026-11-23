@@ -26,3 +26,6 @@ __pycache__/
 /devices/l09g/target-libs/
 /devices/l09g/toolchain/
 /devices/l09g/state/
+/devices/lx05/toolchain/
+/devices/lx05/target-libs/
+/devices/lx05/state/

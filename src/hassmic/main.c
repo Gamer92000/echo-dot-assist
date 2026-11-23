@@ -54,6 +54,11 @@
 #ifdef L09G_PORT
 #include "led_l09g.h"
 #endif
+#ifdef LX05_PORT
+extern int lx05_led_start(void);
+extern void lx05_led_event(const char *, const char *);
+extern int lx05_bt_duck_start(void);
+#endif
 #include "screen.h"
 #include "davs.h"
 #include "dropin.h"
@@ -392,6 +397,9 @@ static void led_run(const char *op, const char *pattern) { ledq_run(op, pattern)
 static void led(const char *op, const char *pattern)
 {
     if (!pattern) return;
+#ifdef LX05_PORT
+    lx05_led_event(op, pattern);
+#endif
 #ifdef L09G_PORT
     l09g_led_event(op, pattern);
 #endif
@@ -3734,6 +3742,9 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);
+#ifdef LX05_PORT
+    if (lx05_led_start()) fprintf(stderr, "lx05 led: cannot start\n");
+#endif
     { char rows[8];                                 /* the band's height before it starts (a preset's too): else the
                                                      * default 10 px came up first, and with "Light band" 0 the apps were
                                                      * laid out twice */
@@ -3775,6 +3786,9 @@ int main(int argc, char **argv)
     static const struct arb_hooks arb_hooks = { arb_send_key, arb_notify, arb_request, arb_paired, arb_scan, arb_message };
     if (arb_port && core_local_wake && proto->arb_send && arb_start(arb_port, core_node_name(), &arb_hooks)) fprintf(stderr, "arbitration: not available\n");
     if (arb_running() && duck_start()) fprintf(stderr, "duck: no thread, the other Echos' runs do not duck the music here\n");
+#ifdef LX05_PORT
+    if (lx05_bt_duck_start()) fprintf(stderr, "bluetooth: cannot start duck control\n");
+#endif
     if (arb_running() && ringstop_start()) fprintf(stderr, "ringstop: no thread, a stop here ends no ring elsewhere\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
 
