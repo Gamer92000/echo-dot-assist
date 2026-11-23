@@ -604,6 +604,7 @@ static void gatts_rx(struct conn *c, const unsigned char *p, size_t n)
 {
     unsigned char r[ATT_MTU], t[16], v[512]; size_t mx = c->mtu, o = 0, tl, vl, w = 0; unsigned s, e, h; int err;
     if (!n || !S) return;
+    if (S->heard) S->heard();
     switch (p[0]) {
     case ATT_MTU_REQ:
         if (n >= 3) { unsigned m = u16(p + 1); c->mtu = m < 23 ? 23 : m < ATT_MTU ? m : ATT_MTU; }
@@ -706,12 +707,16 @@ static void gatts_notify(struct conn *c)
     }
 }
 
-/* the phone's link is gone: its state with it */
+/* the phone's link is gone: its state with it.  And the loop goes round once more, for adv_upkeep: a link we ended
+ * ourselves is told gone inside upkeep()'s own Disconnect, after adv_upkeep had its look, and with nothing else
+ * going on the loop then waits without a time: the advertising stayed off until something else woke it (improv.c
+ * ending a phone that waited too long on an Echo without a network: nobody could find the Echo after) */
 static void srv_gone(struct conn *c)
 {
     free_conn(c);
     cccd_on = 0; prep.n = 0; prep.handle = 0; atomic_store(&notify_due, 0);
-    if (S && S->connection) S->connection(0);
+    poke();
+    if (S && S->connection) S->connection(0, 0);
 }
 
 /* ---------------------------------------------------------------- advertising */
@@ -722,7 +727,10 @@ static atomic_int adv_gen;                      /* bumped by every ble_advertise
 static int adv_applied = -1, advertising;       /* controller thread: the generation the controller has; it advertises */
 static struct timespec adv_failed;              /* when the controller last refused: not again for 5 s */
 
-/* Advertising as asked, while no phone is connected (the controller stops when one connects).  -1: controller gone */
+/* Advertising as asked, while no phone is connected (the controller stops when one connects).  -1: controller gone.
+ * On again by itself when the phone's link ends, with the data last set: whoever ends a link to have none after
+ * it clears the data first (ble.h; improv.c's M_OFF.  It set the data to none after the link's end, and a phone
+ * that connected again in between was served outside every mode) */
 static int adv_upkeep(void)
 {
     int g = atomic_load(&adv_gen), want, st;
@@ -1091,7 +1099,7 @@ static void conn_complete(const unsigned char *q, size_t n)
         c->srv = 1; c->state = C_UP; c->handle = u16(q + 1) & 0x0fff; c->mtu = 23; c->addr_type = q[4]; now(&c->t);
         for (int b = 5; b >= 0; b--) c->addr = c->addr << 8 | q[5 + b];
         fprintf(stderr, "bluetooth: %012llx connected to us\n", (unsigned long long)c->addr);
-        if (S->connection) S->connection(1);
+        if (S->connection) S->connection(1, c->addr);
         return;
     }
     if (!c || n < 18) return;

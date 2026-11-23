@@ -33,6 +33,7 @@
  */
 #define _GNU_SOURCE                     /* accept4 on the PC */
 #include "btout.h"
+#include "logread.h"
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -371,7 +372,7 @@ void btout_ready(uint64_t addr, const char *name, int bp, unsigned mtu)
     cfg_gen++; qn = 0;
     want_route = route_on; want_addr = addr; pthread_cond_signal(&cv);
     pthread_mutex_unlock(&m);
-    fprintf(stderr, "btout: \"%s\": SBC bitpool %d, %u frames per packet\n", name, bp, per_packet);
+    log_private("btout: \"%s\": SBC bitpool %d, %u frames per packet", name, bp, per_packet);
 }
 
 void btout_gone(void)

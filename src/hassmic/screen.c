@@ -37,7 +37,7 @@
 #include "screen.h"
 #include "board.h"
 #include "core.h"
-#include "dropin.h"
+#include "call.h"
 #include "json.h"
 #include "mass.h"
 #include "ring.h"
@@ -509,9 +509,9 @@ static void command(char *l)
         pthread_mutex_lock(&core_lock);
         if (settings_set(l[0] == 'v' ? "volume" : "do_not_disturb", v, e, sizeof e)) fprintf(stderr, "screen: %s\n", e);
         pthread_mutex_unlock(&core_lock);
-    } else if (!strcmp(l, "dropin answer")) {
-        dropin_answer();                                          /* a ringing call only: never ends one answered meanwhile */
-    } else if (!strcmp(l, "dropin hangup")) dropin_hangup("the screen");
+    } else if (!strcmp(l, "dropin answer")) {                  /* (the UI's words: any call, Drop In's or a plugin's) */
+        core_call_answer();                                       /* a ringing call only: never ends one answered meanwhile */
+    } else if (!strcmp(l, "dropin hangup")) core_call_hangup("the screen");
     else if (!strcmp(l, "timer stop")) { pthread_mutex_lock(&core_lock); core_alarm_stop("the screen"); pthread_mutex_unlock(&core_lock); }
     else if (!strcmp(l, "words clear")) screen_words(SCREEN_WORDS_RUN, NULL);   /* tapped away on the screen */
     else if (!strncmp(l, "timers hide ", 12)) { atomic_store(&hide_req, (unsigned)strtoul(l + 12, NULL, 10) + 1); screen_timers_changed(); }
@@ -668,7 +668,7 @@ static unsigned tl_seq;                                         /* (the writer's
 
 static void read_core(int slow)
 {
-    char names[300] = "", peer[64] = "";
+    char names[300] = "", peer[128] = "";            /* (the core's whole: "<plugin's name>: <who>" is up to 114 bytes) */
     memset(now_s.run, 0, sizeof now_s.run);                     /* (compared whole: no bytes left of an older name) */
     pthread_mutex_lock(&core_lock);
     now_s.mute = core_muted(); now_s.dnd = core_dnd(-1) > 0; now_s.evol = core_volume();
@@ -689,8 +689,8 @@ static void read_core(int slow)
     if (hr && hr - 1 == tl_seq) { memcpy(hidden, sent_s.run, sizeof hidden); nhidden = sent_s.nrun; }
     if (nhidden >= 0 && (nhidden != now_s.nrun || memcmp(hidden, now_s.run, sizeof hidden))) nhidden = -1;
     atomic_store(&keep_on, show && (names[0] || (active && nhidden < 0)));
-    if (!dropin_running() || dropin_status(peer, sizeof peer) == DROPIN_IDLE) peer[0] = 0;   /* a call over: no peer */
-    clean(now_s.peer, sizeof now_s.peer, peer);
+    if (core_call_status(peer, sizeof peer) == CALL_IDLE) peer[0] = 0;      /* a call over: no peer */
+    clean_cut(now_s.peer, sizeof now_s.peer, peer);           /* (cut to the UI's 64 bytes at a character's edge) */
     if (slow) {                                                   /* every 10 s: what changes rarely */
         now_s.kiosk = kiosk_installed();
         web_url(now_s.web, sizeof now_s.web);

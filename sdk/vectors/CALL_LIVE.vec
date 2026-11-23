@@ -1,0 +1,22 @@
+# CALL_LIVE: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message CALL_LIVE 105
+id 65641
+token str 746f6b656e2d3130352dc3a9  # 'token-105-é'
+packet 69000000690001000c00746f6b656e2d3130352dc3a9
+case empty
+id 65641
+token str -  # ''
+packet 69000000690001000000
+case long
+id 65641
+token str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééé'
+packet 69000000690001002000c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9
+case full
+id 65641
+token str -  # ''
+packet 69000000690001000000
+refuse short 69000000690001
+refuse truncated 69000000690001000c00746f6b656e2d3130352dc3
+refuse trailing 69000000690001000c00746f6b656e2d3130352dc3a900
+refuse over:token 69000000690001002100616161616161616161616161616161616161616161616161616161616161616161
+refuse nul:token 69000000690001000300610062

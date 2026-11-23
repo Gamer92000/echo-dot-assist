@@ -1,0 +1,25 @@
+# UDP_OPEN: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message UDP_OPEN 61
+id 65597
+kind u8 10
+entry u8 189
+packet 3d0000003d0001000abd
+case empty
+id 65597
+kind u8 0
+entry u8 0
+packet 3d0000003d0001000000
+case long
+id 65597
+kind u8 18
+entry u8 255
+packet 3d0000003d00010012ff
+case full
+id 65597
+kind u8 1
+entry u8 1
+packet 3d0000003d0001000101
+refuse short 3d0000003d0001
+refuse truncated 3d0000003d0001000a
+refuse trailing 3d0000003d0001000abd00
+refuse enum:kind 3d0000003d00010013bd

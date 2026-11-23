@@ -31,8 +31,12 @@ if len(sys.argv) > 1 and sys.argv[1] == "--ui":           # the stand-in UI, as 
         def tell(b):
             with out: sys.stdout.buffer.write(b); sys.stdout.buffer.flush()
         def answer():
-            while True:
-                with open(fifo, "rb") as q:
+            # (read and write: a writer is always there, so the reader never sees the end of a writer's lines and
+            # never reopens.  Reopened at each end, a line a writer put in between the end and the close was lost
+            # with the close: screen-9's "repeat and shuffle" under tests/run.py -j, repeat_all never sent, a flake a
+            # review of a30d6ed found)
+            with os.fdopen(os.open(fifo, os.O_RDWR), "rb") as q:
+                while True:
                     for line in q:
                         if line == b"#hang\n": hung.set(); continue       # (for the test: alive, reading nothing)
                         tell(line)
@@ -152,7 +156,10 @@ async def main():
     try:
         await until(lambda: os.path.exists(os.path.join(gstate, f"screen-ui.{gproc.pid}")), 5)
         gmarked = os.path.exists(os.path.join(gstate, f"screen-ui.{gproc.pid}"))
-        await until(lambda: any(isinstance(l, str) and l.startswith("p+ setup-mode") for l in lines(log)), 5)
+        # every start line waited for, not the setup pattern alone: screen.c's writer sends what changed since its last
+        # look, so "oobe 1" can come in a later write than the pattern (under the whole suite's load it did)
+        await until(lambda: any(isinstance(l, str) and l.startswith("p+ setup-mode") for l in lines(log))
+                    and all(w in lines(log) for w in ("act the action button", "home -", "oobe 1")), 5)
         got = lines(log)
         check(any(re.fullmatch(r"name Echo Dot 3 [0-9a-f]{6}|name Echo Dot 3", l) for l in got if isinstance(l, str)), f"the name first: {got[:2]}")
         for want in ("act the action button", "home -", "oobe 1"):
@@ -257,7 +264,10 @@ async def main():
 
         # the UI's commands
         say("cmd next"); say("cmd volume 40"); say("cmd seek 90000"); say("cmd seek 500000"); say("cmd repeat_all"); say("cmd shuffle")
-        await until(lambda: {"ControllerNextEvent", "ControllerRepeatEvent"} <= {type(e).__name__ for e in events}, 5)
+        # (shuffle, the last said, waited for too: under load it came after repeat and after the look, and "repeat and
+        # shuffle" below failed once with every command sent; the names read again there as well)
+        await until(lambda: {"ControllerNextEvent", "ControllerRepeatEvent"} <= {type(e).__name__ for e in events}
+                    and any("Shuffle" in type(e).__name__ for e in events), 5)
         names = [type(e).__name__ for e in events]
         check("ControllerNextEvent" in names, f"next from the screen: {names}")
         vol = [e for e in events if type(e).__name__ == "ControllerVolumeEvent"]
@@ -267,6 +277,7 @@ async def main():
         seek = [getattr(e, "position_ms", None) for e in events if type(e).__name__ == "ControllerSeekEvent"]
         check("seek" in offered and seek[:1] == [90000] and set(seek) == {90000, 120000},     # (a line say() wrote again: twice)
               f"seek to 1:30 from the screen, past how far the server seeks: that far: {seek} ({offered})")
+        names = [type(e).__name__ for e in events]
         check(any("Repeat" in n for n in names) and any("Shuffle" in n for n in names), f"repeat and shuffle from the screen: {names}")
 
         # the UI dies: started again, everything anew (a "home" from it is no command: the page picks the home app)

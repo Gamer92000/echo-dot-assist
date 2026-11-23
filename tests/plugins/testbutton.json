@@ -1,0 +1,9 @@
+{ "id": "testbutton", "name": "Test buttons", "version": 1, "version_name": "0.1", "requires": {"core": 1, "button": 1, "ha.entities": 1},
+  "author": "hassmic's tests", "description": "Hears the Echo's buttons and counts them on its card.", "license": "MIT",
+  "memory_mb": 8, "threads": 1,
+  "capabilities": { "button": true,
+                    "ha.entities": [ { "name": "presses", "kind": "sensor", "label": "Presses heard", "unit": "presses", "page": true },
+                                     { "name": "last", "kind": "text_sensor", "label": "Last press", "page": true },
+                                     { "name": "held", "kind": "binary_sensor", "label": "Held last", "page": true },
+                                     { "name": "quiet", "kind": "sensor", "label": "Quiet value", "decimals": 1 } ] },
+  "settings": [] }

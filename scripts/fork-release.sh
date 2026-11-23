@@ -6,7 +6,9 @@
 #                                         of the fork) the environment `release` with the key's secret half and the
 #                                         repository variable RELEASE_PUBLIC_KEY with its public half
 #   scripts/fork-release.sh ci            in CI (build.yml): secrets/fork.conf from RELEASE_PUBLIC_KEY and the
-#                                         repository the workflow runs in; nothing without the variable (this project's)
+#                                         repository the workflow runs in, and a plugin index of the fork's own from
+#                                         PLUGIN_INDEX_URL, PLUGINS_PUBLIC_KEY (and PLUGINS_PUBLIC_KEY2: a second key);
+#                                         nothing without the variables (this project's)
 # Nothing of it goes into git (secrets/ is ignored): the fork's tree stays this one, so its branches make pull requests
 # here as any other.  Run again with the same OWNER/REPO, it keeps the key and sets GitHub's side again (a new PC: copy
 # secrets/ from the old one first).
@@ -17,17 +19,55 @@ die() { echo "$*" >&2; exit 1; }
 UPSTREAM=$UPDATE_REPO
 lower() { printf '%s' "$1" | tr 'A-Z' 'a-z'; }
 b64() { base64 < "$1" | tr -d '\n'; }               # no -w0: macOS's base64 has none
-# secrets/fork.conf, read by make and sh alike (keys/release.conf); this script's own file, written whole every run
-conf() { printf '# written by scripts/fork-release.sh, whole on every run: lines added here are lost\nUPDATE_REPO=%s\nRELEASE_PUB=secrets/release.pub\n' "$1" > secrets/fork.conf; }
+hex() { od -An -tx1 -v "$1" | tr -d ' \n'; }
+INDEX_LINES='^(PLUGIN_INDEX|PLUGINS_PUB|PLUGINS_PUB2|PLUGINS_PUB2_WITH)='
+# secrets/fork.conf, read by make and sh alike (keys/release.conf); this script's own file, written whole every run.
+# REPO: the fork's releases (none: this project's).  The lines of a plugin index of the fork's own (keys/plugins.conf:
+# PLUGIN_INDEX, PLUGINS_PUB, PLUGINS_PUB2, PLUGINS_PUB2_WITH): INDEX where given (ci, from the repository's
+# variables), else kept as they were
+conf() {
+    if [ $# -gt 1 ]; then keep=$2; else keep=$(grep -E "$INDEX_LINES" secrets/fork.conf 2> /dev/null || true); fi
+    { printf '# written by scripts/fork-release.sh, whole on every run: lines added here are lost, but for PLUGIN_INDEX,\n'
+      printf '# PLUGINS_PUB, PLUGINS_PUB2 and PLUGINS_PUB2_WITH (a plugin index of the fork'"'"'s own, keys/plugins.conf),\n'
+      printf '# kept as they are (in CI: from the variables PLUGIN_INDEX_URL, PLUGINS_PUBLIC_KEY, PLUGINS_PUBLIC_KEY2)\n'
+      [ -z "$1" ] || printf 'UPDATE_REPO=%s\nRELEASE_PUB=secrets/release.pub\n' "$1"
+      [ -z "$keep" ] || printf '%s\n' "$keep"; } > secrets/fork.conf.new && mv secrets/fork.conf.new secrets/fork.conf
+}
+# a variable's base64 into FILE: 32 bytes or the job fails
+unkey() {
+    printf '%s' "$2" | base64 -d > "$3" 2>/dev/null && [ "$(wc -c < "$3")" -eq 32 ] ||
+        die "::error::the variable $1 is not the base64 of a public key (scripts/fork-release.sh)"
+}
 
 if [ "$1" = ci ]; then
-    [ -n "$RELEASE_PUBLIC_KEY" ] || { echo "no RELEASE_PUBLIC_KEY: this project's repository and key ($UPSTREAM)"; exit 0; }
-    [ -n "$GITHUB_REPOSITORY" ] || die "ci: no GITHUB_REPOSITORY"
-    mkdir -p secrets
-    printf '%s' "$RELEASE_PUBLIC_KEY" | base64 -d > secrets/release.pub 2>/dev/null &&
-        [ "$(wc -c < secrets/release.pub)" -eq 32 ] || die "::error::the variable RELEASE_PUBLIC_KEY is not the base64 of a public key (scripts/fork-release.sh)"
-    conf "$GITHUB_REPOSITORY"
-    echo "a fork's releases: $GITHUB_REPOSITORY, key $(sha256sum secrets/release.pub | cut -c1-16)"
+    # A fork's own plugin index: its address and key(s) as repository variables, as the release key's public half is
+    # one.  secrets/ is not in git, so CI never had the fork.conf of the PC that made them: a fork's CI builds carried
+    # this project's index and key (a review of a30d6ed, K4).  The second key belongs with the first (PLUGINS_PUB2_WITH)
+    index=
+    if [ -n "$PLUGIN_INDEX_URL$PLUGINS_PUBLIC_KEY$PLUGINS_PUBLIC_KEY2" ]; then
+        [ -n "$PLUGIN_INDEX_URL" ] && [ -n "$PLUGINS_PUBLIC_KEY" ] ||
+            die "::error::a fork's plugin index needs both variables PLUGIN_INDEX_URL and PLUGINS_PUBLIC_KEY (PLUGINS_PUBLIC_KEY2: a second key beside them)"
+        case $PLUGIN_INDEX_URL in https://*/) ;; *) die "::error::the variable PLUGIN_INDEX_URL is not an https:// address ending in /";; esac
+        case $PLUGIN_INDEX_URL in *[!A-Za-z0-9._~:/%-]*) die "::error::the variable PLUGIN_INDEX_URL has a character the Makefile does not take (letters, digits and . _ ~ : / % - only)";; esac
+        mkdir -p secrets
+        unkey PLUGINS_PUBLIC_KEY "$PLUGINS_PUBLIC_KEY" secrets/plugins.pub
+        index=$(printf 'PLUGIN_INDEX=%s\nPLUGINS_PUB=secrets/plugins.pub' "$PLUGIN_INDEX_URL")
+        if [ -n "$PLUGINS_PUBLIC_KEY2" ]; then
+            unkey PLUGINS_PUBLIC_KEY2 "$PLUGINS_PUBLIC_KEY2" secrets/plugins2.pub
+            index=$(printf '%s\nPLUGINS_PUB2=secrets/plugins2.pub\nPLUGINS_PUB2_WITH=%s' "$index" "$(hex secrets/plugins.pub)")
+        fi
+    fi
+    if [ -z "$RELEASE_PUBLIC_KEY" ] && [ -z "$index" ]; then echo "no RELEASE_PUBLIC_KEY: this project's repository and key ($UPSTREAM)"; exit 0; fi
+    repo=
+    if [ -n "$RELEASE_PUBLIC_KEY" ]; then
+        [ -n "$GITHUB_REPOSITORY" ] || die "ci: no GITHUB_REPOSITORY"
+        mkdir -p secrets
+        unkey RELEASE_PUBLIC_KEY "$RELEASE_PUBLIC_KEY" secrets/release.pub
+        repo=$GITHUB_REPOSITORY
+    fi
+    if [ -n "$index" ]; then conf "$repo" "$index"; else conf "$repo"; fi
+    [ -z "$repo" ] || echo "a fork's releases: $repo, key $(sha256sum secrets/release.pub | cut -c1-16)"
+    [ -z "$index" ] || echo "a fork's plugin index: $PLUGIN_INDEX_URL, key $(sha256sum secrets/plugins.pub | cut -c1-16)${PLUGINS_PUBLIC_KEY2:+, a second key $(sha256sum secrets/plugins2.pub | cut -c1-16)}"
     exit 0
 fi
 
@@ -108,6 +148,27 @@ fi
 b64 secrets/release.key | gh secret set RELEASE_SIGNING_KEY --env release --repo "$REPO"
 gh variable set RELEASE_PUBLIC_KEY --repo "$REPO" --body "$(b64 secrets/release.pub)"
 echo "GitHub: environment release with RELEASE_SIGNING_KEY, variable RELEASE_PUBLIC_KEY"
+# The fork's own plugin index, where its fork.conf names one: the same lines for CI's builds (ci above).  And a
+# variable fork.conf no longer names is deleted: CI goes by the variables alone, and kept, it built a key the fork had
+# dropped (a second key after 5.2's last step, an index of its own given up) into every release (a review of 3c5d7ff,
+# R3).  Read a line each: split on blanks, an empty PLUGIN_INDEX shifted the key's path into its place.  (The "."
+# after them: $(...) drops the newlines at its end, and a read at the end fails, which set -e takes for the script's)
+{ IFS= read -r pindex; IFS= read -r ppub; IFS= read -r ppub2; } << EOF
+$(PLUGIN_INDEX= PLUGINS_PUB= PLUGINS_PUB2=; . secrets/fork.conf; printf '%s\n%s\n%s\n.' "$PLUGIN_INDEX" "$PLUGINS_PUB" "$PLUGINS_PUB2")
+EOF
+vars=$(gh variable list --repo "$REPO" --json name --jq '.[].name') || die "gh cannot list $REPO's repository variables"
+gone() {
+    printf '%s\n' "$vars" | grep -qx "$1" || return 0
+    gh variable delete "$1" --repo "$REPO" && echo "GitHub: variable $1 deleted (secrets/fork.conf no longer names it)"
+}
+if [ -n "$pindex" ] && [ -n "$ppub" ]; then
+    gh variable set PLUGIN_INDEX_URL --repo "$REPO" --body "$pindex"
+    gh variable set PLUGINS_PUBLIC_KEY --repo "$REPO" --body "$(b64 "$ppub")"
+    if [ -n "$ppub2" ]; then gh variable set PLUGINS_PUBLIC_KEY2 --repo "$REPO" --body "$(b64 "$ppub2")"; else gone PLUGINS_PUBLIC_KEY2; fi
+    echo "GitHub: the fork's plugin index, variables PLUGIN_INDEX_URL, PLUGINS_PUBLIC_KEY${ppub2:+, PLUGINS_PUBLIC_KEY2}"
+else
+    gone PLUGIN_INDEX_URL; gone PLUGINS_PUBLIC_KEY; gone PLUGINS_PUBLIC_KEY2
+fi
 
 cat << EOF
 

@@ -33,6 +33,16 @@ long long music_prime_us(void);
 void      audio_music_gain(float gain);
 void      audio_call_gain(float gain);
 
+/* A music plugin's stream (plugin.c, docs/plugins.md 3.5): like the music stream, beside it.  Not Sendspin's own:
+ * its player thread writes the music stream without a lock and blocks in the write at playback speed, so a second
+ * writer would need a hand-over inside sendspin.c; a stream of its own needs none, and "the newest source wins" is
+ * kept by pausing the others (main.c core_music), as for a phone's Bluetooth stream beside Sendspin.  One at a time:
+ * plugin.c gives it to the newest plugin that opens one */
+int       plug_open(unsigned rate, unsigned channels);
+int       plug_write(const void *data, size_t len);
+long long plug_queued_us(void);
+void      plug_close(void);
+
 /* Bluetooth speaker stream: like the music stream, beside it */
 int       bt_open(unsigned rate, unsigned channels);
 int       bt_write(const void *data, size_t len);

@@ -11,14 +11,32 @@
 #define CALL_FRAME 320                  /* 20 ms at CALL_RATE: what the mic side encodes, the playout plays */
 #define CALL_PKT   400                  /* the largest encoded frame (Opus at 24 kbit/s: ~60 bytes) */
 
-/* The media of a connected call: send gets each encoded frame and its number (from 0), in order, from the capture
- * thread or call.c's call microphone thread, with call.c's sending lock held (tx_mu, one sender at a time) and none of
- * its others: send may take the owner's lock but must not call into call.c.  The core's lock is taken under tx_mu too
- * (core_dropin_listen), so the owner never calls call_mic holding its own lock or core_lock.  The generation it
- * returns ties call_rx and call_end to this media */
-int  call_begin(void (*send)(const uint8_t *frame, size_t len, uint32_t seq, void *arg), void *arg);
+/* One call on the Echo at a time, whoever carries it (docs/plugins.md 4.8): Drop In (dropin.c) or a plugin with `call`
+ * (plugin.c).  The claim is taken from calling or ringing on and let go when the call is over; whoever finds it taken
+ * refuses "busy", Drop In against a plugin and the other way round.  Its states are Drop In's (dropin.h), which Home
+ * Assistant's "Drop In" sensor has always said */
+enum { CALL_IDLE, CALL_CALLING, CALL_RINGING, CALL_LIVE,
+       CALL_ANSWERING };                /* a plugin's: a person answered here, its far side not in yet (never Drop In's,
+                                         * whose states Home Assistant sees) */
+enum { CALL_NOBODY = 0, CALL_DROPIN = 1, CALL_PLUGIN = 16 };      /* CALL_PLUGIN + the broker's entry: a plugin's */
+/* Lock-free (one atomic): any lock or none.  call_claim: 0 WHO has it now (or had it), -1 another has it */
+int  call_claim(int who);
+void call_release(int who);             /* only WHO's claim goes */
+int  call_claimed(void);                /* who has it, CALL_NOBODY none */
+
+/* The media of a connected call, for WHO, which must have the claim (-1 if it has not): send gets each frame and its
+ * number (from 0), in order, from the capture thread or call.c's call microphone thread, with call.c's sending lock
+ * held (tx_mu, one sender at a time) and none of its others: send may take the owner's lock but must not call into
+ * call.c.  The core's lock is taken under tx_mu too (core_call_listen), so the owner never calls call_mic holding its
+ * own lock or core_lock.  CODEC: CALL_CODEC_OPUS, a frame encoded (CALL_PKT bytes at most, Drop In's); CALL_CODEC_PCM,
+ * the frame as it is, CALL_FRAME samples of s16le after the gate and the gain (a plugin's: its codec, G.711 or Opus, is
+ * its own, docs/plugins.md 4.8).  The generation it returns ties call_rx and call_end to this media */
+enum { CALL_CODEC_OPUS, CALL_CODEC_PCM };
+#define CALL_PCM_BYTES (CALL_FRAME * 2)
+int  call_begin(int who, int codec, void (*send)(const uint8_t *frame, size_t len, uint32_t seq, void *arg), void *arg);
 void call_end(int gen);
-/* A frame that came in: seq numbers the frames from the far end in order */
+/* A frame that came in: seq numbers the frames from the far end in order.  Of the media's codec: Opus, or PCM of
+ * exactly CALL_PCM_BYTES (anything else is dropped) */
 void call_rx(int gen, uint32_t seq, const uint8_t *frame, size_t len);
 int  call_live(void);                   /* media runs */
 

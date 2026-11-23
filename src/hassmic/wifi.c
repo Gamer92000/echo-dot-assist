@@ -18,6 +18,7 @@
  * WPA2-PSK and open networks only: WPA3-only (SAE), WEP and enterprise networks are shown, not offered.
  */
 #include "wifi.h"
+#include "logread.h"
 #include "hash.h"
 #include "ws.h"
 #include "statefile.h"
@@ -218,7 +219,7 @@ int wifi_join(const uint8_t *ssid, size_t n, const char *pass, unsigned *id, int
     pthread_mutex_unlock(&mu);
     crypto_wipe(line, sizeof line); crypto_wipe(ph, sizeof ph);
     jesc(name, sizeof name, ssid, n);
-    if (!r) fprintf(stderr, "wifi: asked root to switch to \"%s\" (%s)\n", name, pl ? "with a password" : "open");
+    if (!r) log_private("wifi: asked root to switch to \"%s\" (%s)", name, pl ? "with a password" : "open");
     return r;
 }
 

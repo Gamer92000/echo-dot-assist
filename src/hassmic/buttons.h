@@ -17,6 +17,14 @@ struct button_handler {
     /* may be NULL: the action button pressed 2 or 3 times (n), each press short and the next within MULTI_MS of the last,
      * while buttons_multi_press() is on; a single press is action() then, MULTI_MS late */
     void (*multi)(int n);
+    /* may be NULL: the action button held 1 s, asked before event(BUTTON_ACTION, 1): 1 = something waited for that
+     * hold and took it (the settings page's note of a copied plugin), and Home Assistant is not told of it: while
+     * such a wait is armed, event(BUTTON_ACTION, 1) does not come.  DOWN_MS: when the button went down
+     * (CLOCK_MONOTONIC, ms), so that what was armed after it does not take a hold begun before.  On a model
+     * without an action button (board.action_combo) the volume pair held 1 s and let go before the pairing hold's
+     * 2 s, by the clock: a pair held 2 s or more is the pairing hold's alone, whether the keys repeated or not;
+     * there it is all such a hold does, and DOWN_MS is when the later of the two went down */
+    int (*held)(long long down_ms);
 };
 
 /* Starts a reader thread.  Returns -1 if the input device cannot be opened (PC build: always). */

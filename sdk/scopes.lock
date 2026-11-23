@@ -1,0 +1,230 @@
+# What each version of each scope of the plugin protocol had (sdk/PROTOCOL.md "Versions"): written by
+# tools/mkplugmsg.py the first time messages.def declares a version, never by it again.  `make unit-plugmsg` fails
+# where messages.def makes a recorded version otherwise (that would change a version a plugin may have been built
+# for), and where a version that any release carried (any git tag v*, betas and releases, on main or on release) is
+# not here exactly as that release's lock had it: nothing taken out, nothing added, whether messages.def or this file
+# has it.  A version that no release carried may be deleted, by hand, to record it anew.  A version a release that
+# this tree descends from carried may not go at all; one only a release elsewhere carried (a release branch's newer
+# tag, a beta of main the release branch lacks) may be missing here, and is held to that release where it is here.
+# Two releases that carried one version otherwise fail too (tools/mkplugmsg.py --released; CI runs it).  These lines
+# are tools/mkplugmsg.py's LOCK_HEAD, held word for word; a note of the lock's own goes below them, after a blank line.
+#   <scope> <version> const NAME VALUE | enum NAME A=1 B=2>A C=3>- ... | cap NAME=BIT | key CONTEXT NAME
+#                     | version N widens|within | msg NAME NUMBER DIR [drop] <type:name[:max][=ENUM]> ...
+
+# Recorded anew on 2026-11-23, before any release carried a lock (the greeting's bounds, enum fields, manifest keys
+# and capabilities by scope came then): from here on every line a release carries is for good.  button 1 recorded
+# anew the same day, still before any release, with BUTTON's mark `drop` (the one message that may go unsent).  wake 1
+# recorded anew the same day, still before any release, with WAKE_SAMPLES_MAX (the stream's block at its longest).
+core 1 const MAX_PACKET 32768
+core 1 enum ERR UNKNOWN=1 DENIED=2 BAD=3 BUSY=4 LIMIT=5 NOT_FOUND=6 FAILED=7 UNSET=8
+core 1 enum REFUSED SCOPES=1 STATE=2
+core 1 key manifest author
+core 1 key manifest author_key
+core 1 key manifest capabilities
+core 1 key manifest description
+core 1 key manifest digest
+core 1 key manifest id
+core 1 key manifest license
+core 1 key manifest memory_mb
+core 1 key manifest models
+core 1 key manifest name
+core 1 key manifest requires
+core 1 key manifest settings
+core 1 key manifest source
+core 1 key manifest threads
+core 1 key manifest version
+core 1 key manifest version_name
+core 1 key setting catalog
+core 1 key setting default
+core 1 key setting fields
+core 1 key setting help
+core 1 key setting item
+core 1 key setting label
+core 1 key setting max
+core 1 key setting max_items
+core 1 key setting min
+core 1 key setting name
+core 1 key setting options
+core 1 key setting type
+core 1 key setting unit
+core 1 msg CONFIG 4 < list:settings:32(str:name:32 str:value:512)
+core 1 msg ERR 11 = u16:code=ERR
+core 1 msg HELLO 1 > u32:sdk list:scopes:255(str:name:24 u16:version)
+core 1 msg OK 10 =
+core 1 msg PING 6 <
+core 1 msg PONG 7 >
+core 1 msg READY 5 >
+core 1 msg REFUSED 3 < u16:why=REFUSED
+core 1 msg STOP 8 <
+core 1 msg TIME 9 < u32:clock_set str:zone:64
+core 1 msg WELCOME 2 < u32:clock_set str:model:48 str:node:64 str:name:64 str:zone:64 list:scopes:255(str:name:24 u16:version)
+storage 1 cap STORAGE=0
+storage 1 msg STORE_DEL 43 > str:key:48
+storage 1 msg STORE_GET 40 > str:key:48
+storage 1 msg STORE_PUT 42 > str:key:48 bytes:value:16384
+storage 1 msg STORE_VALUE 41 < bytes:value:16384
+files 1 cap FILES=1
+files 1 enum FILE_BAD FORMAT=1 UNSUPPORTED=2 TOO_LARGE=3 MISSING=4 OTHER=5
+files 1 key setting.field label
+files 1 key setting.field max
+files 1 key setting.field min
+files 1 key setting.field name
+files 1 key setting.field step
+files 1 key setting.field type
+files 1 key setting.item by
+files 1 key setting.item files
+files 1 key setting.item.file as
+files 1 key setting.item.file max_kb
+files 1 key setting.item.file optional
+files 1 key setting.item.file suffix
+files 1 msg FILES 20 < str:list:32 list:items:64(str:id:40 u8:checked str:title:64 list:fields:16(str:name:32 str:value:256) list:files:8(str:name:64 u32:size))
+files 1 msg FILE_BAD 24 > u16:code=FILE_BAD str:why:200
+files 1 msg FILE_CHECK 22 < str:list:32 str:item:40
+files 1 msg FILE_OK 23 > str:title:64 list:fields:16(str:name:32 str:value:256)
+files 1 msg FILE_OPEN 21 > str:list:32 str:item:40 str:file:64
+state 1 cap STATE=2
+state 1 enum STATE IDLE=0 LISTENING=1 THINKING=2 SPEAKING=3
+state 1 msg STATE 80 < u8:state=STATE u8:muted u8:volume
+log.read 1 cap LOG_READ=3
+log.read 1 msg LOG 51 < str:cursor:40 u8:gap list:lines:64(str:line:1024)
+log.read 1 msg LOG_FOLLOW 50 > str:from:40
+log.read.full 1 cap LOG_READ_FULL=4
+log.read.full 1 msg LOG 51 < str:cursor:40 u8:gap list:lines:64(str:line:1024)
+log.read.full 1 msg LOG_FOLLOW 50 > str:from:40
+net.server 1 cap NET_SERVER=5
+net.server 1 key net.server ports
+net.server 1 key net.server proto
+net.server 1 key net.server setting
+net.server 1 msg CONNECT 60 > u8:kind=CAP u8:entry str:host:253 u16:port
+net.server 1 msg NET 67 < u32:address u32:mask u8:up
+net.server 1 msg PROPOSE 66 > str:setting:32 str:value:15
+net.lan 1 cap NET_LAN=6
+net.lan 1 key net.lan ports
+net.lan 1 key net.lan proto
+net.lan 1 msg CONNECT 60 > u8:kind=CAP u8:entry str:host:253 u16:port
+net.lan 1 msg NET 67 < u32:address u32:mask u8:up
+net.internet 1 cap NET_INTERNET=7
+net.internet 1 key net.internet ports
+net.internet 1 key net.internet proto
+net.internet 1 msg CONNECT 60 > u8:kind=CAP u8:entry str:host:253 u16:port
+net.internet 1 msg NET 67 < u32:address u32:mask u8:up
+net.udp 1 cap NET_UDP=8
+net.udp 1 msg NET 67 < u32:address u32:mask u8:up
+net.udp 1 msg SENDTO 64 > u8:handle u32:address u16:port bytes:data:1472
+net.udp 1 msg UDP_OPEN 61 > u8:kind=CAP u8:entry
+net.udp 1 msg UDP_OPENED 62 < u8:handle u16:port
+net.udp 1 msg UDP_PEER 63 > u8:handle u32:address u16:port
+net.discover 1 cap NET_DISCOVER=9
+net.discover 1 key net.discover to
+net.discover 1 key net.discover udp
+net.discover 1 msg BROADCAST 65 > u8:handle bytes:data:1472
+net.discover 1 msg NET 67 < u32:address u32:mask u8:up
+net.discover 1 msg UDP_OPEN 61 > u8:kind=CAP u8:entry
+net.discover 1 msg UDP_OPENED 62 < u8:handle u16:port
+audio.music 1 cap AUDIO_MUSIC=10
+audio.music 1 enum MCMD PAUSE=1 RESUME=2 STOP=3 NEXT=4 PREVIOUS=5
+audio.music 1 enum MUSIC PLAYING=1 PAUSED=2 STOPPED=3
+audio.music 1 enum MWHY BUTTON=1 STOP_WORD=2 OTHER_SOURCE=3 HOME_ASSISTANT=4
+audio.music 1 msg MUSIC_CLOSE 72 >
+audio.music 1 msg MUSIC_CMD 74 < u8:cmd=MCMD u8:why=MWHY
+audio.music 1 msg MUSIC_OPEN 70 > u32:rate u8:channels
+audio.music 1 msg MUSIC_POS 73 < u64:frames u64:at u32:queued
+audio.music 1 msg MUSIC_STATE 71 > u8:state=MUSIC str:title:128 str:artist:128
+audio.volume 1 cap AUDIO_VOLUME=11
+audio.volume 1 msg VOLUME 76 < u8:percent
+audio.volume 1 msg VOLUME_SET 75 > u8:percent
+call 1 cap CALL=12
+call 1 enum HANGUP BUTTON=1 SPOKEN=2 SCREEN=3 NOT_ANSWERED=4 NOT_LIVE=5 STOPPED=6
+call 1 enum RESULT HUNG_UP=1 BUSY=2 DECLINED=3 NO_ANSWER=4 FAILED=5
+call 1 msg CALL_ANSWER 101 <
+call 1 msg CALL_END 106 > u8:result=RESULT
+call 1 msg CALL_HANGUP 102 < u8:why=HANGUP
+call 1 msg CALL_INCOMING 100 > str:who:64
+call 1 msg CALL_LIVE 105 > str:token:32
+call 1 msg CALL_OUT 103 > str:token:32 str:who:64
+call 1 msg CALL_RINGING_THERE 104 >
+request.audio 1 cap REQUEST_AUDIO=14
+request.audio 1 const REQ_SAMPLES_MAX 2048
+request.audio 1 enum REQEND HA=1 HEARD_HERE=2 CANCELLED=3 TIMEOUT=4 ERROR=5 LINK_LOST=6 MUTED=7
+request.audio 1 enum REQSRC WAKE_WORD=1 BUTTON=2 FOLLOW_UP=3 HA_WAKE=4
+request.audio 1 msg REQ_END 111 < u32:run u8:why=REQEND u32:samples u32:dropped
+request.audio 1 msg REQ_START 110 < u32:run u8:source=REQSRC u8:slot str:phrase:64
+request.text 1 cap REQUEST_TEXT=15
+request.text 1 enum REQTEXT HEARD=1 REPLY=2
+request.text 1 msg REQ_TEXT 112 < u32:run u8:kind=REQTEXT str:text:1024
+ha.entities 1 cap HA_ENTITIES=16
+ha.entities 1 key ha.entities.binary_sensor icon
+ha.entities 1 key ha.entities.binary_sensor kind
+ha.entities 1 key ha.entities.binary_sensor label
+ha.entities 1 key ha.entities.binary_sensor name
+ha.entities 1 key ha.entities.binary_sensor page
+ha.entities 1 key ha.entities.button icon
+ha.entities 1 key ha.entities.button kind
+ha.entities 1 key ha.entities.button label
+ha.entities 1 key ha.entities.button name
+ha.entities 1 key ha.entities.button page
+ha.entities 1 key ha.entities.event icon
+ha.entities 1 key ha.entities.event kind
+ha.entities 1 key ha.entities.event label
+ha.entities 1 key ha.entities.event name
+ha.entities 1 key ha.entities.event page
+ha.entities 1 key ha.entities.event types
+ha.entities 1 key ha.entities.number icon
+ha.entities 1 key ha.entities.number kind
+ha.entities 1 key ha.entities.number label
+ha.entities 1 key ha.entities.number max
+ha.entities 1 key ha.entities.number min
+ha.entities 1 key ha.entities.number name
+ha.entities 1 key ha.entities.number page
+ha.entities 1 key ha.entities.number step
+ha.entities 1 key ha.entities.number unit
+ha.entities 1 key ha.entities.select icon
+ha.entities 1 key ha.entities.select kind
+ha.entities 1 key ha.entities.select label
+ha.entities 1 key ha.entities.select name
+ha.entities 1 key ha.entities.select options
+ha.entities 1 key ha.entities.select page
+ha.entities 1 key ha.entities.sensor decimals
+ha.entities 1 key ha.entities.sensor icon
+ha.entities 1 key ha.entities.sensor kind
+ha.entities 1 key ha.entities.sensor label
+ha.entities 1 key ha.entities.sensor name
+ha.entities 1 key ha.entities.sensor page
+ha.entities 1 key ha.entities.sensor unit
+ha.entities 1 key ha.entities.switch icon
+ha.entities 1 key ha.entities.switch kind
+ha.entities 1 key ha.entities.switch label
+ha.entities 1 key ha.entities.switch name
+ha.entities 1 key ha.entities.switch page
+ha.entities 1 key ha.entities.text_sensor icon
+ha.entities 1 key ha.entities.text_sensor kind
+ha.entities 1 key ha.entities.text_sensor label
+ha.entities 1 key ha.entities.text_sensor name
+ha.entities 1 key ha.entities.text_sensor page
+ha.entities 1 msg ENTITY_SET 92 < str:name:32 str:value:255
+ha.entities 1 msg ENTITY_STATE 90 > str:name:32 str:value:255
+ha.entities 1 msg EVENT 91 > str:name:32 str:type:32
+ha.actions 1 cap HA_ACTIONS=17
+ha.actions 1 enum FROM HOME_ASSISTANT=1 PAGE=2
+ha.actions 1 key ha.actions args
+ha.actions 1 key ha.actions calls
+ha.actions 1 key ha.actions label
+ha.actions 1 key ha.actions name
+ha.actions 1 key ha.actions page
+ha.actions 1 key ha.actions.arg name
+ha.actions 1 key ha.actions.arg type
+ha.actions 1 msg ACTION 93 < str:name:32 u8:from=FROM str:token:32 list:args:4(str:name:32 str:value:255)
+button 1 cap BUTTON=18
+button 1 enum BUTTON_HOW PRESS=1 HOLD=2
+button 1 enum BUTTON_KEY ACTION=1 VOLUME_UP=2 VOLUME_DOWN=3
+button 1 msg BUTTON 120 < drop u8:key=BUTTON_KEY u8:how=BUTTON_HOW
+wake 1 cap WAKE=13
+wake 1 const WAKE_SAMPLES_MAX 4096
+wake 1 enum WAKE_FAIL NO_MODEL=1 BAD_MODEL=2 MEMORY=3 UNSUPPORTED=4 OTHER=5
+wake 1 msg WAKE_CLOSE 34 < u8:slot
+wake 1 msg WAKE_FAILED 33 > u8:slot u16:why=WAKE_FAIL
+wake 1 msg WAKE_HEARD 36 > u8:slot u8:score u64:begin u64:end
+wake 1 msg WAKE_OPEN 31 < u8:slot str:word:40
+wake 1 msg WAKE_READY 32 > u8:slot
+wake 1 msg WAKE_RESET 35 <
+wake 1 msg WAKE_WORDS 30 > str:list:32 list:words:16(str:id:40)

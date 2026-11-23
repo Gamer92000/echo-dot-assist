@@ -21,6 +21,10 @@ static void on_multi(int n) { multis++; last_multi = n; }
 static void on_volume(int d) { if (d > 0) ups++; else downs++; }
 static void on_mute(int m) { (void)m; }
 static void on_event(int button, int hold) { (void)button; (void)hold; events++; }
+#include <time.h>
+static atomic_int helds, take; static atomic_llong held_down;
+static long long mono_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+static int on_held(long long down) { helds++; held_down = down; return take; }
 
 static int fd, fails;
 static void key(int code, int value)
@@ -36,7 +40,7 @@ static void tap(void) { key(KEY_HELP, 1); usleep(40000); key(KEY_HELP, 0); }
 int main(int argc, char **argv)
 {
     struct button_handler h = { .action = on_action, .pair = on_pair, .volume = on_volume, .mute_changed = on_mute,
-                               .event = on_event, .multi = on_multi };
+                               .event = on_event, .multi = on_multi, .held = on_held };
     if (argc != 2) return 2;
     unlink(argv[1]);
     if (mkfifo(argv[1], 0600)) { perror("mkfifo"); return 2; }
@@ -68,6 +72,16 @@ int main(int argc, char **argv)
     key(KEY_VOLUMEUP, 1); key(KEY_VOLUMEDOWN, 1); usleep(1300000);
     key(KEY_VOLUMEUP, 0); key(KEY_VOLUMEDOWN, 0); settle();
     check(actions == 2 && pairs == 1, "held 1.3 s without repeats: neither");
+    /* ... but the 1 s hold, for what waits for one (a copied plugin's note), told when the later key went down */
+    check(helds == 1 && mono_ms() - held_down > 1300 && mono_ms() - held_down < 1700, "...it is the 1 s hold, with the time the pair went down");
+    key(KEY_VOLUMEUP, 1); key(KEY_VOLUMEDOWN, 1); usleep(2300000);
+    key(KEY_VOLUMEUP, 0); key(KEY_VOLUMEDOWN, 0); settle();
+    check(helds == 1 && actions == 2, "held 2.3 s without repeats: not the 1 s hold (the pairing hold's time, by the clock)");
+    { int h0 = helds, p0 = pairs;
+      key(KEY_VOLUMEUP, 1); usleep(20000); key(KEY_VOLUMEDOWN, 1);
+      for (int i = 0; i < 16; i++) { usleep(150000); key(KEY_VOLUMEDOWN, 2); }
+      key(KEY_VOLUMEDOWN, 0); key(KEY_VOLUMEUP, 0); settle();
+      check(pairs == p0 + 1 && helds == h0, "held 2 s with repeats: pairing, not the 1 s hold"); }
 
     /* the action button's own key: a press alone is the action at once; with multi press on, 450 ms late, and two or
      * three presses in a row are the multi handler's instead */
@@ -88,6 +102,15 @@ int main(int argc, char **argv)
     check(actions == a0 + 3 && multis == 2, "two presses 700 ms apart: two single presses");
     key(KEY_HELP, 1); usleep(1200000); key(KEY_HELP, 0); settle();
     check(actions == a0 + 3 && multis == 2, "a hold is no press");
+    /* the hold is offered to what waits for one before it is Home Assistant's event, with when the button went down */
+    { int e0 = events, h0 = helds; long long t0 = mono_ms();
+      key(KEY_HELP, 1); usleep(1200000);
+      check(helds == h0 + 1 && events == e0 + 1 && held_down >= t0 && held_down - t0 < 100, "the action button held 1 s: offered with its down time, not taken: the event");
+      key(KEY_HELP, 0); settle();
+      take = 1; e0 = events;
+      key(KEY_HELP, 1); usleep(1200000); key(KEY_HELP, 0); settle();
+      check(helds == h0 + 2 && events == e0, "...taken (a note's wait): no event for Home Assistant");
+      take = 0; }
     buttons_multi_press(0);
     unlink(argv[1]);
     return fails ? 1 : 0;

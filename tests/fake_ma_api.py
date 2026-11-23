@@ -38,8 +38,12 @@ if len(sys.argv) > 1 and sys.argv[1] == "--ui":           # the stand-in UI, as 
             with out: sys.stdout.buffer.write(b); sys.stdout.buffer.flush()
         hung = threading.Event()
         def answer():                                    # bytes as they come (the test sends some that are no UTF-8)
-            while True:
-                with open(fifo, "rb") as q:
+            # (read and write: a writer is always there, so the reader never sees the end of a writer's lines and
+            # never reopens.  Reopened at each end, a line a writer put in between the end and the close was lost
+            # with the close: screen-9's "repeat and shuffle" under tests/run.py -j, repeat_all never sent, a flake a
+            # review of a30d6ed found)
+            with os.fdopen(os.open(fifo, os.O_RDWR), "rb") as q:
+                while True:
                     for line in q:
                         if line == b"#hang\n": hung.set(); continue   # (for the test: alive, reading nothing)
                         tell(line)

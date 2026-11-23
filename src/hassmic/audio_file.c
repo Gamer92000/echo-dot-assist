@@ -118,7 +118,7 @@ void play_earcon_while(const short *pcm, size_t samples, unsigned rate, int (*go
  * Echo Show 5's (~350 ppm), for Sendspin's sync; HASSMIC_FAKE_MUSIC_BURST_MS of it vanish from the queue at once as it
  * starts and stay hidden: AudioTrack's buffer behind audio_android.c's slots (the Show 5's: ~137 ms). */
 struct stream { FILE *f; unsigned bps; long long t0, written; double speed; long long burst_us; float g; };   /* g: the gain now (gliding) */
-static struct stream music, bt, voip;
+static struct stream music, bt, voip, plug;
 static long long raw_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 
 static int s_open(struct stream *s, const char *env, const char *def, unsigned rate, unsigned channels)
@@ -192,6 +192,11 @@ long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }
 int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, "HASSMIC_BT", "/tmp/hassmic_bt.raw", rate, channels); }
+/* a music plugin's: what it plays into $HASSMIC_PLUG_MUSIC, as the music's (tests/fake_plugins_music.py reads it) */
+int       plug_open(unsigned rate, unsigned channels) { fprintf(stderr, "audio: plugin stream %u Hz, %u ch\n", rate, channels); return s_open(&plug, "HASSMIC_PLUG_MUSIC", "/tmp/hassmic_plug.raw", rate, channels); }
+long long plug_queued_us(void) { return s_queued_us(&plug); }
+int       plug_write(const void *data, size_t len) { return s_write(&plug, data, len); }
+void      plug_close(void) { s_close(&plug); fprintf(stderr, "audio: plugin stream closed\n"); }   /* (the tests see a stream's end) */
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 void      bt_close(void) { s_close(&bt); }

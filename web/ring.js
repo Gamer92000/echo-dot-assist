@@ -29,6 +29,7 @@ const RING_PLACES = [
   { id: 'setup', group: 'Setup', label: 'Not set up yet', help: 'Until Home Assistant has adopted the Echo.' },
   { id: 'reset', group: 'Setup', label: 'Factory reset', help: 'While the action button is held for a reset.' },
   { id: 'login', group: 'Setup', label: 'Page login', help: 'While a browser waits for the action button to log in to this page.' },
+  { id: 'plugin', group: 'Setup', label: 'Plugin install', help: 'While a plugin\'s install waits for the action button to accept what the plugin may do.' },
 ];
 const RING_TALKER = 10.5;              // where stock's listening ring points at turn 0: its light-blue pair, LEDs 10 and 11
 // The Echo Show has no ring: a band along the bottom of its screen shows the designs (ring_band.c), flattened and never
@@ -1361,7 +1362,7 @@ function grainPattern(x) {
 
 // what a packshot shows first, of the animations a pack sets: the ones seen most
 const SHOT_ORDER = ['listen', 'think', 'talk', 'error', 'timer', 'mute', 'volume', 'dnd', 'unmute', 'call_in', 'call_live', 'identify',
-  'bt_pairing', 'call_out', 'call_end', 'setup', 'reset', 'login', 'end', 'timer_short', 'assist_volume'];
+  'bt_pairing', 'call_out', 'call_end', 'setup', 'reset', 'login', 'plugin', 'end', 'timer_short', 'assist_volume'];
 const SHOT_FONT = '"Inter", "SF Pro Display", -apple-system, "Segoe UI Variable Display", "Segoe UI", Roboto, "Helvetica Neue", system-ui, sans-serif';
 
 // a design at a share of its run (0..1), by time

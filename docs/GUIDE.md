@@ -173,7 +173,7 @@ System) off takes any certificate, but then anyone on your network could slip th
 
 Three engines, picked under "Wake word" on the [settings page](#settings-page):
 
-|                                         | Amazon's (default)           | microWakeWord (experimental)                    | Home Assistant's           |
+|                                         | Amazon's (default)           | microWakeWord (built in: deprecated, below)     | Home Assistant's           |
 |-----------------------------------------|------------------------------|-------------------------------------------------|----------------------------|
 | Words                                   | "Alexa"; "Echo", "Computer", … downloaded from Amazon | Okay Nabu, Hey Jarvis, Hey Mycroft, Alexa, your own | any openWakeWord model, your own too |
 | How well it hears                       | best                         | **significantly worse**                         | depends on the model       |
@@ -190,6 +190,36 @@ shows with its language and region ("Computer (de-DE)", "Computer (en-US)"). Onl
 Amazon's English (US) "Computer", "Amazon" and "Ziggy" are one model that also knows the others and "Hey Disney".
 
 ### microWakeWord
+
+**The microWakeWord built into hassmic is deprecated.** The [microWakeWord plugin](#plugins) is the same engine in a
+sandbox of its own (a model file it reads can break the wake word and nothing else), and a later release takes the
+built-in one out. While the built-in engine listens, the Wake word page says so and Home Assistant's problem sensor
+"Built-in microWakeWord is deprecated: move to its plugin" is on.
+
+**Move to the plugin** (the card on the Wake word page, wherever the built-in engine has models or listens): one
+button, and each step is shown as it is done. Plugins are switched on if they are off (the dialog says so first,
+and names the other plugins you have switched on, which start with them; Home Assistant reconnects once; if
+nothing gets installed, plugins are switched off again). The Echo fetches the **official** microWakeWord plugin
+from the plugin index, shows what it may do and waits for its action button, as any install; without the press
+nothing is installed and the move stops. Then the Echo **copies** each of your models into the plugin's own list,
+where the plugin checks it as it checks an upload, with the threshold and window you set here (a threshold outside
+the plugin's 0.50 to 0.99 is brought to its nearest end, and the card says so); a model it refuses is named with
+its reason, and nothing of it is kept. Last, the wake word engine becomes the plugin, listening for the same words
+in the same slots ("Wake word" and "Wake word 2"). If anything fails on the way, the built-in engine keeps
+listening as before. The built-in engine keeps its own models, as they were: what you delete or change on the
+plugin's card is the plugin's copy, and the other way round. So **"Switch back to the built-in engine"** on the same
+card (or the engine's choice above) listens for the same words again, tuned as before, and **"Copy the models
+again"** brings models added to the built-in engine since (a model the plugin has already gets the built-in engine's
+files and keeps the threshold and window you set on the plugin's card; the card names those). The plugin stays the
+engine then, with the wake words it has. Nothing moves by itself, also not with an update. An Echo whose plugin used
+the built-in engine's folder under an earlier version got the plugin's own copies once, at its first start with this
+one (the official plugin only); copies of microWakeWord models from another Echo carry the model's two files only.
+
+Where another engine listens (Amazon's, another plugin), the card copies the models and changes nothing else; it
+then offers **"Listen with the plugin for …"** as a step of its own, which says which words the Echo would answer to
+and which it would no longer. A plugin installed as microwakeword that is not the official one (a file, or another
+author's) is named on the card with its author, its author key's fingerprint and where it came from, and the card
+asks before it copies your models to it.
 
 [microWakeWord](https://github.com/kahrendt/microWakeWord) is the engine of ESPHome's own satellites (Home Assistant
 Voice PE). Its small models were trained mostly on synthetic speech and never with the Echo's microphones: **expect
@@ -226,8 +256,9 @@ listens: openWakeWord, with your own models too. The page's dialog walks through
 2. Custom models in `/share/openwakeword`, `.tflite` only: an `.onnx` (as EchoMuse's Forge makes them) needs converting first.
 3. "Add streaming wake word" on the assistant, and that assistant on the Echo's device page.
 
-When Home Assistant hears the wake word, the Echo answers as on its own: the sound, the ring, the front end held on the
-talker until the command ends. During a reply too: once Home Assistant has finished it, the Echo has it listen for the
+When Home Assistant hears the wake word, the Echo answers as on its own (ESPHome and Wyoming): the sound, the ring,
+the front end held on the talker until the command ends. Muted, the Echo sends Home Assistant nothing, so it hears no
+wake word until you unmute. During a reply too: once Home Assistant has finished it, the Echo has it listen for the
 wake word again while the reply plays, so saying it cuts the reply and what follows is the next request (ESPHome only;
 with Wyoming the button cuts a reply). That relies on the Echo's echo canceller keeping its own voice out of the
 microphone, so over a loud reply the wake word may be missed. "<wake word>, stop" right then ends the reply and nothing
@@ -387,7 +418,10 @@ Beyond the README's two figures:
   or a phone setting up the Wi-Fi. In an automation: trigger "Entity" → the Button event, with the event type as
   condition (`{{ trigger.to_state.attributes.event_type == 'action_hold' }}`). A hold is Home Assistant's alone:
   the volume steps only for a press let go within the second (so a step comes as you let go), the action button acts
-  only then too. Held on, the action button still warns at 5 s and resets the Echo at 10 s.
+  only then too. One exception: while the settings page waits for you to take the note of a copied plugin off
+  (the plugins' ring shows, for a minute at most, three times an hour at most), a hold of the action button
+  that begins then is that note's, and `action_hold` does not fire for it; an automation on `action_hold`
+  misses that one hold. Held on, the action button still warns at 5 s and resets the Echo at 10 s.
 - **Echo Show**: no action button. Both volume keys pressed together and let go within a second are it: a login on
   the settings page, debug access, setup from a phone, answering a Drop In. Held 2 s they pair Echos, as on a Dot, so
   there is no hold to reset a Show (see [Factory reset](#factory-reset)).
@@ -431,7 +465,8 @@ Beyond the README's two figures:
   ```
 - **Your own designs** (settings page, Lights): draw animations for the ring and pick, for each of the Echo's own
   (listening, its end, thinking, speaking, not understood, timers, volume, microphones off and on, do not disturb,
-  identify, Bluetooth pairing, the Drop In call states, setup, factory reset, page login), Amazon's or one of yours;
+  identify, Bluetooth pairing, the Drop In call states, setup, factory reset, page login, plugin install), Amazon's
+  or one of yours;
   a design is drawn on its own and can show for as many of them as you like ("Use for…").
   Up to 100 designs; each is frames of the 12 LEDs, every frame shown as long as you set, played again and again, once,
   or an opening then a loop. The designer paints LEDs with a brush or the whole ring, turns, mirrors, dims, makes
@@ -781,7 +816,7 @@ Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (I
 | Always there | |
 |---|---|
 | Media player | TTS, `play_media`; its volume is the Echo's (the music's, see [Separate volumes](#separate-volumes)) |
-| Mute, Do not disturb | DND drops announcements; purple flash when switched on |
+| Mute, Do not disturb | Mute: no microphone audio leaves the Echo, also not for a conversation Home Assistant asked to go on (an announcement still plays); DND drops announcements; purple flash when switched on |
 | Wake sound | the wake sound only, on or off; off keeps the one you chose |
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off (Echo Show 5: the band's brightness, no automatic) |
@@ -820,6 +855,7 @@ Echo announces itself again after 100 s without Home Assistant, then less and le
 | [Sound detection](#sound-detection) | Sound (event) |
 | [Whisper detection](#whisper-detection) | Last request whispered |
 | Wake word events (off by default) | Wake word (event): `detected` (the Echo took it), `near_miss` (Amazon's engine heard something close, did not wake; none with microWakeWord), `answered_elsewhere` (another Echo or satellite answered), `no_speech` (woke, nothing said). A `detected` followed by `no_speech` is a false wake. Nothing while muted. Near misses can come often while the TV plays: an entry in Home Assistant's history each |
+| [Plugins](#plugins) (off by default, on the Plugins page) | Plugin (event): `installed`, `updated`, `removed`, `synced` |
 | Request and reply text (off by default) | Last heard (what speech-to-text understood), Last reply (what the assistant answered). Both are cleared when a request starts, so the same request twice is still a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…". Every request and reply goes into Home Assistant's history while this is on. ESPHome only |
 | [Wi-Fi motion](#wi-fi-motion) | motion sensor, sensitivity |
 | Light sensor (off by default) | Illuminance (the room's light in lux); "LED brightness" then also follows auto brightness, an entry in the logbook every few minutes. Off, it shows only levels you set |
@@ -964,7 +1000,43 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
 Works in Wyoming mode too; the "Web UI address" entity shows the address.
 
 **Logging in**: press "Ask the Echo", then the action button within a minute (the ring shows that a login waits; without a press it
-goes back after the minute, also when the page was closed).
+goes back after the minute, also when the page was closed). Press only once the page says "Waiting… press the
+action button": that is the Echo's word that the press is this login's.
+
+**One thing waits for the action button at a time**: a login, adb (Debug access), a plugin's install, a withdrawn
+plugin to run anyway, or the note of a copied plugin. Whatever you asked for first keeps the button until you press (for a note: hold it for a
+second), a minute has passed, or you cancel it on its page; no request of anyone else puts something else in its
+place. And when it is over, the Echo takes no login from **another** browser for half a minute: a press that comes
+late, or a second press, lets nobody in, and each such press starts that half minute again. So logging in two
+browsers one after the other takes half a minute between them; the second page waits by itself. The Echo
+remembers this over a restart of its software (an update): a browser that asks right after one may be told to
+wait for up to a minute and a half if something was waiting for the button before. What the page says when the
+button is not yours:
+
+- *"Something else waits for the action button, or did a moment ago"* (login page): adb, a plugin's install or
+  another browser's login has the button, or just ended. Do not press for this login. The page keeps asking by
+  itself and says "Waiting… press the action button" when the Echo has taken your login: leave it open.
+- *"Another browser asked to log in at the same time"*: the Echo cannot tell which of two unknown browsers is
+  yours, so it lets neither in. The ring goes dark and a press is an ordinary press. No login is taken until half
+  a minute after the minute of the browser that asked first, and not while the two keep asking against each other;
+  your page keeps asking by itself. If the other browser is not yours and it keeps happening, something on your
+  network is asking: it can delay your login this way for as long as it keeps at it, not get in by your press. Log
+  in through another Echo of the network, which takes no button, and look at `boot.log` ("a second browser asked
+  to log in").
+- *"… waits for the action button first"* (Debug access, a plugin's install): a login has the button. A press now
+  serves that, so the page asks nothing of you; it asks again by itself when that login is over (within its
+  minute), and the Echo takes no further login in between.
+- *"Too many requests to log in came to this Echo"*: more than 40 in ten seconds from one address, or 120 from
+  all; the page waits and asks again. Devices on your network that ask from three addresses as fast as they may
+  can keep every new login out while they do; log in through another Echo of the network then.
+
+**The ring for a login is the same whoever asked.** Any device on your network can ask to log in while nothing
+else waits, and a press then lets it in. Press only while your own page says "Waiting… press the action button".
+
+Closing adb ("Close now") from one browser does not cancel another browser's request to open it that still waits
+for the button. While a phone sets up Wi-Fi over Bluetooth and waits for the button, a press is the phone's: a
+browser's login that waited ends, and its page asks again.
+
 Revoke approved browsers on the page. Echos in one network trust each other: a
 browser logged in on one gets into the others without their buttons ("Log in through <another Echo>"). Debug access
 still takes that Echo's own button.
@@ -1078,7 +1150,38 @@ ESPHome devices and the Voice PE are:
 - A new Echo advertises after 20 s without a network. An Echo installed with `scripts/setup.sh` is on your Wi-Fi
   already: the phone is for a reset, a new network, or an install by hand.
 - An Echo that is set up and lost its network for 10 minutes (new router, moved) advertises too, but takes a network
-  only after a press of its action button (good for a minute).
+  only after a press of its action button (good for a minute). Connect with the app first: the ring then shows
+  that a phone waits, and only a press while it shows is for the setup. With no phone connected the button does
+  what it always does (the music, the assistant).
+  Until that press the phone gets the Echo's name and can make it identify itself (once a minute), nothing else:
+  no list of networks either.
+  One press is good for one change of network within that minute; for another, press again.
+  **The ring does not tell whose phone waits.** A press while it shows lets whatever is connected over Bluetooth
+  within that minute change the Wi-Fi once. **Press only when your own app has asked for the button. If your app
+  cannot find the Echo or cannot connect to it while the ring shows that wait, something else is connected: do
+  not press.** Only one device can be connected to the setup at a time, and one in Bluetooth range can stay
+  connected, with the ring asking, for as long as the Echo is without its network
+  ([Security](SECURITY.md#bluetooth)).
+  Home Assistant gives you a minute and a half to press, then ends its own connection: the ring stops asking,
+  and comes back when Home Assistant connects again to ask once more. A press while the ring is dark is not
+  the setup's (the Echo starts listening, as on any press): press again when the ring shows the wait.
+  A phone that was forgotten is not kept: when nothing has come from it for two minutes and nobody pressed, the
+  Echo ends its connection and offers the setup again; the phone can connect again at once (Home Assistant does
+  so by itself at its next step). After a change of network that worked, the connection ends a minute later.
+  A change of network that fails (a wrong password, a network that gives no address) leaves the Echo offering
+  the setup: try again from the app.
+  If its network comes back by itself while a phone is still connected, the Echo ends that connection once it has
+  been on the network for a minute in all (a switch under way is let finish first; the press, or a scan asked for
+  within the button's minute, begins the minute anew), however often the phone connects again or the network
+  comes and goes: until then the ring would go on asking for the button, and the settings page would keep new
+  browsers waiting. The same on an Echo that is not set up and got its network some other way; there asking for
+  the list of networks does not begin the minute anew.
+  When Home Assistant adds an Echo while a phone is still connected from its setup, that connection ends: at
+  once, or, where a network was just given over that setup, a minute after the change worked. In that minute
+  a phone still gets the result and the settings page's address, the Echo's name and version, and the
+  identify sound and rainbow once; a new network or the list of networks it does not get. Such an Echo never asks for the button for a phone until it has been set up and
+  without its network for ten minutes. Once the Echo is
+  back on its network and no longer offers the setup, a phone that still connects is turned away.
 - Improv sends the Wi-Fi password over Bluetooth **unencrypted**: that is the protocol, the same for every Improv
   device. Not with `-B` (Bluetooth off) in `ARGS`.
 
@@ -1094,6 +1197,400 @@ button to hold (both volume keys held pair Echos instead): only Home Assistant's
 - **Kept**: the install, `hassmic.conf`, Amazon's extra models.
 - Do not hold past 20 s: Amazon's own button handler still runs and has a factory reset of its own at 21 s.
 
+## Plugins
+
+**Experimental**, off by default, and not yet tried on an Echo (2026-11-20). A plugin is a program by someone else
+that runs beside hassmic: a feature its author keeps working. The first one is microWakeWord, the wake word engine
+hassmic also has built in, deprecated there: [Move to the plugin](#microwakeword) takes your models over. Design and state: [plugins.md](plugins.md).
+
+- **Switching them on**: the settings page's Plugins page, "Plugins". Off, no plugin runs. Below the switch: the
+  plugins installed on this Echo, one card each ("Update" on a card where the plugin index has a newer version for
+  this hassmic, with a button on its foot), "Browse plugins" and "Install from file…".
+- **Community plugins** (a switch of its own under "Plugins", **off by default**): everything the plugin index does
+  not list as official, which is its community listings and any package from a file. Off, the Echo installs none of
+  them, whichever way they come (a file, the index, a copy from another Echo, a push), and stops the ones it has:
+  they stay installed with their settings, their cards say why, and they run again when you switch this on. Official
+  plugins are not affected. It is a setting like the others: a click switches it on or off, no press of the action
+  button, since every community plugin still asks for the button when it is installed and gets only what you accept
+  then. It is exported and copied between Echos with your other settings ("Compare & copy", "make like this Echo",
+  an import, a preset); on another Echo it lets nothing in by itself, each plugin there takes that Echo's button.
+  Home Assistant cannot switch it. Where this Echo's system install is older than the plugins' own SELinux domain,
+  the page says in full, never behind an ⓘ, what its sandbox is missing, in two places: in the question before you
+  switch community plugins on there, and in the install dialog of every community plugin (the one that asks for the
+  action button), which an import, a preset or a copy from another Echo does not skip, though they switch the
+  setting without that question. It says which of the three levels this Echo has (complete, without its
+  SELinux wall, without SELinux at all), what stays in place, and how to close the gap on your model (run
+  `scripts/install-system.sh` again; on the Echo Shows that flashes the boot image again, from fastboot as at the first
+  install; the Echo Dot 5 is built and flashed again from its firmware ZIP). A community wake word engine stops with
+  the switch (no wake word, the page says why and what to do) and cannot be chosen while it is off.
+- **The sandbox's state line** at the top of the Plugins page: "Sandbox: complete" (each plugin in the plugins' own
+  SELinux domain, which a system install from 2026-11-22 on has), "without its SELinux wall" (in hassmic's domain: a
+  system install from 2026-11-12 on) or "without SELinux at all" (older system installs: hassmic itself also runs
+  without its domain there, which the page then says, plugins or not). An update never changes this: only running the
+  system install again does. The plugins' own domain is not tried on an Echo yet.
+- **Browse plugins** (a page of its own, `#/plugins/browse`): what the
+  [plugin index](https://github.com/Gamer92000/hassmic-plugins) lists, one row per plugin: its name, Official or
+  Community, its author, what it says of itself, the version this Echo would install, and "Install", "Update" or
+  "Installed" ("Installed, version N: needs a newer hassmic" for one installed under a newer hassmic than the Echo
+  runs now, where the index has nothing newer for this one: there is nothing to update to). A search (name, author, description, and what it may do: "network", "microphone", "wake word"…), a
+  switch "Only what runs on this Echo" (on by default; off, the list also shows plugins that need a newer hassmic,
+  each with why: "Needs a newer hassmic: it speaks net.lan 2, which this one does not yet"), and the
+  tier. Withdrawn versions are not shown, and community plugins only while they are switched on (the page says how
+  many it leaves out and where to switch them on). "Look again" and the time of the last look are at the foot of the search
+  card. **Official** plugins are this project's own, reviewed; **Community** ones are listed and not reviewed: each
+  is built by its author's own GitHub CI from the commit the index names, and the index checks that GitHub vouches
+  for that (an attestation) before it lists it, and ran it for a few seconds to see that it keeps to the sandbox's
+  rules; which shows that the package came out of that public commit's build, not that the code is good. A community row
+  also says the broad things it may do, as the index flags them ("Broad: it connects to the internet…": any device
+  of your network, the internet, calls, every request heard or read), and when the Echo will ask for its button
+  twice (it hears every request and has a way out; on an update of a plugin you accepted with both already: twice
+  wherever that update asks for the button at all, which is where it asks for more than you accepted).
+  After each look the Echo also takes the index's word on the versions you have installed where it is new (a new
+  key of the index, or a higher tier: the same version, so no button and nothing installed; settings and files
+  stay): the row says "Taking the index's listing of it…", and where that failed, why, with "Take its listing" to
+  try again (one that failed for the moment is also tried again at the next look). A plugin whose listing the Echo
+  cannot read (a hassmic of another index key) counts as installed from a file, and with community plugins off it
+  does not run until such a look: its card says so. The Echo looks at the index for it by itself, so this needs
+  nobody to open the Plugins page: about a minute after it starts, when its network comes back (at most once in
+  five minutes), and again every hour while the look did not move it (the index out of reach, say). Where a listing
+  is merely by the index's old key while a new one is coming, its daily look does it. A version the index no longer
+  lists, or lists with nothing your Echo can take, cannot be moved this way: it stays a file's (with community
+  plugins off, stopped) until you install a version the index lists, or switch community plugins on; the hourly
+  look leaves it alone, and the daily look still asks the index, so a version listed again is moved within a day.
+  "Install" has the Echo download the package from the index, check it (its size and SHA-256 against the index's
+  signed list, its author's signature, the index's listing in it) and show the same dialog as a file; the action
+  button accepts it. **For this the Echo asks the index itself** (GitHub Pages: it sees the Echo's address and
+  which files, and "hassmic" as what asks, no version, nothing else): when "Browse plugins" is opened, or the
+  Plugins page while plugins are switched on (once, and not again within an hour), and when you press "Look again",
+  "Install" or "Update". Two exceptions: the list of withdrawn plugins (below), and the plugin that is the Echo's
+  wake word engine, after a hassmic update for which that plugin needs another build; and, before a hassmic update
+  that needs other builds of the plugins installed here, those builds (below). hassmic then looks for it when it looks for updates, so only while "Online updates" is on,
+  and installs it without the button only if it is listed, by the same author key and asks for nothing beyond what
+  you accepted; else it leaves it to you, and the page's warning about the wake word engine stays. What the page
+  says when the list is not taken: "cannot reach the plugin index" (an Echo kept off the internet: download the
+  `.hmp` on a computer from the index's page and use "Install from file…"), a signature that does not hold, "an
+  older list than this Echo has seen" or "than this hassmic takes" (someone serves an old copy of the index;
+  nothing of it is taken), "made with a newer revocation list" (the site's files are of two times: wait a minute
+  and look again), or a list dated more than a day ahead of the Echo's clock. Beside a list that was taken it may say
+  that the index's list of withdrawn plugins is older than the one the Echo has (another Echo handed a newer one
+  over first): the Echo keeps its own. An "Install" or "Update" right after the index published looks at the index
+  once more by itself.
+- **Withdrawn plugins**: the index can withdraw any plugin, official ones included, and one installed from a file
+  (by its name or its author's key), with a reason. Such a plugin is stopped and kept, its card says "the plugin
+  index withdrew this version: …", and it cannot be installed again in that version. Removing it is yours, and so
+  is **"Run it anyway…"** on its card: the Echo waits for its action button, and the plugin then runs with what
+  you accepted for it, until the index publishes another list that names it again (then it stops again and you
+  are asked anew). A list that no longer names it starts it again by itself. A withdrawn wake word engine stops
+  like any other: no wake word is heard (never Amazon's in its place), and the page says to choose another engine
+  or run it anyway. **The Echo learns of withdrawals by itself**: while plugins are on and one is installed, it
+  asks the index for that list once a day at a random time (that file and its signature only, a request to GitHub
+  Pages that names no plugin and no version; the index's list too where a plugin installed may have a new listing
+  there, above), it takes the list from the other Echos of its network and hands its
+  own on (an Echo kept off the internet learns of it that way; only Echos of its network can ask for it, though
+  the hourly word each sends shows anyone on the network that it has plugins; an Echo of the network that
+  misbehaves can hold a newer list back from the others for as long as it keeps at it, so an Echo kept off the
+  internet relies on its neighbours, and the week's warning below is what tells you), and a
+  look at the index brings it too. It never goes back to an older list. The Plugins page shows the list's date and
+  when the Echo last had word that it is the newest (the index's answer, or a newer list from another Echo, counted
+  from the day that list was made; the same list from another Echo is no word); after seven days without such word, while plugins run, the Plugins page
+  and the Overview warn, also when the Echo does not know when it last had word, or after an update that wants a
+  newer list than the one the Echo has (what that one withdraws stays withdrawn meanwhile). With plugins off, none
+  of this is asked or told.
+- **Installing from a file**: "Install from file…" with a package (`.hmp`). The Echo checks it (who signed it, that the program
+  is the one its manifest names, that it is a program the sandbox can hold) and the page lists what the plugin may
+  do, one line each. Then press the action button on the Echo: that accepts the list. An update installs
+  without the button only when it is what you accepted or less of it: everything it may do and every row of its
+  settings as before, or a capability or a row gone, a smaller quota, fewer or smaller files.
+  Anything else (another capability, a larger quota, another row of any kind, a row renamed or with another
+  explanation, preset or range, other files in a file list, another name, another description of itself or
+  another address behind "Source and issues", a change this version does not understand) is listed, as "New: …",
+  "More: …" or "Changed: …" (a new description and a new address are shown as they would be), and waits for the
+  button; until then the version installed keeps running. More memory or threads are shown ("Its limits change")
+  and need no button; the label beside the version's number and the licence's name may change too. Another
+  author's key is never an update, and a version is never replaced by one with a lower or the same number.
+  Where a package comes from counts too: a version installed from the index as official is replaced by one listed
+  as community, or by one from a file, only with the button ("Changed: Comes from …"), and so is one whose listing
+  is from an index older than this hassmic takes (it counts as a file's).
+- **Its settings**: what you type into a plugin's setting belongs to that setting. When an update takes the
+  setting away, the value is deleted from the Echo (a secret too), and a later setting of the same name starts
+  empty. Clearing a server's name puts back the plugin's default where the row has one; the row of a server the
+  plugin connects to has none, and cleared it is unset.
+- **What a plugin needs of hassmic** (its manifest's `requires`): the basics every plugin uses and each thing it
+  asks for, each at a version. A later hassmic only ever adds to each, so a plugin keeps running under every later
+  hassmic. One that needs a version this hassmic does not have yet is refused at install with "needs a newer
+  hassmic" and what it needs; "Browse plugins" offers the newest version this hassmic runs instead (the row says
+  what each version speaks). An update that needs a later version of something it already had installs without the
+  action button when that version only says more of the same, and is listed in the dialog ("It speaks a later
+  version of the plugin protocol"); one that comes to need a version that lets a plugin do more than what you
+  accepted asks for the button, as a new capability does ("More: Speaks net.lan 2, was 1, which lets a plugin do
+  more"); an update that skips versions has a line for each one between, each saying what that version brings. The
+  install dialog, an update that asks for something anew and the plugin's card say under each thing it may do what
+  every later version it needs lets it do on top ("From net.lan 2: ..."). After the Echo fell back to an older hassmic (an update that did not stay), a plugin
+  installed under the newer one is kept, with its settings and files, and does not start: its card says why, and
+  it runs again once the Echo runs a hassmic that has what it needs. If it is the wake word engine, Amazon's wake
+  word listens meanwhile.
+- **Copy plugins** (the card at the foot of the Plugins page; needs another Echo this browser is logged in to): a
+  row for each plugin, its settings and each file you gave it, a column per Echo. Click the Echo a row should come
+  from and press "Copy"; the page installs the plugin first, then the settings, then the files, Echo by Echo, and
+  says what came of each. An official plugin you accepted on one Echo with its action button is installed on the
+  others **without theirs**, when both Echos are in one network (Echos page: "In the network"), neither is in
+  Kiosk Satellite mode, plugins are switched on on the Echo that gets it, and this browser is logged in to both.
+  The Echo that gets it checks the package as it checks any, and says so afterwards: a note at the top of every
+  page of its settings, and of your other Echos' pages while they show their neighbours and this browser is logged
+  in to it ("… was installed on …
+  without its action button … The voucher that stood in for the press named …; the browser … brought the
+  package"), a line in its log, and the `synced` event of Home Assistant's "Plugin" entity (sent once Home
+  Assistant is connected, if it was not). The Echo named there is the one the voucher named: any Echo of your
+  network can make such a voucher, so it is not proof of where the plugin came from. The note stays until it is
+  dismissed, and the browser that copied the plugin cannot do that by a click: "Dismiss with the action button"
+  asks you to **hold that Echo's action button for a second** and let go (on an Echo Show: both volume keys
+  together for a second, let go before two). A short press does not dismiss; it does what it always does (answers
+  a call, pauses music, starts the assistant), so nothing that makes you press takes the note off. Home
+  Assistant's "Button" entity hears no hold for it. Only another browser, one you let in with that very Echo's
+  button, sees a plain "Dismiss": log a browser out there and in again with that Echo's button once, and it is
+  one (after the update of 2026-11-20 no browser is yet; one that came in through another Echo never is). The
+  note names the browser that brought the plugin with the first digits of its key, which System's list of
+  browsers shows too: a browser's name is whatever it called itself. An Echo waits for that hold three times an
+  hour at most, whichever notes and whoever asks (the page says when the next is due), so that no browser can
+  keep the ring asking. A dismissal takes off the notes that showed when you asked, not one that came
+  meanwhile. Sixteen such notes can stand on an Echo; with sixteen standing, read or not, it takes no further
+  plugin without its button. An Echo that once saw a wrongly high version of a plugin in the plugin index
+  asks for its button for every copy of that plugin from then on; only a factory reset forgets it. In every other case (a plugin from a file, an Echo outside the network, plugins switched off there,
+  a version the Echo cannot compare with the one it has, a version older than one it has seen in the plugin
+  index or than one that was installed on it before, also when the plugin was removed since) that Echo shows the usual dialog, with the reason, and waits for its own button. An update that is what that Echo accepted already needs neither. Secrets are never copied: the row says
+  "Not set here" on the Echo that got the plugin. A file both Echos have is not sent again. Whether a plugin is
+  switched on is not copied.
+- **A hassmic update and your plugins**: an update never needs new builds of your plugins (above), so nothing of
+  the plugins holds an online update or a push back, and nothing is fetched for one. An update's self test waits
+  for the wake word engine's plugin where it ran before: a wake word plugin that listened before and does not under
+  the update (its launcher, its sandbox, a program that is not the one you accepted) makes the update a bad one: it
+  does not become the fallback. Nothing goes back for that: the update keeps running, and only the version the
+  Echo falls back to stays the one before. It does not wait for a plugin you switched off (or plugins off), one the
+  index withdrew, or one that needs a newer hassmic (the Echo fell back). So does a plugin that ran as listed by the
+  index and whose listing the update cannot read (a new key of the index) with community plugins off; that update
+  moves the listing itself at its first look (above), and becomes the fallback as soon as the plugin listens again
+  (the Echo asks every 10 s). Your other plugins wait for that too: at every start they wait for the Echo's self test
+  (a few seconds, usually) and start once it passed (with no microphone sound within its 30 s, not in that run). One
+  that ran as a file's or by a community listing (community plugins on then) and stops once they are off is your
+  choice, as any file's. If root refuses an update, the Online updates row no longer says it is being installed.
+- **An update that stops being a wake word plugin** (it drops "hears the microphone all the time") is a new
+  install: it waits for the action button, says that the files you gave it and the data it kept are deleted, and
+  once it runs they are. Its settings stay.
+- **Pushed from the PC**: `scripts/ota-push.sh --plugin <file.hmp> [host]` sends a listed plugin's package (as the
+  index's site has it, `packages/<id>-<version>.hmp`) after the update, for an Echo without internet. The Echo takes it
+  only as an update of a plugin you accepted there before, under the rule above (listed, the same author, nothing
+  new to accept); anything else it refuses, the script prints why, and the settings page is where that is
+  installed. Needs `secrets/update.key`, as the push itself.
+- **While an install waits for the button** the ring shows three light-blue LEDs going round, not the blue
+  breathing of a login: at the Echo you see which of the two your press accepts. On an Echo Show the band shows
+  it and the face says "Plugins: the settings page says how to use both volume keys" (the same pattern shows
+  while a copied plugin's note waits for its hold; the page says which). It ends with the press, with "Cancel" on the page, or by itself after
+  a minute without a press, and then nothing is installed; nothing else ends it, and a browser that is not
+  approved cannot ask for the button meanwhile, so the press is the plugin's for as long as that ring shows. If
+  a login had the button when you clicked "Install", the page says so instead of sending you to the Echo. Its animation can be replaced like the others ("Plugin
+  install" among the [light ring designs](#buttons-and-light-ring)).
+- **What is refused**, with the reason on the page: a package whose manifest is not written the way the Echo reads
+  it (a number as text or with a fraction where a whole number is meant, a number past 32 bits or longer than 39
+  characters, a text with an escaped control character or one that is not UTF-8, a key twice or written with an
+  escape, an object where a list is meant, a default that is not of its row's kind or within its limits, `"wake":
+  0` instead of `true`, a `requires` that does not name exactly the basics and each thing the plugin asks for, each
+  with a whole number from 1), and a plugin that needs a newer hassmic ("needs a newer hassmic: net.lan 2").
+- **Storage, the log and a server** (since 2026-11-21): a card
+  shows how much a plugin keeps on the Echo ("Its data", within the kB you accepted; it goes when you remove the
+  plugin and stays when it is updated, with what the old version saved as it stopped), whether it follows the log
+  and how many lines it was given ("Reads the log"; "Does not answer LOG …" there means the plugin was built on an
+  older SDK and gets no more of the log: its author's to fix;
+  never what was said to the Echo or answered, names of networks, devices, timers or light ring designs, media
+  addresses, Amazon's login code, your home's country, Home Assistant's error texts, or addresses of devices; the
+  settings page's own log shows such lines marked "(private)", and a wake word plugin's "(sealed)"), and when it last
+  connected to its server ("Its server"). The server is a setting on the card: the plugin connects to what you enter
+  there and nowhere else, at the ports its install named; nothing until you enter one (a plugin that comes with a
+  server of its own is refused). Changing or clearing it starts the plugin again. "Copy plugins" has a row "What it
+  keeps" for such a plugin: copied only if you pick it (it is usually about the Echo it was made on), sealed on its
+  way, and never from a wake word plugin into one that is not. Both Echos need this version for that: the page says
+  "update it first" of one that seals its answer the older way. When a wake word plugin is updated to a version that
+  no longer hears the microphone, what it was given and kept is deleted once its old version has stopped, before the
+  new one starts. A plugin is told to stop, and has up to 2 s to save, when it is switched off, updated or removed
+  and when hassmic itself restarts (an update, a restart from the page, a reboot from the page); not when the
+  Echo loses power or hassmic crashes: then it goes on from what it saved last.
+- **Music, the network and Home Assistant** (since 2026-11-21;
+  the install's lines say each in your words):
+  - *Plays sound on this Echo's speaker*: a plugin that is a player (a Squeezebox client, a radio) plays as music,
+    beside Sendspin and a phone over Bluetooth: the newest wins, and the one playing before is paused. Its music is
+    at the music's volume, quieter while the assistant listens and answers, and on the light ring's music effects.
+    The action button pauses it and resumes it, "<wake word>, stop" pauses it, and Home Assistant's media player of
+    the Echo offers pause and play while such a plugin is switched on, its state the plugin's (playing, paused).
+    Its card says "Plays music" with what it plays.
+  - *Changes this Echo's volume*: as the volume keys do (a player whose server sets the volume).
+  - *Sees when this Echo listens and speaks*: idle, listening, thinking, speaking, whether the microphones are off
+    and the volume; never what was said.
+  - *Can be reached from your network, and sends to devices on it*: UDP ports of its own (28940 to 28999, kept for
+    it, shown on its card) that hear only devices on your network (the Echo's firewall lets nothing else in), and
+    it sends to such devices only. *Searches your network for its server*: one search a second at most, to the
+    port its install named (never one of hassmic's own); the answers come to a UDP port of its own, which devices on
+    your network can reach while it runs. What a search finds is **proposed** on its card ("Found 192.168.1.20 … Use it?"): only
+    your click writes it into the plugin's server, and the plugin then starts again. A plugin never sets its server
+    itself, and only an address on your network can be proposed.
+  - *Shows in Home Assistant* and *Home Assistant can tell it to*: entities of its own on the Echo's device in Home
+    Assistant (sensors, switches, numbers, choices, buttons, events), named "Plugin <length of its id> <id>: <label>",
+    for example "Plugin 9 testmusic: Position" (entity id `sensor.echo_dot_3_5695c4_plugin_9_testmusic_position`):
+    no entity id of the Echo's own, nor another plugin's, is ever made that way, so none is ever taken for another
+    when it is switched off and on again (Home Assistant removes an entity that is no longer listed, and the next
+    one to come under the same entity id took it over, history and automations with it). Rename them in Home
+    Assistant as you like: it still knows them by the Echo's name for them. And actions
+    (`esphome.<node>_p<length of its id>_<plugin>_<name>`, for example `esphome.echo_dot_3_5695c4_p9_testmusic_search`,
+    as the Echo's own `drop_in`); an action without arguments can also be a button on its card, and an entity can also
+    be a row on its card (since 2026-11-22: its label and what it shows now, "Connected", "21.5 °C",
+    read-only, under "What it shows" while the plugin runs and Home Assistant lists it; it shows you what Home Assistant is told anyway, so it asks
+    for nothing at install, and an update that adds or takes away such a row needs no press). They are listed while the plugin is switched on (unavailable while it
+    does not run) and go when it is switched off, withdrawn, removed or updated to a version without them, or plugins
+    are switched off: Home Assistant reconnects to the Echo once for each such change. Only Home Assistant's own
+    (keyed) connection can set them or call the actions: until Home Assistant has given the Echo its encryption key
+    (it does so as it adopts the Echo) nothing it sets reaches the plugin, and the plugin's card says so.
+  - *Plays sound on this Echo's speaker, whenever it likes*: it may start playing at any time, as the newest music
+    source; whatever pauses it (the action button, "stop", another source, Home Assistant) silences it until it is
+    resumed or starts anew, whether the plugin obeys or not.
+- **Calls** (since 2026-11-21; a phone line's plugin, say, written
+  by someone else: hassmic ships none). Its lines at install: *Makes and takes calls: a call coming in is answered
+  only at the Echo, one goes out only when Home Assistant or the settings page asks. Hears the room during a call*,
+  and each action that may start a call says "and have it place a call".
+  - A call coming in rings as a Drop In does: the ringtone, the ring's call light, on an Echo Show the plugin's name
+    beside the caller's ("Test phone: Mum"). Answer it at the Echo: the action button or the screen's Answer. The
+    ringtone stops as you press, and the light shows the call connected while the other side comes in. Nothing
+    else answers: not Home Assistant, not the plugin's card, not an automation, and nothing answers by itself. The
+    plugin hears nothing of the room until someone has.
+  - A call goes out only from one of the plugin's actions marked as placing calls, in Home Assistant (an automation
+    too) or with its button on the card: each such call brings the plugin a one-time permission, good for ten
+    seconds, for a call going out and nothing else. Such a call shows on the ring and the screen the whole time. An
+    automation that calls the plugin's other actions cannot start a call.
+  - "Answered only at the Echo" is about the Echo's own ring. What a call going out means on the other side is the
+    plugin's business: a phone line's plugin could, for instance, take its "Call" action to pick up a call that is
+    ringing at its server and so connect to someone who called first. On the Echo that is a call going out,
+    shown from its first moment, which you allowed by calling the action (or by an automation of yours calling it):
+    an automation that calls such an action can therefore connect a caller without anyone at the Echo. Mark an
+    action as placing calls, and call it from automations, only where that is what you want.
+  - While it is connected: the Drop In's sound (the call microphone where the Echo has one, the same echo
+    suppression), the music paused, the call's volume where calls have their own. The action button, "<wake word>,
+    stop", "hang up" or the screen's End end it, on either side.
+  - One call at a time: a Drop In while a plugin's call is on is refused as busy, and a plugin's call while a Drop
+    In is on. Do not disturb and the microphones off refuse it; three rings nobody answered within ten minutes stop
+    the plugin ringing until the ten minutes have passed.
+  - Home Assistant sees the call only through the plugin's own entities (its "Drop In" entities are Drop In's). Its
+    card says "Calls" and whether one rings or is on.
+- **Your network, the internet, the whole log** (since 2026-11-22).
+  Their lines at install name what the plugin may reach: *"Connects to any device on your network (TCP, ports 80,
+  443)"* (any address of your home network the plugin names itself, at those ports, or at any port where it says
+  "any port"), *"Connects to the internet (TCP, port 443)"* (any address or name on the internet, never an address
+  of your home network: a plugin that needs both asks for both; your router's own public address is one on the
+  internet and answers like any server there, which can be its settings page or, through a port it forwards, a
+  device of your home), and *"Reads this Echo's whole log, including what was
+  said"*.
+  - A plugin on your network reaches devices by their address only (it cannot have a name looked up), and never at
+    the name service's ports 53 and 853: your router answers there by asking the internet, which would be a way out
+    for a plugin that should stay at home. Neither reaches the Echo itself, loopback, adb's port 5555, or a
+    broadcast. Its card shows when it last connected.
+  - "Your network" is not a wall against the internet: a device on it that passes traffic on (a proxy, your
+    router's own services, a box that fetches what it is told to) can carry what the plugin sends further. Give
+    "your network" to a plugin you would trust with the internet too.
+  - The whole log is what the settings page's log shows you, the lines marked "(private)" included, but never a wake
+    word plugin's lines. Only plugins the plugin index lists as official may have it: a community plugin or one from a
+    file that asks for it is refused, and one whose listing is gone does not start (its card says why).
+  - A plugin that hears every request and also has the network or the internet needs your button twice, the second
+    time on a screen that says where it could send what it hears ("to the internet and your network"); the plugin
+    index lists such a plugin with the internet only as an official one.
+- **The buttons** (since 2026-11-22). Its line at install:
+  *"Hears presses of this Echo's buttons, as Home Assistant's "Button" does"*. The plugin hears each press and hold
+  of the action and volume buttons that Home Assistant's "Button" event entity hears, at the same moment: never the
+  press that let in a browser, opened adb, accepted a plugin, ran a withdrawn one anyway or authorized a phone's
+  setup, never the hold that took off a copied plugin's note, never a double or triple press
+  that skipped a track. It only hears: what the button does on the Echo (the assistant, pause, answering a call)
+  happens all the same. It tells the plugin when someone is at the Echo and touches it, as it tells Home Assistant;
+  give it to a plugin you would let know that. A wake word plugin cannot have it.
+- **A copy of each request** (since 2026-11-22; a plugin that tells
+  who is speaking, or keeps a log, written by someone else: hassmic ships none). Its lines at install:
+  *"**Hears everything said to this Echo after the wake word or the button**"* (the audio) and *"Reads what was said
+  to this Echo and what it answered"* (the text).
+  - The audio is exactly what Home Assistant is sent of each request: from the wake word or the button (or a
+    follow-up question) to the end of the request, the voices and the room behind them. Never between requests,
+    never while the microphones are muted (muting during a request ends its copy), never on an Echo that did not
+    answer the wake word. With the wake word in Home Assistant, only from Home Assistant's wake word on.
+  - The plugin only listens. It cannot change, delay, end, start or answer a request; Home Assistant answers as
+    always, and what the plugin finds goes to Home Assistant through its own entities (an event "Anna spoke", say),
+    for your automations. A plugin that falls behind loses parts of its copy; Home Assistant loses nothing.
+  - The text is what speech to text understood and the reply (with Wyoming only the words), also while "Last heard"
+    and "Last reply" are off. A "stop" the Echo acted on itself is not passed on.
+  - **Two presses** for a plugin that hears every request and can also send what it hears somewhere (to a server you
+    enter, to devices on your network): after the first, the page shows a screen of its own ("This plugin hears every
+    request and can send what it hears to the server you enter."); ask for the second press there and press the
+    button once more. The Echo installs nothing without it. A copy from another Echo asks for that second press on
+    the Echo it goes to; an update that gives such a plugin a way out asks for both again.
+  - Not beside a wake word engine that is a plugin from a file or a community plugin: its false wake words would
+    open the microphone to the listener. The Echo refuses to install the listener while such an engine is chosen,
+    refuses to choose such an engine while a listener is switched on, and does not start the listener if both are
+    there all the same (its card says why).
+  - The Plugins page names, on its top, every plugin that hears requests while it runs; each one's card says how many
+    requests it had and whether it lost parts of them. Its own lines in the log are private, and so are those of a
+    plugin that makes calls.
+- **Writing a plugin**: start from the template repository `hassmic-plugin-template` (an example in C and in Rust,
+  its build, tests and release; not on GitHub yet, as of 2026-11-21). The plugin index lists it as a community
+  plugin once its entry is merged: your repository's release workflow (the template's `release.yml`) builds the
+  package from a tag, signs it with your key, attests it and publishes it, and the index lists that release asset
+  once the attestation says your repository's own CI built it at the commit the entry names (`make index-check
+  RELEASED=<the asset>` in the template checks that and prints the entry; any language whose program keeps the rules).
+  A package you upload by hand is not listed, and the index's maintainer reads the release workflow for what it takes
+  into the package: nothing from outside that commit (the template's README "Releases" names what that rules out). Nothing of the index is published yet; until then, and for any plugin
+  it does not list, yours is installed from a file.
+- **Development flag** (on every card, off): for people writing plugins. A system call the sandbox does not allow
+  then stops the plugin, and the log names the call, instead of failing quietly. The plugin starts again for it at
+  once. Where the Echo's plugin launcher is an older one the card says the flag is not available.
+- **In Home Assistant**: while "Plugins" is on, the event entity "Plugin" fires `installed`, `updated` and
+  `removed` when a plugin comes, gets a newer version or goes, and `synced` when one was installed without this
+  Echo's button, copied from another Echo ("Copy plugins" above; held until Home Assistant is connected). The event names what happened, not the plugin: the Echo's log and its Plugins page
+  do. Use it for a notification when something is installed on an Echo.
+- **Where a plugin comes from**: "Official" is this project's own: written in a repository of its own, and listed
+  by a hassmic release with the key hassmic's updates are signed with.
+  Anything else is "From a file, not reviewed": nobody but its author has looked at it. For such a package the
+  install dialog names the fingerprint of the key it is signed with (four groups of four, as `plugcheck.py show`
+  prints it): compare it with the one the author publishes.
+- **What a plugin can do** is what its lines say, and nothing else: it has no files, no network of its own and none
+  of hassmic's keys. A wake word plugin hears the microphone all the time, as the wake word engine does, and can
+  have nothing besides the files you give it: no way to send anything anywhere.
+- **Its settings and files** are on its card: rows as the page's own, but in a frame that says whose words they are.
+  A wake word plugin's models are uploaded there ("Add files"), or fetched by your browser from the list the plugin
+  names; the plugin looks at each upload and refuses what it cannot use, with its reason.
+- **As the wake word engine**: choose it on the Wake word page ("Plugin: …"). Home Assistant's "Wake word" selects
+  then list its wake words. When it does not listen, every page says so and Home Assistant's problem sensor "Wake
+  word engine" is on:
+  - *the plugin is missing* (removed, plugins switched off): Amazon's wake word listens until it is back;
+  - *the plugin is installed and down* (crashed, its model does not load): no wake word is heard, the action button
+    works, and the plugin is started again by itself, after 1, 5 and 30 s and then every 5 minutes.
+- **A plugin that keeps crashing** is switched off after five crashes in ten minutes (not the wake word engine's);
+  its card says why, and its switch starts it again. Ended and counted as a crash too: a plugin that answers three
+  pings in a row with nothing, one that does not read what hassmic sends it for 5 s, and one (not the wake word
+  engine's) that uses more than a whole core for a minute.
+- **Up to eight plugins run at once** (since 2026-11-22; two before), as long as the memory they may use is 128 MB
+  between them (each counts what its maker says it may use, the "Up to … MB of memory" on its card; an Echo with less
+  than 512 MB gets a quarter of its memory). One that finds no place **waits for one**: its card says "Waits for a
+  place" and why, and it starts by itself as soon as another stops (the one that waited longest first). The wake word
+  engine's plugin always has a place: if there is none when it is to start, the one started last is stopped for it,
+  and that one waits for a place in turn.
+- **When hassmic itself crashes over what a plugin reported** three times within ten minutes, that plugin is
+  started only five minutes after hassmic's next start, each time, and its card says so. Its switch, a new version
+  of it, or "Switch plugins on again" start it at once.
+- **A plugin this version cannot read** (installed by an earlier one that read its manifest more kindly) keeps its
+  card: it does not run, the card says what is wrong with its manifest and the version its listing names (where it
+  has one), and "Remove" or a newer version of it are the ways out ("Browse plugins" offers an update only where the
+  index has a newer one than that).
+- **If hassmic itself crashes** while it reads a plugin's message, the next start counts it and holds that plugin
+  back for that run (its switch, off and on, starts it). The wake word engine's plugin is not left off: it waits
+  five minutes and is started again by itself, and its card says why meanwhile. After three such crashes within a
+  day no plugin starts but the wake word engine's, and the Plugins page says so, with "Switch plugins on again". A
+  crash of hassmic that no plugin's message had a part in counts for nothing, and neither does a restart, an
+  update or a power cut.
+- **The sandbox** has three strengths, shown on the page: complete, without its SELinux wall, without SELinux at
+  all, by how old the Echo's system install is. `scripts/install-system.sh` run again brings the newest.
+- `PLUGINS=0` in `hassmic.conf` starts hassmic without plugins at all.
+
 ## hassmic.conf
 
 One file on the Echo, `/data/local/hassmic/hassmic.conf`, read at boot (edit over adb, reboot):
@@ -1103,6 +1600,7 @@ PROTO=esphome               # or wyoming (port 16700)
 ARGS=""                     # extra options, below
 #MODE=stock-online          # temporary: stock Alexa online without updates, see the model's install page
 #ADB_WIFI=1                 # leave adb over Wi-Fi open, see below
+#PLUGINS=0                  # no plugins at all (Plugins, above)
 ```
 
 | `ARGS` option | Effect |
@@ -1111,7 +1609,7 @@ ARGS=""                     # extra options, below
 | `-m <pryon.manifest>` | wake word model to start with, until one is picked in Home Assistant |
 | `-w remote` | wake word in Home Assistant; the page then cannot change it |
 | `-E` | no sound on wake |
-| `-D` | the microphone keeps streaming while a reply plays (Wyoming, for a realtime agent such as hermes-talk's Echo surface; the echo canceller keeps the reply out) |
+| `-D` | the microphone keeps streaming while a reply plays (Wyoming, for a realtime agent such as hermes-talk's Echo surface; the echo canceller keeps the reply out); a wake word during the reply, the Echo's or Home Assistant's (`-w remote`), leaves the reply to the client |
 | `-L` | leave the LED ring alone |
 | `-V` | leave the volume buttons alone |
 | `-z 0` | no Sendspin player |
@@ -1126,10 +1624,14 @@ adb on an unlocked Echo is a root shell that asks for no key, so over Wi-Fi it i
 for 30 minutes:
 
 - **Debug access** on the settings page, confirmed with the action button, then `adb connect <echo-ip>:5555`. Closes
-  after 30 minutes, when you close it there, and at every reboot.
+  after 30 minutes, when you close it there, and at every reboot. The row says "a press opens adb" with the
+  seconds left while the button is adb's; if a login waits for the button at that moment, the page says so and
+  asks nothing (see [the settings page](#settings-page) on what waits for the button).
 - `scripts/adb-wifi.sh <echo-ip>` on the PC you installed from: proven with your `secrets/update.key` instead of Home
   Assistant. The way in when the Echo is not adopted, lost its key, runs Wyoming, or Home Assistant is down. Needs
-  hassmic running.
+  hassmic running. "FAILED busy ..." from it (or from `ota-push.sh`) means the Echo's update port had its two
+  connections from your PC's address, or all its places, taken at that moment: run it again; if it stays, another
+  machine on the network keeps the port busy.
 - `ADB_WIFI=1` in `hassmic.conf`: open for good, until you take the line out (no reboot needed). For development, and
   the only way with `MODE=stock-online`.
 

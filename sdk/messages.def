@@ -1,0 +1,352 @@
+# The broker protocol's messages (docs/plugins.md 3.1, 3.4): the one source of sdk/plugmsg.h (the wire format in C,
+# used by hassmic's broker and by the C client), of the message reference in sdk/PROTOCOL.md and of the test vectors,
+# all made by tools/mkplugmsg.py and kept in git; `make unit-plugmsg` fails when they are not this file's, and when
+# this file is not what sdk/scopes.lock recorded of every scope version (below).
+#
+#   scope NAME VERSION "what it is"            core (what every plugin speaks) and one per capability, named as it
+#   version NAME N widens|within "what it adds" every version above 1: whether it lets a plugin do more than its
+#                                               capability's line at install says (widens: an update that comes to
+#                                               require it asks for the button), or only says more of the same
+#   const NAME SCOPE[@N] VALUE
+#   enum NAME SCOPE A=1 B=2@N>A C=3@N>- ...    values of a field; never renumbered.  A value of a version above 1
+#                                               names (>) the value of an earlier version that a peer speaking an
+#                                               earlier one gets in its place (pm_<enum>_for, pm_fit), or none (>-):
+#                                               then the packet is not sent to such a peer at all, which only a
+#                                               message marked drop may be (below).  CAP: one per capability, each its
+#                                               scope's from that scope's version 1
+#   keys CONTEXT SCOPE[@N] KEY ...              keys of the manifest where they stand (manifest, setting, net.lan ...)
+#   msg NAME NUMBER DIR SCOPE[@N][|SCOPE[@N]] [drop] "what it is"
+#                                               drop: it may go to a peer not at all, where a value it holds is one
+#                                               that peer's version has no word for (>-); recorded with the message
+#       TYPE name [MAX] [enum:E] [@N] "..."     u8 u16 u32 u64; str: u16 length + bytes, MAX bytes at most, no NUL;
+#                                               bytes: the same, any byte (a value the plugin keeps).  enum:E: a
+#                                               number that holds E_*'s values, one the peer speaks (else malformed)
+#       list name MAX [@N] "what it is"         MAX elements at most; one level of lists inside.  On the wire: a u16
+#           TYPE name ...                       count where the field stands, the elements after the last field of the
+#                                               struct the list is in (of several lists: in their order)
+#   DIR: > plugin to broker, < broker to plugin, = either.  SCOPE: the scope the message is part of, which is the
+#   capability a plugin needs for it (core: none); a|b: part of either (a plugin with either capability may use it;
+#   its enums are core's or CAP only: a peer of one of its scopes may not speak another's).
+#   @N: the scope's version that brought it (1 where none is written).
+#
+# Versions (sdk/PROTOCOL.md "Versions"): a plugin's manifest names the least version of each scope it speaks
+# ("requires"), and hassmic speaks exactly that with it.  A scope's next version only adds: a message, a field
+# appended after every field of an earlier version (at every level of the message), an enum value, a constant, a
+# key of the manifest.
+# Nothing changes meaning, type, bound, number or direction, and nothing goes: what must break is a new scope.
+# A value's fallback is the value a peer of the earlier version should act on, as that peer understands it: the one
+# the new value is a case of (a call that ended "elsewhere" ended: STOPPED; a failure of a new kind: FAILED).  Never a
+# failure or refusal mapped to a success, never a command mapped to another command, never an event to one that did
+# not happen (a new key of the buttons is not the action button to a plugin that knows only that one).  `>-` (no
+# earlier value is right: the packet goes to a peer of that version not at all, its sender drops it without a word
+# as what that peer cannot be told, and the reference says so) only where the enum is what the message is about: an
+# event whose whole point is the new value, on a message marked drop (BUTTON: a key a button-1 plugin does not
+# have).  Never on an answer (ERR), an end (CALL_END, CALL_HANGUP, REQ_END), a state (STATE, MUSIC_STATE) or a reason
+# or qualifier of something else (MWHY, FROM, REQSRC, WAKE_FAIL, FILE_BAD): what those say must arrive, so a new
+# value there names the earlier one it is a case of, and one that is a case of none, a new command among them, is a
+# new message.  tools/mkplugmsg.py refuses `>-` on an enum that a message not marked drop holds, the greeting, OK and
+# ERR are never marked, and the lock records the mark.  The fallback is recorded with the value: it never changes.  A message of several scopes, and the greeting (HELLO, WELCOME, REFUSED), never grow: their lists of
+# scopes hold 255, every scope there will ever be.  tools/mkplugmsg.py refuses what breaks these rules, and
+# sdk/scopes.lock holds what each recorded version had: a recorded version that messages.def no longer makes fails the
+# build, and so does one that any release (a tag v*, of main or of release) carried and that is here otherwise, a line
+# taken out or added.
+#
+# A packet: u16 type, u16 flags (0), u32 id, then the fields in order, little-endian, 32 kB at most, and nothing
+# after them.  id ties an answer to its request (the asker picks it, never 0); events have 0, but for LOG, which the
+# plugin answers (flow control).  Numbers are the wire's: never reused.
+
+scope core 1 "what every plugin speaks: the greeting, its settings, READY, PING, STOP, the time, OK and ERR"
+scope storage 1 "data of its own on the Echo"
+scope files 1 "the files the owner uploads on its card"
+scope state 1 "what the Echo does: idle, listening, thinking, speaking; mute; volume"
+scope log.read 1 "hassmic's log without what was said, names and addresses"
+scope log.read.full 1 "the log as the settings page shows it (official plugins only)"
+scope net.server 1 "sockets to the server the owner enters"
+scope net.lan 1 "sockets to addresses on the local network"
+scope net.internet 1 "sockets to the internet"
+scope net.udp 1 "UDP ports of its own"
+scope net.discover 1 "a search of the network"
+scope audio.music 1 "a music source"
+scope audio.volume 1 "the Echo's volume"
+scope call 1 "calls: a ring, the room's audio while one is live"
+scope wake 1 "the microphone stream all the time; wake words"
+scope request.audio 1 "a copy of each request's audio"
+scope request.text 1 "each request's transcript and reply"
+scope ha.entities 1 "entities in Home Assistant"
+scope ha.actions 1 "actions Home Assistant calls"
+scope button 1 "presses and holds of the Echo's buttons"
+
+const MAX_PACKET core 32768
+
+enum ERR        core UNKNOWN=1 DENIED=2 BAD=3 BUSY=4 LIMIT=5 NOT_FOUND=6 FAILED=7 UNSET=8
+enum MUSIC      audio.music PLAYING=1 PAUSED=2 STOPPED=3
+enum MCMD       audio.music PAUSE=1 RESUME=2 STOP=3 NEXT=4 PREVIOUS=5
+enum MWHY       audio.music BUTTON=1 STOP_WORD=2 OTHER_SOURCE=3 HOME_ASSISTANT=4
+enum STATE      state IDLE=0 LISTENING=1 THINKING=2 SPEAKING=3
+enum FROM       ha.actions HOME_ASSISTANT=1 PAGE=2
+enum HANGUP     call BUTTON=1 SPOKEN=2 SCREEN=3 NOT_ANSWERED=4 NOT_LIVE=5 STOPPED=6
+enum RESULT     call HUNG_UP=1 BUSY=2 DECLINED=3 NO_ANSWER=4 FAILED=5
+enum REFUSED    core SCOPES=1 STATE=2
+enum REQSRC     request.audio WAKE_WORD=1 BUTTON=2 FOLLOW_UP=3 HA_WAKE=4
+enum REQEND     request.audio HA=1 HEARD_HERE=2 CANCELLED=3 TIMEOUT=4 ERROR=5 LINK_LOST=6 MUTED=7
+enum REQTEXT    request.text HEARD=1 REPLY=2
+enum WAKE_FAIL  wake NO_MODEL=1 BAD_MODEL=2 MEMORY=3 UNSUPPORTED=4 OTHER=5
+enum FILE_BAD   files FORMAT=1 UNSUPPORTED=2 TOO_LARGE=3 MISSING=4 OTHER=5
+enum BUTTON_KEY button ACTION=1 VOLUME_UP=2 VOLUME_DOWN=3
+enum BUTTON_HOW button PRESS=1 HOLD=2
+# a capability's number: CONNECT's and UDP_OPEN's kind (WELCOME says what was granted as the scopes spoken)
+enum CAP        core STORAGE=0 FILES=1 STATE=2 LOG_READ=3 LOG_READ_FULL=4 NET_SERVER=5 NET_LAN=6 NET_INTERNET=7 NET_UDP=8 NET_DISCOVER=9 AUDIO_MUSIC=10 AUDIO_VOLUME=11 CALL=12 WAKE=13 REQUEST_AUDIO=14 REQUEST_TEXT=15 HA_ENTITIES=16 HA_ACTIONS=17 BUTTON=18
+
+# ---------------------------------------------------------------- the manifest's keys (sdk/PROTOCOL.md "The manifest")
+# Where each stands (a context: the manifest itself, a setting, a capability's entry) and the scope version that
+# brought it.  A manifest that uses a key of a later version than it requires of that scope is refused, by the Echo
+# and by the plugin index alike (plugin_store.c ps_manifest_parse, hassmic-plugins' tools/index.py manifest_check);
+# a key no build knows is refused where the context is strict (a capability's entries) and left alone where it is
+# not (the manifest itself, a setting: a key the Echo reads nothing of)
+keys manifest           core id name author version version_name source license description requires author_key digest memory_mb threads models capabilities settings
+keys setting            core name label type help unit min max options default item max_items fields catalog
+keys setting.item       files by files
+keys setting.item.file  files suffix as max_kb optional
+keys setting.field      files name label type min max step
+keys net.server         net.server setting proto ports
+keys net.discover       net.discover udp to
+keys net.lan            net.lan proto ports
+keys net.internet       net.internet proto ports
+keys ha.entities.binary_sensor ha.entities name kind label icon page
+keys ha.entities.sensor        ha.entities name kind label icon page unit decimals
+keys ha.entities.text_sensor   ha.entities name kind label icon page
+keys ha.entities.switch        ha.entities name kind label icon page
+keys ha.entities.button        ha.entities name kind label icon page
+keys ha.entities.number        ha.entities name kind label icon page unit min max step
+keys ha.entities.select        ha.entities name kind label icon page options
+keys ha.entities.event         ha.entities name kind label icon page types
+keys ha.actions         ha.actions name label args page calls
+keys ha.actions.arg     ha.actions name type
+
+# ---------------------------------------------------------------- core
+msg HELLO 1 > core "The first message, and the plugin's: every scope its client speaks, each at the highest version it has (its sdk/messages.def's).  The greeting never grows."
+    u32 sdk "the client library's version, for the log"
+    list scopes 255 "the scopes, each once"
+        str name 24 ""
+        u16 version "1 or more"
+msg WELCOME 2 < core "The answer to HELLO: where it runs, and the version of each scope spoken with it from here on: exactly its manifest's requires (hassmic sends it nothing of a later version, and takes nothing of one), which is also what it was granted (core and the scope of each capability the owner accepted).  The greeting never grows."
+    u32 clock_set "1: the wall clock is set (it comes from Home Assistant)"
+    str model 48 "the Echo's model, as Home Assistant shows it"
+    str node 64 "its node name"
+    str name 64 "its name"
+    str zone 64 "the time zone: a name or a POSIX rule, empty while unknown"
+    list scopes 255 "the scopes spoken, each once: core and those of its capabilities (what the owner accepted)"
+        str name 24 ""
+        u16 version ""
+msg REFUSED 3 < core "The answer to a HELLO hassmic cannot serve; the plugin ends.  SCOPES: its client does not speak a scope at the version its manifest requires (HELLO named it lower, or not at all); STATE: a HELLO out of turn.  The greeting never grows."
+    u16 why enum:REFUSED "REFUSED_*"
+msg CONFIG 4 < core "The plugin's settings, all of them: after WELCOME and whenever the owner changes one."
+    list settings 32 ""
+        str name 32 ""
+        str value 512 "as text: a bool is 0 or 1"
+msg READY 5 > core "The plugin has its settings and runs.  Until then hassmic sends it nothing but CONFIG and FILES."
+msg PING 6 < core "Every 10 s; three unanswered and the plugin is killed."
+msg PONG 7 > core "The answer, with PING's id."
+msg STOP 8 < core "End now: 2 s, then SIGTERM."
+msg TIME 9 < core "The clock was set, or the time zone changed."
+    u32 clock_set ""
+    str zone 64 ""
+msg OK 10 = core "A request went through (the request's id).  A descriptor the request asked for comes with it.  From the plugin: a LOG handled (the LOG's id)."
+msg ERR 11 = core "A request did not (the request's id)."
+    u16 code enum:ERR "ERR_*"
+
+# ---------------------------------------------------------------- files (the owner uploads, the plugin reads)
+msg FILES 20 < files "One list of uploaded items: after CONFIG and whenever the owner adds, edits or deletes one."
+    str list 32 "the files setting's name"
+    list items 64 ""
+        str id 40 ""
+        u8 checked "1: the plugin said FILE_OK to it"
+        str title 64 "what FILE_OK named it"
+        list fields 16 "the owner's values of the item's fields"
+            str name 32 ""
+            str value 256 ""
+        list files 8 ""
+            str name 64 "the file's suffix, as the manifest names it"
+            u32 size ""
+msg FILE_OPEN 21 > files "One file of an item: OK comes with a read-only descriptor of it."
+    str list 32 ""
+    str item 40 ""
+    str file 64 "its suffix"
+msg FILE_CHECK 22 < files "The owner uploaded this item: can the plugin use it?  5 s for FILE_OK or FILE_BAD (this id)."
+    str list 32 ""
+    str item 40 ""
+msg FILE_OK 23 > files "The item is good."
+    str title 64 "for its row on the page (a wake word model: the phrase)"
+    list fields 16 "start values of its fields, read out of the file"
+        str name 32 ""
+        str value 256 ""
+msg FILE_BAD 24 > files "The item cannot be used; it is not kept."
+    u16 code enum:FILE_BAD "FILE_BAD_*"
+    str why 200 "shown as text"
+
+# ---------------------------------------------------------------- wake (the microphone stream, all the time)
+# The stream comes with the first WAKE_OPEN: SOCK_SEQPACKET, each packet a u64 position (samples since hassmic's
+# start), then one block of 16 kHz mono s16le, WAKE_SAMPLES_MAX samples at most (hassmic cuts a longer capture block
+# into several, each with its own position; a reader's buffer of 8 + 2 * WAKE_SAMPLES_MAX bytes takes every packet
+# whole: a SOCK_SEQPACKET read into less cuts the packet and loses its rest, a review of 6631974, 9)
+const WAKE_SAMPLES_MAX wake 4096
+msg WAKE_WORDS 30 > wake "The items the plugin can listen for: at start and whenever they change.  Ids only: the phrases are hassmic's, fixed when the owner uploaded each item."
+    str list 32 "the files setting they are items of"
+    list words 16 ""
+        str id 40 ""
+msg WAKE_OPEN 31 < wake "Listen for this word in this slot.  The first one comes with the stream's descriptor.  5 s for WAKE_READY or WAKE_FAILED."
+    u8 slot "0 or 1"
+    str word 40 ""
+msg WAKE_READY 32 > wake "The slot's word is loaded and listening."
+    u8 slot ""
+msg WAKE_FAILED 33 > wake "The slot's word could not be loaded."
+    u8 slot ""
+    u16 why enum:WAKE_FAIL "WAKE_FAIL_*"
+msg WAKE_CLOSE 34 < wake "Stop listening in this slot."
+    u8 slot ""
+msg WAKE_RESET 35 < wake "The audio has a gap (hassmic played something, the capture restarted): forget what was heard."
+msg WAKE_HEARD 36 > wake "The slot's word, between two positions of the stream.  Checked by hassmic: begin < end, end not ahead of the stream and at most 300 ms behind it, 0.3 to 1.5 s long, one a second."
+    u8 slot ""
+    u8 score "how sure, 0..255"
+    u64 begin "samples, on the stream's clock"
+    u64 end ""
+
+# ---------------------------------------------------------------- storage (the plugin writes)
+msg STORE_GET 40 > storage "The value kept under a key: answered STORE_VALUE (this id), or ERR NOT_FOUND."
+    str key 48 "[a-z0-9._-], 1 to 48, not beginning with a dot, not ending in .tmp and digits"
+msg STORE_VALUE 41 < storage "The answer to STORE_GET."
+    bytes value 16384 ""
+msg STORE_PUT 42 > storage "Keep this value under this key, in place of what was there.  OK; ERR LIMIT: over the accepted kB (or 128 keys); ERR BUSY: written too often (10 writes, then one a minute: the Echo's flash), try again later."
+    str key 48 ""
+    bytes value 16384 ""
+msg STORE_DEL 43 > storage "The key and its value away (a write as STORE_PUT is).  OK, or ERR NOT_FOUND."
+    str key 48 ""
+
+# ---------------------------------------------------------------- the log (log.read, log.read.full)
+msg LOG_FOLLOW 50 > log.read|log.read.full "Send the log from here on (LOG events) until the plugin ends.  OK, or ERR BAD for a cursor that is none.  Asked again: from there instead."
+    str from 40 "a cursor of a LOG before (after a restart: what was written meanwhile); start: the oldest line kept; empty: from now"
+msg LOG 51 < log.read|log.read.full "Lines of hassmic's log, whole and in order: under log.read without what was said, names and addresses; under log.read.full (official plugins only) as the settings page shows them, what was said included, but for a wake word plugin's lines and the Sendspin pairing token (sdk/PROTOCOL.md).  It has an id: the plugin must answer OK (that id) once it has handled the lines, and the next LOG comes only after that OK (flow control; unanswered for 10 s, hassmic says so).  A plugin that falls behind loses nothing that is still kept."
+    str cursor 40 "where the next LOG begins: keep it to go on from there"
+    u8 gap "1: lines between the cursor asked for and these are gone (the log was rotated twice meanwhile)"
+    list lines 64 ""
+        str line 1024 "one line, with its time in front; no line end"
+
+# ---------------------------------------------------------------- the network (net.server, net.lan, net.internet)
+msg CONNECT 60 > net.server|net.lan|net.internet "A socket by one of the capability's entries: OK comes with it, connected and non-blocking (TCP), or connected (UDP: send() reaches that address only).  The plugin's to keep and close; hassmic keeps no copy.  net.server: the server the owner entered; net.lan: an address on the local network the plugin names (private or link-local, a.b.c.d, never a name), never at DNS's ports 53 and 853; net.internet: an address or name on the internet the plugin names, never one on the local network (also not what a name resolves to).  Never loopback, the Echo's own addresses, multicast, broadcast, 0.0.0.0/8 or port 5555.  ERR DENIED: not that entry's host or port, not the kind's address, not the plugin's capability; UNSET: the owner has not entered the server; NOT_FOUND: its name has no address; FAILED: no connection (10 s for all of it); BUSY: two under way, or 30 in the last minute, or its name's lookup not begun (two of the plugin's own still under way, or the Echo's at its bound); BAD: before READY, no host for net.lan or net.internet, a host that is no name or address, port 0 where the entry has more than one."
+    u8 kind enum:CAP "the capability (CAP_NET_SERVER, CAP_NET_LAN, CAP_NET_INTERNET)"
+    u8 entry "the entry's place in that capability's list, from 0"
+    str host 253 "net.server: empty, the server the owner entered (anything else must be that, as written).  net.lan: an IPv4 address, a.b.c.d.  net.internet: a host name or an IPv4 address"
+    u16 port "0: the entry's (its only port, or for net.server the one in its port setting); else one the entry allows (any but 5555 for \"any\", for net.lan also but 53 and 853)"
+
+# ---------------------------------------------------------------- UDP of its own, discovery, proposals (net.udp, net.discover, net.server)
+msg UDP_OPEN 61 > net.udp|net.discover "A UDP socket bound to a port of the plugin's own (28940 to 28999, the same at every start): answered UDP_OPENED (this id) with its descriptor.  It hears only private and link-local senders.  kind CAP_NET_UDP: one of the manifest's net.udp count (entry from 0); CAP_NET_DISCOVER: the socket that searches (entry 0), BROADCAST's.  ERR DENIED: not the plugin's capability or entry; BUSY: that one is open; LIMIT: no port left; BAD: before READY."
+    u8 kind enum:CAP "CAP_NET_UDP or CAP_NET_DISCOVER"
+    u8 entry ""
+msg UDP_OPENED 62 < net.udp|net.discover "The answer to UDP_OPEN, with the socket (receive with recv or recvfrom; send with send once UDP_PEER fixed its peer, or by SENDTO)."
+    u8 handle "what UDP_PEER, SENDTO and BROADCAST name it by"
+    u16 port "the port it is bound to"
+msg UDP_PEER 63 > net.udp "Fix the peer of a net.udp socket: send() reaches that address and port only, and only it is heard.  A private or link-local unicast address the Echo routes out of its network interface, never the Echo's own, loopback, port 5555 or DNS's 53 and 853.  A new peer once a second, two at once.  OK; ERR DENIED (the address), BAD (no such handle), BUSY (over the rate)."
+    u8 handle ""
+    u32 address "IPv4: a.b.c.d as (a << 24) | (b << 16) | (c << 8) | d"
+    u16 port ""
+msg SENDTO 64 > net.udp "One datagram from a net.udp socket to an address as UDP_PEER allows them; sent without waiting (dropped when the socket's queue is full).  50 a second.  An answer only to an id that is not 0: OK, or ERR DENIED, BAD, BUSY (over the rate)."
+    u8 handle ""
+    u32 address ""
+    u16 port ""
+    bytes data 1472 ""
+msg BROADCAST 65 > net.discover "The search: one datagram from the net.discover socket to the manifest's port, on every network the Echo is on (each one's broadcast address) or to the manifest's multicast group.  Once a second.  Answers come to that socket.  An answer only to an id that is not 0: OK, or ERR BAD, BUSY."
+    u8 handle ""
+    bytes data 1472 ""
+msg PROPOSE 66 > net.server "What the plugin found, offered to the owner for a host row its net.server names: shown on its card ('Found 192.168.1.20. Use it?'), written only by the owner's click.  A private or link-local IPv4 address as text; one per row at a time, a minute apart.  OK; ERR DENIED (not such a row, not such an address), BUSY (within the minute), BAD."
+    str setting 32 ""
+    str value 15 "a.b.c.d"
+msg NET 67 < net.server|net.lan|net.internet|net.udp|net.discover "The Echo's address on its network, to a plugin with a net capability: after READY and whenever it changes."
+    u32 address "as UDP_PEER's; 0 while it has none"
+    u32 mask ""
+    u8 up "1: on a network"
+
+# ---------------------------------------------------------------- music (audio.music, audio.volume)
+msg MUSIC_OPEN 70 > audio.music "Play: OK comes with a stream socket (SOCK_STREAM, non-blocking) into which the plugin writes s16le at this rate and these channels; what it writes plays on the Echo's speaker as music (ducked under the voice assistant, at the music's volume).  The newest music source wins: Sendspin and a phone over Bluetooth are paused.  Rates 8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000; 1 or 2 channels.  ERR BAD: a format it does not take, BUSY: open already (MUSIC_CLOSE first), LIMIT: ten in a minute."
+    u32 rate ""
+    u8 channels ""
+msg MUSIC_STATE 71 > audio.music "What the plugin's player does now: the button, the stop word and Home Assistant's media player go by it.  PLAYING with a stream open makes it the newest source; title and artist go to its card.  An answer only to an id that is not 0."
+    u8 state enum:MUSIC "MUSIC_*"
+    str title 128 ""
+    str artist 128 ""
+msg MUSIC_CLOSE 72 > audio.music "The stream ends: what was written plays out, then the output closes.  OK."
+msg MUSIC_POS 73 < audio.music "Where the stream is, five times a second while it is open: what a player needs to say where it is (and to keep a group in step)."
+    u64 frames "frames that reached the speaker"
+    u64 at "when, on the monotonic clock (CLOCK_MONOTONIC, microseconds)"
+    u32 queued "microseconds written and not played yet"
+msg MUSIC_CMD 74 < audio.music "Do this to what plays: from the action button, the stop word, another source that started or a Drop In call (OTHER_SOURCE), Home Assistant's media player."
+    u8 cmd enum:MCMD "MCMD_*"
+    u8 why enum:MWHY "MWHY_*"
+msg VOLUME_SET 75 > audio.volume "Set the Echo's volume (as the keys do; a burst sets it at once and then to its last value, 500 ms apart at most; the last value is dropped if the volume is set elsewhere before it, and VOLUME says what it is): OK; ERR BUSY over five a second or twenty a minute."
+    u8 percent "0..100"
+msg VOLUME 76 < audio.volume "The Echo's volume moved, from wherever: after READY and on every change."
+    u8 percent ""
+
+# ---------------------------------------------------------------- the assistant's state (state)
+msg STATE 80 < state "What the Echo does: after READY and on every change of any of it.  Never what was said."
+    u8 state enum:STATE "STATE_*"
+    u8 muted "1: the microphones are off (the button's latch or Home Assistant's switch)"
+    u8 volume "0..100"
+
+# ---------------------------------------------------------------- Home Assistant's entities and actions (ha.entities, ha.actions)
+msg ENTITY_STATE 90 > ha.entities "An entity's state, as text: a sensor's number, a binary sensor's or switch's on/off, a number within its limits, a select's option, a text sensor's text (255 bytes).  Ten a second for all of the plugin's.  An answer only to an id that is not 0: OK, or ERR BAD (no such entity, a value it cannot take), BUSY."
+    str name 32 "the manifest's"
+    str value 255 ""
+msg EVENT 91 > ha.entities "An event entity fires one of its types.  Counted with ENTITY_STATE."
+    str name 32 ""
+    str type 32 ""
+msg ENTITY_SET 92 < ha.entities "Home Assistant set a switch, number or select of the plugin's, or pressed its button (value empty).  The plugin answers with ENTITY_STATE once it is so."
+    str name 32 ""
+    str value 255 ""
+msg ACTION 93 < ha.actions "One of the plugin's actions, called by Home Assistant (its keyed link) or by the owner's button on its card."
+    str name 32 ""
+    u8 from enum:FROM "FROM_*"
+    str token 32 "call: a call token (32 hex digits) when the manifest marks the action \"calls\" (both of its ways in are a person's: Home Assistant's keyed link, an approved browser); else empty.  One use, for CALL_OUT only (a call going out), within 10 s; it answers no call coming in"
+    list args 4 "in the manifest's order"
+        str name 32 ""
+        str value 255 "an int as its digits"
+
+# ---------------------------------------------------------------- calls (call)
+msg CALL_INCOMING 100 > call "A call comes in: the Echo rings (its ringtone, its light, on a Show the plugin's name beside WHO) until a person answers here (CALL_ANSWER) or it ends.  OK: it rings; ERR BUSY: another call is on (a Drop In, another plugin's, this one's), or a ring asked faster than its looks at the line allow: each ring refused busy costs one, one a second come back and two at most kept, and with none left it is refused busy without a look; DENIED: do not disturb, or the microphones are off; LIMIT: three rings of this plugin unanswered in the last ten minutes; BAD: before READY."
+    str who 64 "the caller as the plugin names it (a number, a name): shown, never interpreted"
+msg CALL_ANSWER 101 < call "A person here answered the ringing call (the action button, the Show's screen): answer it on the far side, then CALL_LIVE."
+msg CALL_HANGUP 102 < call "hassmic ended the call (any state): end it on the far side.  No CALL_END is needed after it."
+    u8 why enum:HANGUP "HANGUP_*"
+msg CALL_OUT 103 > call "Place a call: only with a token an ACTION marked calls just brought (a person asked for it).  The Echo shows the call going out.  OK; ERR DENIED: no such token, used, older than 10 s, or the microphones are off; BUSY: another call is on; BAD."
+    str token 32 ""
+    str who 64 "whom it calls, as shown"
+msg CALL_RINGING_THERE 104 > call "The far side rings (a call going out).  For the log.  An answer only to an id that is not 0."
+msg CALL_LIVE 105 > call "The call is connected on the far side: OK comes with the call's audio socket (SOCK_SEQPACKET; each packet a u32 sequence number, then 20 ms of 16 kHz mono s16le, 644 bytes: the room's microphone from hassmic, the far side's voice to hassmic).  An incoming call only once a person answered it here, at the Echo (CALL_ANSWER); no token answers one.  ERR DENIED: not answered here; BAD: no call of this plugin's in that state."
+    str token 32 "not looked at (a token is for CALL_OUT only): send it empty.  Kept: a field of call 1's layout; read as every text field is, so one that is not a string (a NUL inside, longer than 32 bytes) is BAD"
+msg CALL_END 106 > call "The call ended on the far side, or the plugin ends it: in any state.  OK."
+    u8 result enum:RESULT "RESULT_*"
+
+# ---------------------------------------------------------------- a request's copy (request.audio, request.text)
+# The audio comes on a socket of its own per request, handed over with REQ_START: SOCK_SEQPACKET, each packet a u32
+# run number and a u32 offset (samples since the run's first, the lead-in's zeros included; a gap: blocks dropped),
+# then one block exactly as Home Assistant got it, 16 kHz mono s16le, REQ_SAMPLES_MAX samples at most.  hassmic's end
+# is closed after the run's last block: read it to its end
+const REQ_SAMPLES_MAX request.audio 2048
+msg REQ_START 110 < request.audio "A request begins: a copy of what Home Assistant is sent comes on the socket that comes with this message, until REQ_END.  Only the Echo that streams the request has one; with the wake word in Home Assistant (-w remote) from its wake word on.  Nothing can be sent back: the plugin hears, it never takes part."
+    u32 run "the request's number, new with each (the audio's packets carry it)"
+    u8 source enum:REQSRC "REQSRC_*: the wake word heard here, the action button, a follow-up Home Assistant asked for, the wake word heard in Home Assistant"
+    u8 slot "the wake word's slot (0 or 1) for REQSRC_WAKE_WORD, else 0"
+    str phrase 64 "the wake word's phrase that goes to Home Assistant with the request"
+msg REQ_END 111 < request.audio "The request's audio ended (the microphone off): the socket has its last block and then its end."
+    u32 run ""
+    u8 why enum:REQEND "REQEND_*: Home Assistant ended it (it heard enough, or ended its run), the end heard here, cancelled (the button, stop, a new wake word), the pipeline's timeout, an error, the link lost, the microphones muted (the button's latch or Home Assistant's switch)"
+    u32 samples "samples the copy had (what Home Assistant got of it)"
+    u32 dropped "of them not sent to the plugin: its socket was full (it did not read in time)"
+msg REQ_TEXT 112 < request.text "What speech to text understood of a request, or the assistant's answer, as Home Assistant reports them (Wyoming: the transcript only).  A bare stop or wake word that the Echo acts on itself is not passed on."
+    u32 run "the request's number, as REQ_START's (a plugin without request.audio gets only this)"
+    u8 kind enum:REQTEXT "REQTEXT_*"
+    str text 1024 ""
+
+# ---------------------------------------------------------------- the buttons (button)
+msg BUTTON 120 < button drop "A button of the Echo was pressed or held a second: exactly what Home Assistant's \"Button\" event entity hears (the same moment, the same exclusions): never a press that served a wait for the button (a login of the settings page, adb, a plugin's install, a withdrawn plugin run anyway, a phone's setup over Bluetooth), never a hold that served the settings page's note, never a skip of a double or triple press.  The plugin only hears: what the button does on the Echo happens all the same, and nothing it answers changes that.  Five a second, ten at once: more are dropped, and the log counts them."
+    u8 key enum:BUTTON_KEY "BUTTON_KEY_*: the action button, volume up, volume down"
+    u8 how enum:BUTTON_HOW "BUTTON_HOW_*: pressed (let go within a second), held a second (still down)"

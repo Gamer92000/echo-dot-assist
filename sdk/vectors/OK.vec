@@ -1,0 +1,6 @@
+# OK: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message OK 10
+id 65546
+packet 0a0000000a000100
+refuse short 0a0000000a0001
+refuse trailing 0a0000000a00010000

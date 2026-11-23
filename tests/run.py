@@ -52,6 +52,20 @@ TESTS = [
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),
     ("mww", [PY, "tests/fake_web_mww.py"]),
+    ("plugins", [PY, "tests/fake_plugins.py"]),
+    ("plugins-ha", [PY, "tests/fake_plugins_ha.py"]),
+    ("plugins-fetch", [PY, "tests/fake_plugins_fetch.py"]),
+    ("plugins-race", [PY, "tests/fake_plugins_race.py"]),
+    ("plugins-sync", [PY, "tests/fake_plugins_sync.py"]),
+    ("plugins-selftest", [PY, "tests/fake_plugins_selftest.py"]),
+    ("plugins-net", [PY, "tests/fake_plugins_net.py"]),
+    ("plugins-lan", [PY, "tests/fake_plugins_lan.py"]),
+    ("plugins-music", [PY, "tests/fake_plugins_music.py"]),
+    ("plugins-call", [PY, "tests/fake_plugins_call.py"]),
+    ("plugins-request", [PY, "tests/fake_plugins_request.py"]),
+    ("plugins-button", [PY, "tests/fake_plugins_button.py"]),
+    ("plugins-community", [PY, "tests/fake_plugins_community.py"]),
+    ("mww-migrate", [PY, "tests/fake_mww_migrate.py"]),
     ("web", [PY, "tests/fake_web.py"]),
     ("update", [PY, "tests/fake_ha_update.py"]),
     ("wakesound", [PY, "tests/fake_ha_wakesound.py"]),
@@ -59,6 +73,7 @@ TESTS = [
     ("remote-followup", [PY, "tests/fake_ha_remote_followup.py"]),
     ("davs", [PY, "tests/fake_web_davs.py"]),
     ("ota-push", ["sh", "tests/ota_push_test.sh"]),
+    ("ota-port", [PY, "tests/fake_ota_port.py"]),
     ("ring", [PY, "tests/fake_ha_ring.py"]),
     ("ring-acs", [PY, "tests/fake_ha_ring_acs.py"]),
     ("ring-designs", [PY, "tests/fake_web_ring.py"]),
@@ -80,10 +95,37 @@ SETUP = {"sendspin-9": [PY, "tests/fake_ma_sendspin.py", "--setup"],      # aios
 RETRY_MAX = 4           # more failing at once than load makes (at most 2 a run seen): something is broken, no reruns
 
 
-def netns(argv):
+# Tests that need other hosts (tests/fake_plugins_net.py, fake_plugins_lan.py, fake_plugins_music.py: plugins' sockets): a namespace of theirs behind a veth pair
+# (tests/peerhost.py), 10.250.0.2 private and 198.51.100.7 outside the local network, the Echo's side 10.250.0.1.  Not
+# addresses a "local" route delivers over lo, as before: hassmic refuses those now, as it must (a review of 08399dc)
+PEER_TESTS = ("plugins-net", "plugins-lan", "plugins-music")
+# their networks (names kept for the plugins' own repositories' tests, which may import them)
+OTHER_HOSTS = ("10.250.0.0/24", "198.51.100.0/24")
+
+
+def other_socket(kind, host, port, backlog=4):
+    """a server's socket on one of the other hosts ("udp" or "tcp", 10.250.0.2, 10.250.0.3 or 198.51.100.7), in a
+    namespace made by netns(..., peer=True): the test uses it as its own (tests/peerhost.py peer_socket)"""
+    sys.path.insert(0, os.path.join(ROOT, "tests")); import peerhost
+    return peerhost.peer_socket(kind, host, port, backlog)
+
+
+# An address on lo for a test that has to send from one that is not on a local network (plugins-sync: a member's word
+# from outside it, which plugin_fetch.c pf_message drops); made here, where the namespace's root still may
+LO_ADDRS = {"plugins-sync": "ip addr add 198.51.100.9/32 dev lo && "}
+
+
+def netns(argv, peer=False, name=""):
     """argv in a network namespace of its own with lo up, as the caller's uid again; multicast on it for zeroconf
-    (aiosendspin, avahi stand-ins), which fails without an interface that takes the mDNS group (ENODEV)"""
-    inner = "ip link set lo multicast on up && ip route add 224.0.0.0/4 dev lo && exec unshare -U --map-user=%d --map-group=%d \"$@\"" % (os.getuid(), os.getgid())
+    (aiosendspin, avahi stand-ins), which fails without an interface that takes the mDNS group (ENODEV).  PEER: with
+    the other hosts (tests/peerhost.py), whose socket's folder is the test's to remove"""
+    pre = ""
+    if peer:
+        import tempfile
+        sys.path.insert(0, os.path.join(ROOT, "tests")); import peerhost
+        pre = peerhost.shell(os.path.join(tempfile.mkdtemp(prefix="hassmic-peer."), "peer"), PY)
+    inner = ("ip link set lo multicast on up && ip route add 224.0.0.0/4 dev lo && " + pre + LO_ADDRS.get(name, "")
+             + "exec unshare -U --map-user=%d --map-group=%d \"$@\"" % (os.getuid(), os.getgid()))
     return ["unshare", "-rn", "sh", "-c", inner, "sh", *argv]
 
 
@@ -93,7 +135,7 @@ def run(name, argv, timeout, logdir):
     with open(log, "w") as f:
         f.write("$ " + shlex.join(argv) + "\n"); f.flush()
         try:
-            rc = subprocess.run(netns(argv), cwd=ROOT, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            rc = subprocess.run(netns(argv, peer=name in PEER_TESTS, name=name), cwd=ROOT, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                 timeout=timeout).returncode
         except subprocess.TimeoutExpired:
             rc = "timeout"

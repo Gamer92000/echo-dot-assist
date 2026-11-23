@@ -1,0 +1,7 @@
+{ "id": "testreq", "name": "Test listener", "version": 1, "version_name": "0.1", "requires": {"core": 1, "request.audio": 1, "request.text": 1},
+  "author": "hassmic's tests", "description": "Hears a copy of every request and says what it got.", "license": "MIT",
+  "memory_mb": 16, "threads": 2,
+  "capabilities": { "request.audio": true, "request.text": true },
+  "settings": [ { "name": "deaf", "label": "Slow to read", "type": "bool", "default": false },
+                { "name": "try", "label": "Try", "type": "text", "default": "" },
+                { "name": "late", "label": "Waits before it reads (ms)", "type": "int", "min": 0, "max": 10000, "default": 0 } ] }

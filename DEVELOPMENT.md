@@ -16,8 +16,8 @@ copy or a verified push update and runs `main.sh` (updatable): `main.sh firewall
 the root side of push updates, `main.sh satellite` stops Alexa, updater and telemetry and keeps hassmic running.
 No `hassmic.conf` = stock behaviour. `sysinstall.sh` writes the system partition from the running OS (`otatool remount`;
 dm-verity is off): for `install-system.sh`, and for every update (pushed or online) once it passed its self test
-(`main.c`: wake word engine loaded, ports bound, a second of mic audio; `ota_healthy()` leaves `state/ota/healthy`, root's
-`ota_watch` promotes), which renews the factory copy and the bootstrap (`boot.sh`, `otatool`, `hassmic.rc`) over Wi-Fi.
+(`main.c`: wake word engine loaded, ports bound, a second of mic audio; `ota_healthy()` leaves `state/ota/healthy` with
+the build's version, root's `ota_watch` promotes the installed update only on its own), which renews the factory copy and the bootstrap (`boot.sh`, `otatool`, `hassmic.rc`) over Wi-Fi.
 
 Everything that differs between Echo models lives in `devices/<codename>/`: build settings, hardware constants linked
 into the daemon (`board.c`), service names and install method for the scripts (`device.conf`), init rc and SELinux
@@ -41,6 +41,8 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 | `scripts/device/`, `scripts/system/` | run on the Echo, reading the model's `device.conf` next to them; boot integration (`boot.sh`, `main.sh`) |
 | `tools/` | `mkstubs.sh` (stand-ins for the stock libraries, for building without the firmware), `geo/` (`build.py`: Natural Earth's borders -> `geo/borders.bin`; `geo.py` its format and lookup in Python), `wakealign/` (the wake word aligners from the Montreal Forced Aligner's models: `build.sh` -> `wakealign/<word>-<locale>.wa` and a `<model>.was` per acoustic model, needs MFA's env), `speechcorpus/` (a speech corpus of designed voices: "Speech corpus" below), OTA payload dumper, Thumb disassembly helpers, `qrun.sh` (device binaries under qemu-arm; a `toolchain/qemu-arm` serves too), `dexasm.py` (a Dalvik assembler, writer, reader and type check, and a check against the firmware's own framework, for our hand-made dex files: no javac or d8 here), `mkwifictl.py` (assembles `scripts/device/wifictl.dex`, checkers' way into WifiService), `mkringbar.py` (`scripts/device/ringbar.dex`, checkers' light band on the screen), `davs-fetch.py` |
 | `docs/` | user guide (`GUIDE.md`), security model (`SECURITY.md`), reverse-engineering notes; `img/src/*.typ` are the README figures (Typst + CeTZ), `tools/figures.sh` renders them to `img/*-light.svg` / `*-dark.svg` |
+| `sdk/` | what a plugin author needs (`docs/plugins.md`): `PROTOCOL.md` (the broker protocol), `messages.def` -> `plugmsg.h` and the test vectors `vectors/` (`tools/mkplugmsg.py`, which holds each scope's versions to `scopes.lock`: a version only adds), the C client (`hassmic_plugin.h`, `hmplugin.c`), `filter.def` (the system calls a plugin may make; `tools/mkfilter.py` makes the launcher's seccomp program from it), `plugcheck.py` (packages) |
+| (not here) | plugins, the project's own too, each in a repository of its own: microWakeWord in `hassmic-plugin-microwakeword` (the engine's sources copied from `src/hassmic` until the engine leaves the core, the SDK copied from `sdk/`; its `make test HASSMIC=<this tree>` runs it in this tree's PC build); the list of plugins in `hassmic-plugins`, the one place official ones are made so: its key's listing (`docs/plugins.md` 5.2, 5.3) |
 | `tests/` | protocol tests against the reference implementations |
 | `blueprints/` | Home Assistant blueprints for features that need an automation (`automation/drop_in.yaml`: Drop In by voice) |
 | `keys/` | `release.pub`: the key online updates are signed with; `release.conf`: that key and the repository whose releases they are (CI and releases, below) |
@@ -57,6 +59,7 @@ Device binaries need the NDK and the unpacked firmware in `firmware/<codename>/`
 make [DEVICE=donut]                               # ARM binaries into build/donut/
 make DEVICE=donut STUBS=1                         # the same, without the firmware: stand-ins for its libraries
 make host                                         # PC build (build/hassmic-host) + qemu build for the tests (needs libopus)
+make unit-plugfuzz                                # the plugins' broker fuzzed for a minute (clang with libFuzzer; not in make unit)
 make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py);
                                                  # the Drop In blueprint (blueprint_dropin.py); one target each (make
                                                  # unit-<name>, UNIT_TESTS), so make -j unit runs them at once
@@ -83,11 +86,42 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/ha_real_dropin.py          # the Drop In blueprint in that real Home Assistant with four PC Echos (one
                                                  # the released build, from its git tag), in a network namespace with only
                                                  # loopback (unshare -rn); skips without build/ha-venv or user namespaces
-.venv/bin/python tests/fake_web.py                # the settings page: login by the action button, signed requests, export/import
+.venv/bin/python tests/fake_web.py                # the settings page: login by the action button, signed requests, export/import;
+                                                  # one wait for the button, nobody else's login in the time after each
+                                                  # (one_wait: contested, run out, approved; adb; "off"), the count of asks
 .venv/bin/python tests/fake_web_artifacts.py      # models copied from one Echo to another through the page, root's installer
 .venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli
 .venv/bin/python tests/fake_wifi_join.py          # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py            # microWakeWord: models from the page, the engine switch, real detections on the PC
+.venv/bin/python tests/fake_plugins.py            # plugins: hassmic under the launcher with a stand-in wake word plugin (docs/plugins.md)
+.venv/bin/python tests/fake_plugins_fetch.py      # plugins from the plugin index (a stand-in site built by hassmic-plugins' own tool,
+                                                  # tests/plugsite.py), revocations, pushed, and by itself
+.venv/bin/python tests/fake_plugins_race.py       # the one install slot: who takes it from whom, what the press installs (and that a
+                                                  # stranger's logins do not turn it), the decision at install; the push port's times
+.venv/bin/python tests/fake_plugins_sync.py       # a plugin copied Echo to Echo on an acceptance voucher: the whole way, every refusal;
+                                                  # its note: who takes it off and how often the button is asked for it, a
+                                                  # pending one, the event after a dismissal, a failed install, web_button
+.venv/bin/python tests/fake_plugins_net.py        # phase 2 with a stand-in forwarder: storage, the log as a plugin gets
+                                                  # it (hassmic's own writers with sentinels), the owner's server and nothing
+                                                  # else (other hosts behind a veth pair: tests/peerhost.py, run.py
+                                                  # netns(peer=True), other_socket), the development flag
+.venv/bin/python tests/fake_plugins_music.py      # phase 4 with a stand-in player: its stream, ducking, the button,
+                                                  # "stop", HA's media player, newest wins, UDP from private and public
+                                                  # addresses, the search and its proposal, entities and actions in HA
+.venv/bin/python tests/fake_plugins_call.py       # calls with a stand-in phone, the Show's build and a second Echo:
+                                                  # calls out by a token, in rung and answered only by a person, the room and
+                                                  # the far side both ways, busy against Drop In, ring limits, refusals
+.venv/bin/python tests/fake_plugins_request.py    # requests with a stand-in listener: each request's copy byte for
+                                                  # byte as Home Assistant got it, its ends, its texts, a slow reader, the
+                                                  # second press, the partner rule, -w remote, Wyoming
+.venv/bin/python tests/fake_plugins_lan.py        # reach with the stand-in forwarder as "testlan": net.lan and
+                                                  # net.internet against the other hosts, the whole log (official only), up
+                                                  # to eight plugins at once and one that waits for its memory's place
+.venv/bin/python tests/fake_plugins_button.py     # buttons with tests/plugins/testbutton.c: the buttons as Home
+                                                  # Assistant's "Button" hears them (never a press that served a wait), rows
+                                                  # of its own on its card, `page` and `button` in updates, an older build
+.venv/bin/python tests/fake_plugins_selftest.py   # hassmic updates beside plugins (nothing held or fetched) and the self test
+                                                  # with a wake word plugin: off, a fall back, a silent launcher, late passes
 .venv/bin/python tests/fake_web_davs.py           # models downloaded from a fake Amazon on the Echo itself: the code pair
                                                  # login with the device attestation token, the download, staging, deregister
 .venv/bin/python tests/fake_ha.py [--qemu]        # Wyoming (wyoming)
@@ -103,6 +137,9 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/fake_screen.py             # the Echo Show's screen: what hassmic tells its UI (build/hassmic-host-screen,
                                                   # a stand-in UI), Sendspin's metadata and artwork, the band, restarts
 tests/ota_push_test.sh                            # signed push-update path end to end
+.venv/bin/python tests/fake_ota_port.py           # the push port against senders without the key: connections per address, bundles
+                                                  # that burst and stall, what both otatools print when refused; a signed bundle
+                                                  # under idle connections from two addresses, a bundle's first two seconds
 tests/otatool_test.sh                             # the PC's otatool (Python) against the Echo's (C)
 .venv/bin/python tests/fake_ha_update.py          # online updates: Home Assistant, GitHub and root's installer in one
 .venv/bin/python tests/fake_ha_wakesound.py       # wake sound removal off and on, against the PC's stand-in echo
@@ -224,6 +261,37 @@ Home Assistant cannot compare that form and so offers whatever is on the channel
 Each release has `hassmic-<codename>.bundle` and `.bundle.sig` per model; the Echo picks its own by the board's
 `codename`. CI builds with `RELEASE=1`: the daemon reports the bare version.
 
+Plugins are not in hassmic's releases, official ones neither: each plugin's own repository releases its package,
+and the plugin index (`hassmic-plugins`) lists it and publishes it with its listing, signed by the index key
+(`docs/plugins.md` 5.2, 5.3). This repository carries only the index's public key and address (`keys/plugins.pub`,
+`keys/plugins.conf`, built into `plugin_index.c`); the release job has no plugin step, and the release key has no
+part in plugins.
+
+**Before a release: the plugin index's least serials.** `keys/plugins.conf` also has `PLUGINS_LEAST_INDEX` and
+`PLUGINS_LEAST_REVOKED`, the oldest index and revocation list this build takes (docs/plugins.md 5.5): an Echo of the
+release refuses older ones, also one that never saw the index (new, or after a factory reset), and counts a package
+listed by an older index as one from a file. Raise them by hand before pushing to `release`, and after a revocation
+that has to reach Echos that were reset: `scripts/plugins-least.sh` reads the published site, checks both signatures
+against `keys/plugins.pub` (or the second index key, `PLUGINS_PUB2`, where one is named) and writes the two serials;
+commit `keys/plugins.conf` (`--check` only says what the site has). Not in CI: a build is reproducible from its commit,
+and a value read at build time would make two builds of
+one commit differ. Never above the site's: an Echo of that build would refuse every list there is. 0 while nothing
+is published.
+
+**The plugin protocol's versions and the releases.** Every release carries `sdk/scopes.lock`, and every scope
+version a release carried is for good (sdk/PROTOCOL.md "Versions"): the test job runs `tools/mkplugmsg.py
+--released` against every tag `v*`, which needs the whole history and every tag (`fetch-depth: 0`; in a shallow
+clone git cannot tell which tags a commit descends from, so it fails there, and `make unit-plugmsg` on a PC says it
+skipped). A push to `main` and one to `release` build at the same time (concurrency is per branch), so the release
+job asks once more, the tags fetched anew, right before `gh release create`: of two pushes that add the same version
+each its own way, the second to publish stops. What is left is the seconds between that check and the release.
+Should two releases ever carry one version otherwise, every build fails ("releases ... carried ... otherwise") until
+one of them is gone: delete the wrong one's release and its tag (`gh release delete <tag> --cleanup-tag`, or delete
+the release on GitHub and then `git push origin :refs/tags/<tag>`), fix the definition on its branch, and push again.
+The release job's fetch prunes the tags (`--prune --prune-tags`), so a tag deleted while a build ran is gone there too.
+Echos that installed that release keep it; a plugin built against its SDK names a version no later build carries
+the same way, which is why it is the newer (or the beta) of the two that goes.
+
 **No firmware in CI.** `make STUBS=1` links against stand-ins for the stock libraries, built from
 `devices/<codename>/stubs/*.syms`: the functions our binaries take from each library, plus the symbols of the
 executable it refers to or defines too (the linker exports those), in the library's own order (the order the linker
@@ -255,7 +323,10 @@ network could put an older release back; it could not install code of its own.
 **Releases from a fork.** A fork's CI cannot sign with this project's key, so a fork that publishes builds of its own
 signs them with its own key, and its Echos then look for updates in the fork. `keys/release.conf` names the repository
 (`UPDATE_REPO`, compiled into `update.c`, and where `scripts/lib/build.sh` takes prebuilt binaries from) and the key
-(`RELEASE_PUB`, in every bundle and install as `release.pub`); a fork sets both in `secrets/fork.conf`, outside git, so
+(`RELEASE_PUB`, in every bundle and install as `release.pub`); a fork sets both in `secrets/fork.conf`, outside git (and,
+with an index of its own, `PLUGIN_INDEX` and `PLUGINS_PUB` of `keys/plugins.conf` there too, and `PLUGINS_PUB2` with
+`PLUGINS_PUB2_WITH` only for a second key of its own: a second key is built in only beside the first key it names by
+its hex, so this project's never beside a fork's first; `fork-release.sh` keeps those lines), so
 its tree stays this one and its branches make pull requests here like any other. Once, on the PC, as an admin of the
 fork:
 
@@ -267,8 +338,16 @@ It makes `secrets/release.key` and `.pub`, and on GitHub the environment `releas
 the secret `RELEASE_SIGNING_KEY`, plus the repository variable `RELEASE_PUBLIC_KEY` (the public half, which the build
 jobs need too: they pack the bundles). An environment the fork has already is kept as it is when it admits only chosen
 branches or protected ones, and refused, before anything is written, when it admits every branch (by its setting or a
-pattern like `**`). In CI, `scripts/fork-release.sh ci` writes `secrets/fork.conf` from that variable
-and the repository the workflow runs in; without the variable (this project) it does nothing. Then allow the fork's
+pattern like `**`). Where `secrets/fork.conf` has an index of the fork's own, it also sets the repository variables
+`PLUGIN_INDEX_URL` (its address), `PLUGINS_PUBLIC_KEY` (base64 of its key) and, with a second key, `PLUGINS_PUBLIC_KEY2`,
+and deletes each of them `secrets/fork.conf` no longer names (CI goes by the variables alone: a second key dropped
+there stayed in every CI build); a fork can set them by hand as well (`gh variable set`). In CI, `scripts/fork-release.sh ci` writes `secrets/fork.conf`
+from those variables and the repository the workflow runs in (`secrets/` is not in git: without them a fork's CI builds
+carried this project's index and key, whatever its own fork.conf said); the index's address and key go in as a pair
+(one without the other fails the job), a second key with `PLUGINS_PUB2_WITH` of the first; without any of them (this
+project) it does nothing. No key may be one under which any signature holds (small order: all zero, the identity,
+in any encoding Monocypher takes): the Makefile refuses each it builds in or packs, and every key where it cannot ask
+(no python3). Then allow the fork's
 workflows (off in a fork until someone does), protect `main` and `release`, push a commit of your own to `main` (the
 script changes nothing in git; a commit whose tag the fork took from this project is not published again, and a manual
 run never publishes), and put each Echo on a build of the fork once from the PC (`scripts/ota-push.sh` or

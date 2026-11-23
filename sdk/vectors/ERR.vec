@@ -1,0 +1,21 @@
+# ERR: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message ERR 11
+id 65547
+code u16 7
+packet 0b0000000b0001000700
+case empty
+id 65547
+code u16 1
+packet 0b0000000b0001000100
+case long
+id 65547
+code u16 8
+packet 0b0000000b0001000800
+case full
+id 65547
+code u16 1
+packet 0b0000000b0001000100
+refuse short 0b0000000b0001
+refuse truncated 0b0000000b00010007
+refuse trailing 0b0000000b000100070000
+refuse enum:code 0b0000000b0001000000

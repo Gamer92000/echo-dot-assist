@@ -1,0 +1,21 @@
+# REFUSED: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message REFUSED 3
+id 65539
+why u16 1
+packet 03000000030001000100
+case empty
+id 65539
+why u16 1
+packet 03000000030001000100
+case long
+id 65539
+why u16 2
+packet 03000000030001000200
+case full
+id 65539
+why u16 1
+packet 03000000030001000100
+refuse short 03000000030001
+refuse truncated 030000000300010001
+refuse trailing 0300000003000100010000
+refuse enum:why 03000000030001000000

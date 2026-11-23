@@ -36,6 +36,7 @@
  * stdout goes the same way: hassmic itself prints nothing there in this mode, the programs it runs do.
  * The pipe's write end does not block: a reader that stalls costs lines, never hassmic itself.
  */
+#include "logread.h"
 #include "clock.h"
 #include "tz.h"
 #include "apcountry.h"
@@ -151,10 +152,12 @@ static void zone_note(const char *zone, int how, const char *cc, const char *hom
         return;
     }
     if (statefile_write(p, 0644, line, strlen(line))) { fprintf(stderr, "time zone: cannot write %s\n", p); return; }
-    if (how == ZONE_HOME) fprintf(stderr, "time zone: %s, of the country of Home Assistant's home location, %s\n", zone, cc);
-    else if (how == ZONE_WIFI) fprintf(stderr, "time zone: %s, of the Wi-Fi's country %s (%s)\n", zone, cc, why);
-    else if (how == ZONE_KEPT) fprintf(stderr, "time zone: %s, the one set or known before (%s)\n", zone, why);
-    else if (how == ZONE_GUESS) fprintf(stderr, "time zone: %s, a guess among those of that rule (%s): not taken for the language\n", zone, why);
+    /* private: the country of the home's location, and the reason, which names the countries the home and the Wi-Fi
+     * are in (a plugin is told the zone, never where the home is) */
+    if (how == ZONE_HOME) log_private("time zone: %s, of the country of Home Assistant's home location, %s", zone, cc);
+    else if (how == ZONE_WIFI) log_private("time zone: %s, of the Wi-Fi's country %s (%s)", zone, cc, why);
+    else if (how == ZONE_KEPT) log_private("time zone: %s, the one set or known before (%s)", zone, why);
+    else if (how == ZONE_GUESS) log_private("time zone: %s, a guess among those of that rule (%s): not taken for the language", zone, why);
     if (zone_known(how) != zone_known(was) || (zone_known(how) && !same)) screen_language_changed();
 }
 
@@ -338,19 +341,42 @@ static int dha_noise(const char *l)
     return !strncmp(l, at, sizeof at - 1) && strstr(l, "[Warning: setgroups failed") && strstr(l, "continuing]");
 }
 
+/* A line longer than LINE is cut into pieces, each stamped as a line of its own.  A piece after a cut is the same
+ * line's, so it carries the mark the line has (logread.h: a marked line's text after the cut went to the plugins
+ * unmarked; a review, 2026-11-21).  log_private's lines are kept short of the cut; this is for anything else that
+ * comes past it with a mark.  A line break inside a value cannot be told here from the next line (what is one write
+ * the pipe does not say): log_private takes those out before the line is written */
+/* how many bytes at the end of T (N bytes) are the start of a mark and not all of it: a cut there split the mark */
+static size_t mark_begun(const char *t, size_t n)
+{
+    static const char *const marks[] = { LOG_PRIVATE_MARK, LOG_SEALED_MARK };
+    size_t best = 0;
+    for (size_t k = 0; k < 2; k++)
+        for (size_t l = strlen(marks[k]) - 1; l > best; l--) if (l <= n && !memcmp(t + n - l, marks[k], l)) { best = l; break; }
+    return best;
+}
 static void forward(int in, int out)
 {
-    char buf[4096], line[2048 + 40]; size_t n = 0, pre = 0; int noise = 0;
+    char buf[4096], line[2048 + 40], held[16]; size_t n = 0, pre = 0, nheld = 0; int noise = 0; const char *carry = NULL;
     for (;;) {
         ssize_t r = read(in, buf, sizeof buf);
         if (r < 0 && errno == EINTR) continue;
         if (r <= 0) break;
         for (ssize_t i = 0; i < r; i++) {
-            if (!n) pre = n = stamp(line, 40);
+            if (!n) {
+                pre = n = stamp(line, 40);
+                if (carry) { memcpy(line + n, carry, strlen(carry)); n += strlen(carry); carry = NULL; }
+                if (nheld) { memcpy(line + n, held, nheld); n += nheld; nheld = 0; }
+            }
             int end = buf[i] == '\n';
             if (!end) line[n++] = buf[i];
             if (!end && n < sizeof line - 1) continue;
             line[n] = 0;
+            /* cut: the rest is this line's too.  A mark cut in two ("(priv" here, "ate) " in the next piece) is a mark
+             * in neither: its first bytes go over into the next piece, which then has it whole (Q3 of a review,
+             * 2026-11-21) */
+            if (!end && (nheld = mark_begun(line + pre, n - pre))) { n -= nheld; memcpy(held, line + n, nheld); line[n] = 0; }
+            if (!end) carry = logread_mark(line + pre, n - pre);
             if (!strcmp(line + pre, idme_noise[noise])) noise = (noise + 1) % 3;
             else if (!noise && !strcmp(line + pre, idme_noise[1])) noise = 2;
             else if (dha_noise(line + pre)) noise = 0;
@@ -358,7 +384,7 @@ static void forward(int in, int out)
             n = 0;
         }
     }
-    if (n) { line[n++] = '\n'; put_all(out, line, n); }      /* a last line without its end */
+    if (n || nheld) { if (!n) n = stamp(line, 40); memcpy(line + n, held, nheld); n += nheld; line[n++] = '\n'; put_all(out, line, n); }      /* a last line without its end */
 }
 
 void clock_log_start(void)
@@ -375,6 +401,9 @@ void clock_log_start(void)
         static const int ignore[] = { SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2, SIGPIPE, SIGTTIN, SIGTTOU, SIGTSTP, SIGWINCH };
         for (size_t i = 0; i < sizeof ignore / sizeof ignore[0]; i++) signal(ignore[i], SIG_IGN);
         prctl(PR_SET_NAME, "hassmic-log", 0, 0, 0);
+        /* the plugins' launcher (plugrun.h) ends when hassmic's end of its socket closes: not held open by this
+         * process, which outlives hassmic on purpose */
+        { const char *e = getenv("HASSMIC_PLUGIN_FD"); if (e && atoi(e) > 2) close(atoi(e)); }
         close(p[1]);
         forward(p[0], out);
         _exit(0);

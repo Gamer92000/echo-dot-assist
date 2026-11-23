@@ -23,16 +23,17 @@
  * as a device under this satellite's name.  Deregistering a *stock* Echo factory-resets it; as a satellite nothing of
  * Amazon's listens for that, and the egress lock keeps the daemons from reaching Amazon anyway.
  */
+#include "logread.h"
 #include "davs.h"
 #include "artifacts.h"
 #include "core.h"
 #include "dha.h"
 #include "hash.h"
 #include "net.h"
+#include "fwcurl.h"
 #include "wake.h"
 #include "statefile.h"
 #include <ctype.h>
-#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -107,36 +108,7 @@ enum { OPT_WRITEDATA = 10001, OPT_URL = 10002, OPT_POSTFIELDS = 10015, OPT_USERA
 struct curl_sockaddr { int family, socktype, protocol; unsigned addrlen; };
 struct curl_slist;
 
-static struct {
-    struct curl_slist *(*slist_append)(struct curl_slist *, const char *);
-    void *(*init)(void);
-    int (*setopt)(void *, int, ...);
-    int (*perform)(void *);
-    void (*cleanup)(void *);
-    int (*getinfo)(void *, int, ...);
-    const char *(*strerror)(int);
-} curl;
-
-static int curl_load(void)
-{
-    static int done, ok; void *h;
-    if (done) return ok;
-    done = 1;
-    if (!(h = dlopen("libcurl.so", RTLD_NOW)) && !(h = dlopen("libcurl.so.4", RTLD_NOW)))
-    {
-        fprintf(stderr, "davs: no libcurl (%s)\n", dlerror());
-        return 0;
-    }
-    curl.slist_append = (struct curl_slist *(*)(struct curl_slist *, const char *))dlsym(h, "curl_slist_append");
-    curl.init = (void *(*)(void))dlsym(h, "curl_easy_init");
-    curl.setopt = (int (*)(void *, int, ...))dlsym(h, "curl_easy_setopt");
-    curl.perform = (int (*)(void *))dlsym(h, "curl_easy_perform");
-    curl.cleanup = (void (*)(void *))dlsym(h, "curl_easy_cleanup");
-    curl.getinfo = (int (*)(void *, int, ...))dlsym(h, "curl_easy_getinfo");
-    curl.strerror = (const char *(*)(int))dlsym(h, "curl_easy_strerror");
-    return ok = curl.slist_append && curl.init && curl.setopt && curl.perform && curl.cleanup && curl.getinfo
-             && curl.strerror;
-}
+#define curl fwcurl()                   /* fwcurl.c: loaded once, for update.c, https.c and davs.c alike */
 
 static int on_socket(void *arg, int purpose, struct curl_sockaddr *a)
 {
@@ -180,15 +152,15 @@ static size_t on_file(char *d, size_t size, size_t n, void *arg)
 
 static void curl_common(void *h)
 {
-    curl.setopt(h, OPT_USERAGENT, "hassmic");
-    curl.setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP_S); curl.setopt(h, OPT_REDIR_PROTOCOLS, (long)PROTO_HTTP_S);
-    curl.setopt(h, OPT_FOLLOWLOCATION, 1L); curl.setopt(h, OPT_MAXREDIRS, 3L);
-    curl.setopt(h, OPT_FAILONERROR, 0L);                       /* the answers' bodies say more than their codes */
-    curl.setopt(h, OPT_NOSIGNAL, 1L);
-    curl.setopt(h, OPT_CONNECTTIMEOUT, 20L);
-    curl.setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl.setopt(h, OPT_OPENSOCKETDATA, NULL);
-    curl.setopt(h, OPT_XFERINFOFUNCTION, on_progress); curl.setopt(h, OPT_XFERINFODATA, NULL);
-    curl.setopt(h, OPT_NOPROGRESS, 0L);
+    curl->setopt(h, OPT_USERAGENT, "hassmic");
+    curl->setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP_S); curl->setopt(h, OPT_REDIR_PROTOCOLS, (long)PROTO_HTTP_S);
+    curl->setopt(h, OPT_FOLLOWLOCATION, 1L); curl->setopt(h, OPT_MAXREDIRS, 3L);
+    curl->setopt(h, OPT_FAILONERROR, 0L);                       /* the answers' bodies say more than their codes */
+    curl->setopt(h, OPT_NOSIGNAL, 1L);
+    curl->setopt(h, OPT_CONNECTTIMEOUT, 20L);
+    curl->setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl->setopt(h, OPT_OPENSOCKETDATA, NULL);
+    curl->setopt(h, OPT_XFERINFOFUNCTION, on_progress); curl->setopt(h, OPT_XFERINFODATA, NULL);
+    curl->setopt(h, OPT_NOPROGRESS, 0L);
 }
 
 /* one request.  BODY ("" = GET) is JSON; TOKEN and SST_HD ("" if none) become headers.  The answer lands in OUT (a
@@ -202,36 +174,36 @@ static int request(const char *url, const char *body, const char *token, const c
     *code = 0;
     out->n = 0;
     if (out->p) out->p[0] = 0;
-    if (!curl_load() || !(h = curl.init())) { snprintf(err, errsz, "no libcurl on this device"); return -1; }
-    curl.setopt(h, OPT_URL, url);
+    if (!curl || !(h = curl->init())) { snprintf(err, errsz, "no libcurl on this device"); return -1; }
+    curl->setopt(h, OPT_URL, url);
     curl_common(h);
-    curl.setopt(h, OPT_TIMEOUT, 60L);
-    curl.setopt(h, OPT_LOW_SPEED_LIMIT, 256L); curl.setopt(h, OPT_LOW_SPEED_TIME, 30L);
-    hdr = curl.slist_append(hdr, "Content-Type: application/json");
-    hdr = curl.slist_append(hdr, "Accept-Language: en-US");
-    if (*token) { char a[2100]; snprintf(a, sizeof a, "Authorization: Bearer %s", token); hdr = curl.slist_append(hdr, a); }
+    curl->setopt(h, OPT_TIMEOUT, 60L);
+    curl->setopt(h, OPT_LOW_SPEED_LIMIT, 256L); curl->setopt(h, OPT_LOW_SPEED_TIME, 30L);
+    hdr = curl->slist_append(hdr, "Content-Type: application/json");
+    hdr = curl->slist_append(hdr, "Accept-Language: en-US");
+    if (*token) { char a[2100]; snprintf(a, sizeof a, "Authorization: Bearer %s", token); hdr = curl->slist_append(hdr, a); }
     {   /* the host, as MAP's connectivity manager sends it (secure-stream policy map_1p_post) */
         char host[200], a[240];
         if (sscanf(url, "%*[^:]://%199[^/?]", host) != 1) host[0] = 0;
         snprintf(a, sizeof a, "x-amzn-identity-auth-domain: %s", host);
-        hdr = curl.slist_append(hdr, a);
+        hdr = curl->slist_append(hdr, a);
     }
     if (*sst_hd) { char a[1300]; snprintf(a, sizeof a, "x-amzn-identity-secure-session-token: %s", sst_hd);
-                   hdr = curl.slist_append(hdr, a); }
-    curl.setopt(h, OPT_HTTPHEADER, hdr);
+                   hdr = curl->slist_append(hdr, a); }
+    curl->setopt(h, OPT_HTTPHEADER, hdr);
     if (blen)
     {
-        if (blen >= sizeof post) { curl.cleanup(h); snprintf(err, errsz, "request too long"); return -1; }
+        if (blen >= sizeof post) { curl->cleanup(h); snprintf(err, errsz, "request too long"); return -1; }
         memcpy(post, body, blen + 1);
-        curl.setopt(h, OPT_POSTFIELDS, post);
-        curl.setopt(h, OPT_POSTFIELDSIZE, (long)blen);
+        curl->setopt(h, OPT_POSTFIELDS, post);
+        curl->setopt(h, OPT_POSTFIELDSIZE, (long)blen);
     }                                                          /* without POSTFIELDS the request is a GET */
-    curl.setopt(h, OPT_WRITEFUNCTION, on_data);
-    curl.setopt(h, OPT_WRITEDATA, out);
-    int rc = curl.perform(h);
-    curl.getinfo(h, INFO_RESPONSE_CODE, code);
-    curl.cleanup(h);
-    if (rc) { snprintf(err, errsz, "%s", curl.strerror(rc)); return -1; }
+    curl->setopt(h, OPT_WRITEFUNCTION, on_data);
+    curl->setopt(h, OPT_WRITEDATA, out);
+    int rc = curl->perform(h);
+    curl->getinfo(h, INFO_RESPONSE_CODE, code);
+    curl->cleanup(h);
+    if (rc) { snprintf(err, errsz, "%s", curl->strerror(rc)); return -1; }
     if (out->p) out->p[out->n] = 0;                           /* n <= cap, and cap is one below the buffer's size */
     return 0;
 }
@@ -242,24 +214,24 @@ static int download(const char *url, const char *path, long *code, char *err, si
     struct file_sink o = { 0, 0, 0, "" };
     void *h; int rc; struct stat st;
     *code = 0;
-    if (!curl_load() || !(h = curl.init())) { snprintf(err, errsz, "no libcurl on this device"); return -1; }
-    if (!(o.f = fopen(path, "wb"))) { curl.cleanup(h); snprintf(err, errsz, "cannot write %.200s", path); return -1; }
-    curl.setopt(h, OPT_URL, url);
+    if (!curl || !(h = curl->init())) { snprintf(err, errsz, "no libcurl on this device"); return -1; }
+    if (!(o.f = fopen(path, "wb"))) { curl->cleanup(h); snprintf(err, errsz, "cannot write %.200s", path); return -1; }
+    curl->setopt(h, OPT_URL, url);
     curl_common(h);
-    curl.setopt(h, OPT_TIMEOUT, 900L);                        /* 15 min: 12 MB over a slow link */
-    curl.setopt(h, OPT_LOW_SPEED_LIMIT, 512L); curl.setopt(h, OPT_LOW_SPEED_TIME, 60L);
-    curl.setopt(h, OPT_WRITEFUNCTION, on_file);
-    curl.setopt(h, OPT_WRITEDATA, &o);
-    rc = curl.perform(h);
-    curl.getinfo(h, INFO_RESPONSE_CODE, code);
-    curl.cleanup(h);
+    curl->setopt(h, OPT_TIMEOUT, 900L);                        /* 15 min: 12 MB over a slow link */
+    curl->setopt(h, OPT_LOW_SPEED_LIMIT, 512L); curl->setopt(h, OPT_LOW_SPEED_TIME, 60L);
+    curl->setopt(h, OPT_WRITEFUNCTION, on_file);
+    curl->setopt(h, OPT_WRITEDATA, &o);
+    rc = curl->perform(h);
+    curl->getinfo(h, INFO_RESPONSE_CODE, code);
+    curl->cleanup(h);
     fclose(o.f);
     if (rc || o.over)
     {
         unlink(path);
         if (o.over) snprintf(err, errsz, "the download is bigger than %ld MB", MAX_TARB >> 20);
         else if (*o.full) snprintf(err, errsz, "%s", o.full);
-        else snprintf(err, errsz, "download failed: %s", curl.strerror(rc));
+        else snprintf(err, errsz, "download failed: %s", curl->strerror(rc));
         return -1;
     }
     if (*code != 200)
@@ -412,7 +384,7 @@ static void tokens_load(void)
     if (*refresh_token)
     {
         state = D_ON;
-        fprintf(stderr, "davs: a registration is here (%s)\n", device_name[0] ? device_name : "unnamed");
+        log_private("davs: a registration is here (%s)", device_name[0] ? device_name : "unnamed");     /* (the name the account gave it) */
     }
 }
 
@@ -506,7 +478,7 @@ static void login_run(unsigned mine, const char *dom)
         state = *refresh_token ? D_ON : D_NONE;               /* an older registration survives a failed try */
         say_err("Amazon refused to start the login (HTTP %ld)", code);
         pthread_mutex_unlock(&lk);
-        fprintf(stderr, "davs: codepair: HTTP %ld %.120s %s\n", code, ans[0] ? ans : "", err);
+        log_private("davs: codepair: HTTP %ld %.120s %s", code, ans[0] ? ans : "", err);                /* (Amazon's answer may hold the code) */
         return;
     }
     if (json_find(ans, ans + strlen(ans), "secureSessionToken", sst, sizeof sst)) sst[sizeof sst - 1] = 0;
@@ -523,7 +495,7 @@ static void login_run(unsigned mine, const char *dom)
     code_until = until;
     snprintf(login_domain, sizeof login_domain, "%s", dom);
     pthread_mutex_unlock(&lk);
-    fprintf(stderr, "davs: login code %s shown, %lld s to enter it\n", pub_code, expires);
+    log_private("davs: login code %s shown, %lld s to enter it", pub_code, expires);                   /* (a live login code: a secret while it lasts) */
 
     while (time(NULL) < until)
     {
@@ -586,7 +558,7 @@ static void login_run(unsigned mine, const char *dom)
                 error_text[0] = 0;
                 tokens_save();
                 pthread_mutex_unlock(&lk);
-                fprintf(stderr, "davs: registered as \"%s\"\n", device_name[0] ? device_name : "unnamed");
+                log_private("davs: registered as \"%s\"", device_name[0] ? device_name : "unnamed");
                 return;
             }
             fprintf(stderr, "davs: register answered 200 without tokens\n");

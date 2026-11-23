@@ -8,6 +8,7 @@
  * Fed the same micAsr as Amazon's engine, without gain: microWakeWord's front end normalises the level (PCAN), and its
  * models hear an espeak "Alexa" / "Okay Nabu" / "Hey Mycroft" put at the Echo's keyword levels (-35 to -62 dBFS over a
  * -67 dBFS floor) the same with 0, +12 or +24 dB in front (window mean 229-255 of 255 throughout, 2026-10-07). */
+#include "logread.h"
 #include "wake.h"
 #include "mww.h"
 #include <stdatomic.h>
@@ -42,7 +43,7 @@ static int mww_open(int slot, const char *manifest, wake_cb cb)
         if ((mf = malloc(8193))) { n = fread(mf, 1, 8192, f); mf[n] = 0; }
         fclose(f);
     }
-    if (!mf || mww_manifest_parse(mf, n, &i, err, sizeof err)) { fprintf(stderr, "microwakeword: %s: %s\n", manifest, mf ? err : "cannot read"); free(mf); return -1; }
+    if (!mf || mww_manifest_parse(mf, n, &i, err, sizeof err)) { log_private("microwakeword: %s: %s", manifest, mf ? err : "cannot read"); free(mf); return -1; }
     free(mf);
     snprintf(path, sizeof path, "%s", manifest);
     if ((slash = strrchr(path, '/'))) slash[1] = 0; else path[0] = 0;
@@ -51,7 +52,7 @@ static int mww_open(int slot, const char *manifest, wake_cb cb)
         if ((buf = malloc(MWW_MODEL_MAX))) n = fread(buf, 1, MWW_MODEL_MAX, f);
         fclose(f);
     }
-    if (!buf || !(m->model = mww_model_load(buf, n, err, sizeof err))) { fprintf(stderr, "microwakeword: %s: %s\n", path, buf ? err : "cannot read"); free(buf); return -1; }
+    if (!buf || !(m->model = mww_model_load(buf, n, err, sizeof err))) { log_private("microwakeword: %s: %s", path, buf ? err : "cannot read"); free(buf); return -1; }
     free(buf);
     if (mww_features_init(&m->fe)) { mww_close(slot); return -1; }
     snprintf(m->keyword, sizeof m->keyword, "%s", i.name);
@@ -59,7 +60,8 @@ static int mww_open(int slot, const char *manifest, wake_cb cb)
     m->threshold = (int)(i.cutoff * 255);
     m->have = m->nprob = 0; m->hold = HOLD_INFERENCES;
     atomic_store(&m->reset_pending, 0);
-    fprintf(stderr, "microwakeword: \"%s\" loaded (cutoff %.2f over %d x %d ms)\n", m->keyword, i.cutoff, m->window, m->stride * 10);
+    /* private: a model's phrase and its folder's name are the owner's words (logread.h) */
+    log_private("microwakeword: \"%s\" loaded (cutoff %.2f over %d x %d ms)", m->keyword, i.cutoff, m->window, m->stride * 10);
     return 0;
 }
 
@@ -85,7 +87,7 @@ static void mww_feed(int slot, const int16_t *s, size_t n)
         for (int i = 0; i < m->window; i++) sum += m->prob[i];
         if (sum <= m->threshold * m->window) continue;
         /* the window ends a feature window (30 ms) and up to window inferences after the word: begin a second before */
-        fprintf(stderr, "wake: %s (microwakeword, mean %d/255%s)\n", m->keyword, sum / m->window, slot ? ", second wake word" : "");
+        log_private("wake: %s (microwakeword, mean %d/255%s)", m->keyword, sum / m->window, slot ? ", second wake word" : "");
         m->nprob = 0; m->hold = HOLD_INFERENCES;
         callback(slot, m->keyword, m->fed > RATE ? m->fed - RATE : 0, m->fed);
     }

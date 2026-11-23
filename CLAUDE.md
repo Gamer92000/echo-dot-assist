@@ -27,13 +27,15 @@ without them only the host targets build. Extraction steps: `devices/donut/READM
 make [DEVICE=donut]      # ARM binaries into build/donut/ (hassmic, mixcap, mixplay, pryon_test, aed_test, runas, latency, otatool;
                          # libhmui.so where device.mk has SCREEN, libhmled.so where it has LEDSHIM)
 make DEVICE=donut STUBS=1  # same, without firmware/: links against stand-ins from devices/<codename>/stubs/*.syms (byte-identical)
-make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake, SIGTTOU a near miss; board.c of DEVICE),
+make host                # build/hassmic-host (PC: file audio + no wake word, SIGUSR1 triggers wake, SIGTTOU a near miss, SIGUSR2 the
+                         # action button pressed, SIGURG held 1 s; board.c of DEVICE),
                          # build/donut/hassmic-qemu (ARM + real Pryon, run via tools/qrun.sh), build/otatool-host (the Echo's
                          # otatool for the PC, as tests' stand-in for the device side), build/hassmic-host-screen (the same
                          # with screen.c and the band, for tests/fake_screen.py, fake_ma_api.py). Needs libopus
 make build/uishot        # the Echo Show's screen UI as PNG pictures, every view (FreeType; build/uishot <dir>)
 make unit                # C unit tests; ws/noise are checked against Python reference impls in .venv; the Drop In
                          # blueprint (tests/blueprint_dropin.py); one target each (unit-<name>): make -j unit runs them at once
+make build/plugrun-host build/testwake   # the plugins' launcher and the tests' stand-in plugin for the PC (in make host)
 make build/hassmic-host  # single target
 ```
 
@@ -92,7 +94,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # UI: settings, transcript and reply, a "stop" never shown, timers
 .venv/bin/python tests/fake_ma_api.py         # Music Assistant's API for the screen (mass.c) against a stand-in server:
                                              # the page's sealed token, auth, players, queue, lists, commands, images
-.venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step
+.venv/bin/python tests/fake_web.py            # settings page: login by button, signatures, export/import, HA in step;
+                                             # one wait for the button and the time after each, after a press that served
+                                             # nothing and over a restart (one_wait), the asks' count, files that are none
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
                                              # the turned files -G makes, what plays, root failing, caps
@@ -100,6 +104,121 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
+.venv/bin/python tests/fake_plugins.py        # plugins (docs/plugins.md): hassmic under build/plugrun-host with a stand-in
+                                             # wake word plugin (tests/plugins/testwake.c): packages refused and taken, the
+                                             # button, settings, a secret, files and their checks, the plugin as the wake
+                                             # word engine, missing against down, crashes, an update, removal
+.venv/bin/python tests/fake_plugins_ha.py     # plugins as a person at the Echo and Home Assistant see them: the ring's own
+                                             # pattern while an install waits (set, unset by press, cancel, running out;
+                                             # HASSMIC_FAKE_LED, HASSMIC_LOGIN_MS), the event entity "Plugin" listed with the
+                                             # feature and fired by install, update, removal; a manifest put into state/
+.venv/bin/python tests/fake_plugins_fetch.py  # plugins from the plugin index against a stand-in site (tests/plugsite.py:
+                                             # built by ../hassmic-plugins' own tools/index.py where that tree is there,
+                                             # else by plugsite's builder of the same bytes; HASSMIC_PLUGIN_INDEX,
+                                             # HASSMIC_PLUGINS_PUB): the list (asked only when the page says look; four
+                                             # files), both signatures, a lower serial refused, 64 plugins listed, API
+                                             # and needs, fetch, button, install, updates with and without the button,
+                                             # every refusal (size, SHA-256, another key's listing, another version),
+                                             # revocations (a plugin stopped and kept, ids and author keys refused,
+                                             # official ones too, started again when no longer named, "run it
+                                             # anyway"), the index and revocation list of one time, a redirect to
+                                             # HTTP, User-Agent, a lower tier, serials from the future and under the
+                                             # least (HASSMIC_PLUGINS_LEAST, _BUILT, HASSMIC_CLOCK_SYNCED), a revocation
+                                             # list never back (the clock set after one taken without it; the site's
+                                             # older: the look goes on), a kept list under a raised least, the week's
+                                             # warning (its age over restarts, a clock behind, no word), the daily look
+                                             # (HASSMIC_PLUGIN_DAILY), an install right after a publish; cancel, fetch against
+                                             # upload; a package pushed (HMOTA-PLUG1, both otatools); versions that
+                                             # need a newer hassmic (HASSMIC_PLUGIN_SCOPES lowers this build) passed over,
+                                             # named, refused (HASSMIC_PLUGIN_FRESH, _LEAST)
+.venv/bin/python tests/fake_plugins_race.py   # the one install slot: another browser's fetch/upload, a push and hassmic's
+                                             # own fetch between /install's check and its ask (HASSMIC_PLUGIN_ASK_DELAY),
+                                             # refused while a dialog is the browser's, told and nothing installed by the
+                                             # press once it was left too long (HASSMIC_PLUGIN_SLOT); the fetch's whole
+                                             # time, a cancelled look, the list's pace, the push port's deadlines
+.venv/bin/python tests/fake_plugins_net.py    # phase 2 with a stand-in forwarder (tests/plugins/testnet.c): the
+                                             # install's lines, the server the owner entered and nothing else (UDP, TCP,
+                                             # outside the network; loopback, the Echo's own, a local route, unset, no
+                                             # address, another host or port, a socket of its own, a default in the
+                                             # server's rows, a connect before READY refused; a change of the server: a
+                                             # restart, the old one hears nothing; a server that never answers: 10 s),
+                                             # the dialog's lines whole, the log as a plugin gets it (private lines,
+                                             # root's, a wake plugin's left out, addresses blanked; hassmic's writers
+                                             # driven by a stand-in HA with sentinels), storage (cursor, kB, the bucket,
+                                             # update, sealed copy in, a wake plugin's refused, remove), wider updates,
+                                             # the development flag, SIGTERM (the stop callback's write lands), the
+                                             # storage GET's route (id storagebox); other hosts behind a veth pair (tests/peerhost.py,
+                                             # tests/run.py netns(peer=True), other_socket; alone: it makes that
+                                             # namespace itself; HASSMIC_PLUGIN_STORE, HASSMIC_PLUGIN_LINES)
+.venv/bin/python tests/fake_plugins_lan.py    # tests/plugins/testnet.c as "testlan" (mode reach; PEER test): the
+                                             # lines of net.lan, net.internet and log.read.full, the whole log refused for
+                                             # a sideload and a community listing and at a start without its listing,
+                                             # every CONNECT of both kinds against the other hosts, the whole log against
+                                             # sentinels (never a sealed line), five plugins at once, one of 96 MB waiting
+                                             # for its place (128 MB) and starting when others stop
+.venv/bin/python tests/fake_plugins_music.py  # phase 4 with a stand-in player (tests/plugins/testmusic.c, PEER test):
+                                             # the install's lines, refusals of manifests, the plugin stream (rate, stereo,
+                                             # level, HASSMIC_PLUG_MUSIC), ducking, button, "stop", HA's media player
+                                             # (pause/play/stop, state), volume both ways, newest wins against a stand-in
+                                             # source (HASSMIC_FAKE_SOURCE) and Sendspin, UDP from a private and a public
+                                             # address, SENDTO, the search answered and proposed, the owner's click,
+                                             # STATE, NET, entities and actions in HA, every refusal, a second music
+                                             # plugin, switched off/on, removed
+.venv/bin/python tests/fake_plugins_call.py   # phase 5 (call) with a stand-in phone (tests/plugins/testcall.c) under the
+                                             # Show's build (a stand-in UI: fake_screen.py --ui) and a second Echo: the
+                                             # install's lines, a call out from HA's action (its token), one in rung,
+                                             # answered by button, screen (HA's and the card's action refused: only a
+                                             # person at the Echo answers), never live before; the ringtone stopped at
+                                             # the press; the plugin's dup() of the room's socket empty and at EOF after
+                                             # the end; a Drop In ended with a plugin's ring right behind it;
+                                             # the room (HASSMIC_CALL_CAP) and the plugin's tone (HASSMIC_VOIP) both ways,
+                                             # music paused, ended every way, busy against Drop In both ways, DND, mute,
+                                             # ring limits (HASSMIC_PLUGIN_CALL_TIMES), every refusal, a crash mid-call
+.venv/bin/python tests/fake_plugins_request.py # phase 6 (request.*) with a stand-in listener (tests/plugins/testreq.c: a CRC-32
+                                             # of what it got, in its log): the copy byte for byte as HA got it, lead-in
+                                             # included (wake word, button, follow-up, noise reduction), every end
+                                             # (HA, error, cancelled, muted, link lost, timeout), a slow reader dropping
+                                             # while HA loses nothing, texts ("stop" acted on not passed), request.text
+                                             # alone, REQ_* sent by a plugin, -w remote, Wyoming; the second press (its
+                                             # screen's ask), the partner (engine choice, start, update, a restart)
+.venv/bin/python tests/fake_plugins_button.py # scope button: `button` (SIGUSR2/SIGURG reach the stand-in tests/plugins/testbutton.c as
+                                             # Home Assistant's "Button" hears them; never a press that served a login's or
+                                             # an install's wait), rows of its own on the card (/api/plugins `rows`), `page`
+                                             # and `button` in updates, HASSMIC_PLUGIN_SCOPES=button:0 (a build without it)
+.venv/bin/python tests/fake_plugins_community.py # community plugins' switch (docs/plugins.md 2.7): off by default, refused at
+                                             # check and install, stopped and kept, on and off from an approved browser
+                                             # without a press (refused unsigned), exported, an import and a preset; a
+                                             # community wake engine; restarts; the state line per domain
+                                             # (HASSMIC_PLUGIN_DOMAIN) and the install method (HASSMIC_INSTALL)
+.venv/bin/python tests/fake_plugins_selftest.py # hassmic updates beside plugins (5.9): an online update and a push handed
+                                             # to root as they come, nothing fetched or held, the wake plugin's mark kept;
+                                             # the self test: the owner's off not waited for, a build that needs a newer
+                                             # scope (a fall back: HASSMIC_PLUGIN_SCOPES) not either, card and Amazon's word;
+                                             # a silent launcher (fake_plugins.start launcher_fd), a changed program held;
+                                             # community off; a late pass; root's answers late
+.venv/bin/python tests/fake_mww_migrate.py    # the move from the built-in microWakeWord (deprecated) to its plugin: the
+                                             # real plugin's PC build from ../hassmic-plugin-microwakeword (skipped without
+                                             # it), a sideload of that id refused, the install with the button, models
+                                             # COPIED (fields brought into range), the two stores apart, words, switch
+                                             # back, the copy beside Amazon's engine and "switch", a copy again (the
+                                             # plugin's fields kept, "switch" refused while it listens), ps_mww_own at a
+                                             # restart (once, official with wake only, unchecked; nothing done without it;
+                                             # both picked words listening after it; mww: artifacts' 2 files)
+.venv/bin/python tests/fake_plugins_sync.py   # a plugin copied Echo to Echo (5.4): three Echos, two in one network; the
+                                             # voucher, package, settings, files through the API as the page does; no
+                                             # press on the target, `accepted` "synced, voucher named", the note (who
+                                             # dismisses it, its bound HASSMIC_PLUGIN_NOTES, "pending", the wait for
+                                             # the button's hold: SIGURG, three an hour, never a press; a failed
+                                             # install, HASSMIC_PLUGIN_FAIL_PACKAGE, state/web_button), HA's `synced`
+                                             # held; every refusal ends in "button" (HASSMIC_PLUGIN_NONCE_MS); the slot;
+                                             # the index's revocation list from Src to Tgt, which cannot reach the
+                                             # index (arb's message, GET /api/plugins/revoked with the network's MAC),
+                                             # not to Out, not with plugins off (tests/plugsite.py, HASSMIC_PLUGIN_DAILY,
+                                             # _MEMBER); the test's own members on arb's channel (one's word from
+                                             # outside the local network dropped: 198.51.100.9 on lo, tests/run.py
+                                             # LO_ADDRS): an older list refused
+                                             # with the clock set, one fetch per member, a member holding requests, a
+                                             # redirect not followed
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
@@ -125,7 +244,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_bt_proxy.py     # the Bluetooth proxy switched off and on (issue #152): device info, scan,
                                              # subscriptions, slots and connections refused (fake_improv.py's controller)
 .venv/bin/python tests/fake_improv.py         # setup from a phone: Improv over BLE against a fake controller on a pty
-                                             # (HASSMIC_BT_DEV), root's wifi.sh, adoption, factory reset (HA, button hold)
+                                             # (HASSMIC_BT_DEV), root's wifi.sh, adoption, factory reset (HA, button hold);
+                                             # set up: one press one switch, within its time, nothing served while
+                                             # nothing is advertised, a phone that reconnects as its link ends
 tests/ota_push_test.sh                        # signed push-update path end to end
 tests/otatool_test.sh                         # scripts/otatool.py against the C otatool: same keys, signatures, bundles
 ```
@@ -138,7 +259,12 @@ passes `RELEASE=1` for the bare one), bundles `hassmic-<codename>.bundle(.sig)`
 signed in the `release` job only (secret `RELEASE_SIGNING_KEY` of the GitHub environment `release`, main/release only;
 build jobs sign with a throwaway key) with the release key (base64 of `secrets/release.key`; public half `keys/release.pub`,
 shipped in every bundle; `keys/release.conf` names it and the repository, `UPDATE_REPO`; a fork's own releases:
-`scripts/fork-release.sh`, `secrets/fork.conf` over it, in CI from the variable `RELEASE_PUBLIC_KEY`).
+`scripts/fork-release.sh`, `secrets/fork.conf` over it, in CI from the variable `RELEASE_PUBLIC_KEY`, and a fork's
+own plugin index from `PLUGIN_INDEX_URL`, `PLUGINS_PUBLIC_KEY`, `PLUGINS_PUBLIC_KEY2`).  No key may be of small order
+(`src/include/edkey.h` `ed_key_weak`: the null signature verifies under it for every text; Monocypher's check is
+cofactored): the Makefile refuses one (`key_bad`, through `scripts/otatool.py` `weak()`, which also refuses every
+encoding `decode()` does not read: six Monocypher reads as small order; no python3: no key passes), and every place
+that takes a key asks it (`pi_keys`, a plugin author's at install, `ota.c` `load_key`, both otatools, the index's tool).
 `tools/mkstubs.sh` regenerates the stub lists from the firmware and checks byte-identity; rerun it when code starts
 using another stock library function. Builds are reproducible (`BUILD_TIME` = commit time). Test the
 workflow with `act push` (publishing is a dry run under act).
@@ -156,10 +282,23 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   on the push port with `secrets/update.key`; no HA needed), or kept open by `ADB_WIFI=1` in `hassmic.conf`. Then
   `adb connect <echo-ip>:5555`. USB always works.
 - `scripts/deploy.sh`: build + push to `/data/local/hassmic` for trial runs (`adb shell sh /data/local/hassmic/run.sh`).
-- `scripts/ota-push.sh [host]`: build, sign with `secrets/update.key`, push bundle to TCP 28929 on an installed Echo.
+- `scripts/ota-push.sh [--plugin <file.hmp>]... [host]`: build, sign with `secrets/update.key`, push bundle to TCP 28929 on an installed Echo
+  (`--plugin`: an official plugin's package after it, `otatool.py plugin`, ota.c `HMOTA-PLUG1`; "Plugins" below).
   The Echo verifies against the public key on its system partition and falls back if the new build does not stay up.
   Every update (pushed or online) is promoted without approval as soon as it passes its self test (`main.c`: started,
-  wake word engine loaded, ports bound, 1 s of mic audio within 30 s -> `ota_healthy()` -> `state/ota/healthy`):
+  wake word engine loaded, ports bound, 1 s of mic audio within 30 s -> `ota_healthy()` -> `state/ota/healthy`, which
+  names the build (`VERSION_NAME`: the bundle's VERSION); held past the 30 s by the wake word plugin alone,
+  `selftest_thread` asks again every 10 s for as long as hassmic runs and passes then, `plugin_selftest_ok(id, late)`;
+  nothing while a bundle is with root, `ota_handed` (root silent past the handoff's minute: its answer read once it
+  took the request, every 2 s by ota.c's `late_thread` until it came, a "no" lets the self test ask again,
+  `HASSMIC_OTA_ANSWER_S`; an answer is the handoff's only with its nonce: `stage()` writes `request` "1 <32 hex>"
+  (the handoff changes hands only once bundle and signature are stored, back where the request is not: a push not
+  stored never takes the one before's), `main.sh` `ota_nonce` (the only place `request` is deleted: one hassmic writes
+  after it is the next look's) echoes "nonce <hex>" (or `-`) as `result`'s second line, `result_read`; a result without
+  that line is an older main.sh's, taken: `boot.sh` picks the copy per service, so either copy's hassmic can run
+  beside the other's main.sh); root takes `healthy` whenever it comes, `main.sh` `healthy`:
+  promoted only where it names `$cur/VERSION`, anything else dropped, and taken before every install (from /);
+  `HASSMIC_SELFTEST=<window ms>:<again ms>` for tests):
   `main.sh` (`factory()`, only if that version is installed and its hassmic is what runs) has `sysinstall.sh` write it to
   `/system/hassmic` as the factory copy, bootstrap included (`boot.sh`, `otatool`, `hassmic.rc`, `release.pub`; never
   `update.pub` or `/sepolicy`). Works from older installs: the pushed update brings the code.
@@ -320,7 +459,27 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `main.c` `wake_act[]`, one id per line in `state/wake_word`, the run's phrase = the slot that fired (`core_wake_phrase`).
 - **microWakeWord (`wake.c`, `wake_mww.c`, `mww_features.c`, `mww_model.c`, `mww_store.c`, `mww.h`)**: second wake word
   engine, off by default (setting `wake_engine` amazon/microwakeword, page section "Wake word"; detects much worse than
-  Pryon, the page says what it costs).  `wake.c` dispatches by model: a `.json` manifest = microWakeWord, else the vendor
+  Pryon, the page says what it costs).  **Deprecated** (2026-11-21, docs/plugins.md 5.9): the microWakeWord plugin
+  replaces it; kept until *the cut release* (named when it is made); said wherever it is chosen (app.js
+  `mwwDeprecated`, the engine's choice "microWakeWord, built in" tagged Deprecated) and in Home Assistant (problem
+  sensor `KEY_MWW_DEPRECATED` while it is the engine).  The owner's move, one button on the Wake word page (app.js
+  `mwwMigrate`, `mwwSwitch`, `renderMove`): plugins on (off again if nothing got installed; the dialog names the
+  other plugins that start), the OFFICIAL plugin from the index with the dialog and the action button as any install
+  (one installed already that is not official: named with author and tier, asked; the request says "any"), then
+  `POST /api/mww/migrate` "go" (web.c `mww_migrate`, `mww_to_plugin`): each model COPIED through the store's item
+  path into the plugin's own list (`files/models/<id>`; fields `cutoff`/`window` from its manifest, what `mww_edit`
+  writes, staged with it and brought into the plugin's range first, `adjusted`; kept only if the plugin's FILE_CHECK
+  took it, `plugin_item_checked_only`); the engine switched (the words of `state/mww_word` as
+  `state/wake_word-microwakeword`, main.c `core_wake_switch`) only where the built-in engine was the engine, else
+  `offer` and the page's separate step "switch".  Two stores: `state/mww` is the built-in engine's alone (no
+  `list_dir` alias since 2026-11-21: one folder, two owners); an Echo whose plugin read it under a build before gets
+  its own copies at the next start (`plugin_store.c` `ps_mww_own` after the first scan: the models with the
+  plugin's `checked` mark, once (`state/plugins/.mww-own`), the official plugin with `wake` only, never over a model
+  it has, files and fields only (it checks and names them: `look_unchecked`); without that plugin there and read
+  nothing is done, marked or stripped; from its pass on the marks are taken out of `state/mww` at every start; a
+  slot left empty takes a word of the saved pick the plugin lists later, main.c `core_wake_plugin_changed`); artifacts.c `mww:<id>` lists, reads and keeps `manifest.json`/`model.tflite` only).  A copy again keeps
+  the plugin's own fields on a model it has (`mww_to_plugin` `kept`); "switch" is refused while the plugin is the
+  engine.  Switching back is the setting.  Nothing installs the plugin by itself.  `wake.c` dispatches by model: a `.json` manifest = microWakeWord, else the vendor
   engine (`wake_vendor`: `wake_pryon.c` / `wake_none.c`); `wake_fed()` is the sample clock across engines.
   `mww_features.c` = TFLite Micro's microfrontend, bit-exact with pymicro-features (tables via double functions:
   bionic's log1pf differs); `mww_model.c` = int8 TFLite interpreter for the 13 ops microWakeWord's streaming models use
@@ -392,13 +551,22 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `media.audio_policy` setDeviceConnectionState (`docs/re-checkers.md`; players opened meanwhile wait for the move). While on the speaker the core has a volume of its own (`core_speaker`).
 - **Drop In** (`dropin.c`, `dropin.h`): calls between two Echos of the arbitration network. Signalling as signed
   `T_MSG` on arb's socket (`arb_tell`, `hooks->message`; invite/ringing/accept/refuse/bye), audio Opus 16 kHz 20 ms over
-  unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`. Playback on the mixer's `Voip` stream
+  unicast UDP 28932 (`-i`), per-call key from ephemeral X25519 + `arb_derive`; a replayed packet passes the AEAD, so
+  `on_audio` takes each frame once (a window of 32 numbers) and only a frame newer than all moves the peer's address
+  and `rx_at` (call.c never numbers Drop In's frames anew: a plugin's only).  The claim goes in `tell_core` once its
+  queue for the core is empty and no call of Drop In's runs; a full queue never drops the current call's states nor
+  the last "idle" (`HASSMIC_DROPIN_LATE_IDLE` for tests: the end in the order before; `make unit-dropin`). Playback on the mixer's `Voip` stream
   (front end's call mode); mic = micHfp where the backend has it (Call audio, below), else micAsr through the pipeline's gain, then a gate (open only while this side talks:
   9 dB over the room and over -58 dBFS, `NEAR_MIN_DB`, or an empty room's noise goes out with the speech gain; echo
   estimate peak-held against the far end's level held after it stops), listening mode only while this side talks
-  (`core_dropin_listen`); the far end talks when it plays over -55 dBFS and 25 dB over its own floor (`far_voice`). Core side in `main.c` (`core_dropin`: call LED animations, comms sounds, ringtones via
+  (`core_call_listen`); the far end talks when it plays over -55 dBFS and 25 dB over its own floor (`far_voice`). Core side in `main.c` (`core_call`, Drop In one of its
+  callers: call LED animations, comms sounds, ringtones via
   `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; wake word ignored while the far end
-  talks). Notifications to the core go through dropin's loop thread: `dropin_call` runs under `core_lock` (ESPHome
+  talks; `proto->dropin_changed` for Drop In's calls only).  One call on the Echo at a time: call.c's claim
+  (`call_claim`/`call_release`/`call_claimed`, an atomic, taken from calling or ringing on, let go by whoever tells
+  the core only after its "idle" went through `core_call`, which shows only the claim's `who`); Drop In refuses "busy"
+  while another (a plugin) has it, in its old words ("busy in another Drop In": what every released build maps to
+  `busy`), and `core_call_button`/`_answer`/`_hangup` go to whoever has it. Notifications to the core go through dropin's loop thread: `dropin_call` runs under `core_lock` (ESPHome
   handler); every state and result is queued (`ev_push`) and told in order (`tell_core`), and an outgoing call's
   first invite goes out only after that, so HA always sees "calling" before a refusal. HA: action `drop_in`, "Drop
   In", "Drop In with", "End Drop In", and the event entity "Drop In result" (`dropin_results`: what came of each call
@@ -413,8 +581,10 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Call audio** (`call.c`, `call.h`): Drop In's audio moved out of `dropin.c` unchanged: the mic gate, echo
   suppressor and gain (`call_mic` from the capture thread, the owner's `send` per encoded 20 ms frame), the jitter
   buffer and playout on the Voip stream (`call_rx`, its thread), Opus 16 kHz; `call_begin`/`call_end` the media's
-  generation. Lock order: call.c's `tx_mu` (one sender at a time; `send` and `core_dropin_listen` run under it) before
-  `core_lock` and `dl`, `dl` before call.c's `ml`; nobody calls `call_mic` holding `core_lock` or `dl`.
+  generation; `call_begin(who, codec, send, arg)` only for the claim's owner, `CALL_CODEC_OPUS` (Drop In) or
+  `CALL_CODEC_PCM` (a plugin's: the gated, gain-corrected frame as s16le, in by number, a missing one the last
+  faded by `PCM_FADE` a frame; `make unit-call`). Lock order: call.c's `tx_mu` (one sender at a time; `send` and `core_call_listen` run under it) before
+  `core_lock`, `dl` and plugin.c's `cml`, `dl` and plugin.c's `bl` before call.c's `ml`; nobody calls `call_mic` holding `core_lock`, `dl` or `bl`.
   Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`: the mixer's where
   `board.call_mic`, measured: donut, biscuit; radar and cannoli have the path in AFE.cfg, unmeasured): `micHfp` is
   Amazon's "Voice" pipeline (AFE.cfg: (V)AEC, RES, NR, CNG, AGC -22/-23 dBFS, Tx EQ, limiter; no beamformer) once the
@@ -439,7 +609,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   exportable or not), used by `proto_esphome.c`, the settings page and exports. Its own ones persist in `state/config`
   (`name=value`; the positional `state/settings` of older versions is read once and moved); arbitration, Sendspin and
   the equalizer stay where their module keeps them. Loaded in `main()` whatever the protocol. Changes from elsewhere
-  reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, Wi-Fi
+  reach HA through `proto->settings_changed`. Features (`feature` in the table: arbitration, sound, whisper, plugins (the "Plugin" event entity), Wi-Fi
   motion, light sensor (Illuminance + auto level), wake word events (`wake_events`: the "Wake word" event entity,
   `core_wake_events`), request text (`request_text`: "Last heard"/"Last reply", cut to HA's 255 characters, `state_text`), Bluetooth proxy (no entities: `proto_esphome.c` `bt_proxy()` gates the device info's proxy fields and
   every proxy request), Bluetooth audio, Bluetooth speaker, Drop In, separate volumes): their entities are listed only while on (`proto_esphome.c` `listed()`,
@@ -451,8 +621,62 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
 - **Settings page** (`web.c`, `web/`): HTTP on 28931 (`-W`), files of `web/` gzip'd into the binary by `tools/embed.py`
   (`build/web_assets.c`). Login: the browser's X25519 key waits for the action button (`web_approve()` first in
   `on_action`; ring `authenticated_setup_mode`), approved keys in `state/web_clients`, Echo key `state/web_key`.
+  One wait for the button at a time (`login`: W_LOGIN, W_ADB, W_PLUGIN, W_NOTE, W_ANYWAY; state 1 armed; web.c "what waits
+  for the action button" has the invariants I1, I2, their argument and each boundary: keep that comment true): an
+  armed wait ends by the press (W_NOTE: by the button HELD 1 s, `web_hold`, never a press, which goes on as without
+  the wait: its asker can make a press happen, a Drop In rung there; main.c `on_held`, buttons.c `handler.held`,
+  the volume pair held 1 to 2 s by the clock where `board.action_combo`; only a hold whose button-down came after
+  the arming, `web_hold(down_ms)` against `login.at`; a hold that served is not the "Button" entity's: while a
+  note's wait is armed `action_hold` does not fire),
+  `LOGIN_MS`, or its owner's signed word (adb "off" from the browser that armed it, an
+  install's cancel, a note's "keep", a revoke); no request replaces it ("busy"). After ANY wait ended (`wait_over`,
+  every kind) no other unapproved key is armed before `strangers_from`: `QUIET_MS` (30 s) after the press, else after
+  the wait's arming + `LOGIN_MS`; and `QUIET_MS` after every press that served nothing while a contested record
+  stands or that time still runs (`web_approve`'s end: presses are a person's); only the key whose own login ran out
+  may ask again at once (`again`, not after a `login.reserved` one, and not once a press served nothing since: such
+  a press clears it).  Over a restart within a boot: `state/web_wait`
+  (`hold_save`/`hold_load`: boot id, the monotonic time strangers are kept back to, the note waits' times; written
+  when a wait is armed and when a press ends one, a contest's with `QUIET_MS` to spare; `HASSMIC_BOOT_ID`; no boot
+  id readable: `-`, held by the clock while no further ahead than `LOGIN_MS + 2 QUIET_MS`, the note waits counted
+  as armed at each start).  Never written under `lk`: `hold_save` (lk held) leaves it in `hold_out`, `hold_flush`
+  (no lock; one writer, `hold_wr_lk`, taking the latest left) writes: the request that armed flushes before it
+  answers and waits for a writer that took its wait before it (`hold_flush(1)`: every "waiting" answer), `web_approve`/`web_hold` wake the expiry thread (`hold_poke`); a new caller of `hold_save` does one of
+  the two. A second unapproved key while a login waits: contested (state 4: not armed, ring off, the
+  press goes to the assistant, both told; held until `QUIET_MS` after the later of the first one's arming +
+  `LOGIN_MS` and the last ask by another key than the last, `login.last`). An approved browser's wait (`wait_arm`:
+  adb, a plugin, a note, a withdrawn plugin to run anyway) is armed whenever nothing is (also in the quiet time, over a contested record, whose time
+  goes into `strangers_from`); asked while a login is armed it is told busy and marks it (`login.reserved`), and
+  its page asks again when `/api/state` `button.holds` leaves "login" (app.js `waitNoLogin`). The login page keeps
+  asking while "contested", "busy" or "rate". No unsigned login while the button is Improv's business
+  (`improv_holds`: set up, a phone connected, or its press's time, a switch or "provisioned" running), nor for
+  `QUIET_MS` after Improv's wait went off, pressed or not (`web_quiet`, from main.c's `improv_attention(0)`, with
+  improv.c's lock held, only leaves the time in an atomic and signals the expiry thread: it takes no lock and writes
+  nothing; `phone_over`, first in `login_expire`, applies it under `lk` before anything looks at the waits; web.c
+  never takes improv.c's lock, `improv_waits`/`improv_holds` read atomics); a
+  login armed before Improv's wait ends unapproved with that wait: at the press, which goes to Improv (`web_approve`,
+  `improv_waits`), or as "busy" when the wait goes off without one (`phone_over`); an approved browser's adb, plugin
+  or note wait stays (web.c's section says why).  `state/web_wait` for times anyone can keep moving (a contest, the
+  end of a phone's wait, and `QUIET_MS` from now for as long as `improv_holds` says the button is a phone's
+  business, poked by `web_phone` from `improv_attention(1)`: a restart ends that wait and must not forget whoever
+  is on his way; `hold_save` `moving`) is written with `QUIET_MS` to spare, one write per `QUIET_MS`, and again
+  where the file says more than that spare time later than need be (a login ended by a phone's wait: with a LAN
+  asker beside a Bluetooth device two more writes per `QUIET_MS` at the most). Unsigned asks counted
+  (`ask_rate`: 40 per address, 120 in all per 10 s, 8 addresses; the armed key's own are told "waiting" and not
+  counted; an ask over the count is refused "rate" and still turns another key's armed login contested, `contest`).
+  `state/web_key`, `web_clients`, `web_button`, `web_wait` are opened as the store opens its files (`ps_fopen`: a
+  FIFO there hung `web_start`); `web_button` is written again when a button's browser leaves `clients[]`, and
+  by `load_button` at a start that finds a line naming no client (`button_stale` is memory's).
+  `/api/login` answers `refused` with `why` (timeout, contested, busy, rate) and `retry_s`; `/api/adb`,
+  `/api/plugins/install` and `/api/plugins/<id>/anyway` say `holds` (what the press serves), `/api/state` `button`. A new use of the button arms
+  through `wait_arm` and ends through `wait_over`. Not covered, and said in docs/SECURITY.md: a login nobody asked
+  for shows the same ring. `HASSMIC_LOGIN_MS=<wait>[:<quiet>]`, `HASSMIC_LOGIN_RATE=<address>:<all>` for tests (a
+  test that logs in a second browser after any wait sets a short quiet, and one that does so after a restart with
+  a wait behind it starts as another boot; `webclient.py` `login_with_button` asks
+  again only while "busy", bounded, and fails on any other refusal).
   Requests signed (BLAKE2b-128 keyed with K over method, path, counter, body; K from X25519), counter per browser,
-  each taken once within a window of the last 64 (`signed_ok`: the page's first calls cross on the way); the
+  each taken once within a window of the last 64 (`signed_ok`: the page's first calls cross on the way; every
+  write's counter kept on the flash but a piece of an upload's, `piece_route`, by the whole route: no plugin id is a
+  route word, `plugin_store.c` `ps_route_words`, the index's `ROUTE_WORDS` the same list); the
   answers too (`respond_s`: X-HM-Mac over "RESP\n" + counter + body), and the page refuses an unsigned one ('old').
   Vouchers: members of one arbitration network let in a browser approved on another member (`/api/vouch/nonce`, `issue`
   (signed, at the Echo it is approved on), `login`; MAC with `arb_web_key`, a key derived from K, over target key,
@@ -502,6 +726,559 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   through artifacts.c.  Works against the real Amazon (biscuit 2026-10-06, donut with its drvV3 token 2026-10-09,
   crown with its drvV3 2026-10-14, checkers with Java MAP's drvV1 2026-10-13 (whisper not allowlisted for its device type), all amazon.de; what it answers in docs/re-davs-login.md, which also has the drvV3 analysis).  The page offers
   every Amazon site with Alexa (davs.c's list), any of the account's region works.
+- **Plugins** (`plugin.c`, `plugin_store.c`, `src/tools/plugrun.c`, `sdk/`, `plugins/`; design and state in
+  `docs/plugins.md`, section 13 what is built; experimental, setting `plugins`, off): programs beside hassmic, each
+  a static binary in a sandbox.  `main.sh` starts hassmic as `plugrun -L -- runas ...` (`PLUGINS=0` in hassmic.conf:
+  without): plugrun leaves a root launcher behind (init's child) and becomes runas; hassmic finds the socketpair as
+  `HASSMIC_PLUGIN_FD` (`src/include/plugrun.h`: READY, SPAWN with three descriptors, SPAWNED/FAILED, KILL, EXITED,
+  and from version 2 USAGE/USED: a plugin's CPU time, which only root can read on Android (hidepid); `cpu_watch`
+  asks, `cpu_used` decides, never for the wake engine's; versions only add messages, and hassmic sends an older
+  launcher none it does not know).
+  The launcher has no policy: per plugin a user 6900 + slot, limits, the plugins' SELinux domain `hassmic_plugin`
+  where the policy has it (`scripts/system/sepolicy-hassmic.rules`: types of an attribute of their own, never `domain`
+  or `file_type`; only hassmic's descriptors and their sockets and pipes, its program of type `hassmic_plugin_file`,
+  which `plugin.c` `program_label` gives it before each start, its threads; entered from su only; what it may do read
+  back out of every model's compiled policy by `tools/sepolicy-check.sh`; not tried on an Echo), else hassmic's, else
+  su, said in `READY` (`/api/plugins` `sandbox`; `HASSMIC_PLUGIN_DOMAIN` for plugrun-host), the seccomp filter (`sdk/filter.def` -> `tools/mkfilter.py` -> `build/plugfilter.h`; ~70 calls, the rest
+  EPERM, above 386 ENOSYS; a static bionic program does not start under it: plugins are built with musl, never the
+  NDK; `tkill` allowed as it is, for musl's `raise()`/`abort()`/`pthread_kill()`: no rule holds a thread id to the
+  plugin's own, the slot's user does), exec by descriptor.  `plugin.c` is the broker: one thread polls the launcher and every plugin's control
+  socket (SOCK_SEQPACKET; `sdk/messages.def` -> `tools/mkplugmsg.py` -> `sdk/plugmsg.h` and `sdk/PROTOCOL.md`'s
+  reference and the test vectors `sdk/vectors/<MESSAGE>.vec`: change the def, run the tool, `make unit-plugmsg`
+  holds them together, the vectors (a sample, `case empty|long|full`, `refuse` lines) to plugmsg.h's encoder and decoder both ways) and its stderr (the log,
+  `plugin <id>: ...`, 50 lines a minute).  Messages are hostile input: form, state, capability and rate checked.
+  Locks: `bl` only over work that cannot wait (the capture thread takes it in `wake_plugin`'s feed); order
+  `core_lock`, the store's (`ps_lock`, recursive, held while a `struct ps_plugin` is used), `bl`; never `core_lock`
+  or the flash under `bl`.  hassmic's own crashes (`fall_*`, `state/plugins/.fall`, `.falls`): the mark names the
+  plugin whose message the broker's thread reads, until `core_begin` (before every call into the core: keep it so
+  for new messages); only named marks count towards three; the named plugin is held back for the run, the wake
+  engine's for `RETRY_MS`.  `plugin_store.c`: packages (`.hmp`: a tar of manifest.json, manifest.sig, plugin,
+  LICENSE, listing.sig; EdDSA as otatool's, each over a text naming its purpose; ELF checks: static, a marked
+  non-executable stack), `state/plugins/<id>/` (`pkg/`, one package a plugin, `author.pub` pinned, `accepted`: the
+  digest of the manifest's accepted section as `digest`, `how`, `when` (`struct acc`); digest form 3, "hassmic plugin accepted 3", over name, author, description, source,
+  capabilities, settings, forms 2 and 1 still counting as accepted (`accepted_is`); `config` 0600 with typed lines
+  `<row>:<type>=<value>`, read only by a row of that type, rows the manifest no longer has dropped at a scan (`config_tidy`); `files/<list>/<item>/`), settings,
+  uploaded files (checked by the plugin before they are kept: FILE_CHECK).  A package is in `pkg/` whole or
+  not at all: `ps_stage_install` writes `pkg.new/` and renames it in (the old one `pkg.old/` in between;
+  `pkg_settle` from `ps_scan` cleans up after an install that did not end; `accepted` and `enabled` after it;
+  `HASSMIC_PLUGIN_FAIL_PACKAGE` for tests), and plugin.c `start` runs no program whose BLAKE2b is not the
+  manifest's `digest` (`program_is`, through the descriptor it hands the launcher; `program_open`: digest,
+  descriptor, capabilities and limits (`struct run`) under one hold of `ps_lock`, on a mismatch once more after a
+  rescan, since an install's caller scans only after the lock was let go; `start`'s own first look only decides
+  whether to start).  A first install that ended before its package arrived leaves a folder
+  `ps_scan` removes (`never_arrived`: a lone `pkg.new/` and at most `author.pub`, looked at before `pkg_settle`).  Every file the store reads from
+  `state/` is opened without waiting and only if regular (`open_reg`, `ps_fopen`: a FIFO there hung `ps_scan`).
+  Versioned scopes (docs/plugins.md 3.1, sdk/PROTOCOL.md "Versions"; 2026-11-23, in place of 0.x's exact
+  minor and everything that existed because a minor broke): `core` and one scope per capability, each a version
+  (all 1 so far); a scope's version N+1 only adds (a message, a field appended, an enum value, a constant, a
+  manifest key), never changes or removes.  `sdk/messages.def` gives each `scope`, each message's scope(s)
+  (`net.udp|net.discover`: in each; never grows), `@N` for what a later version brings, a field's `enum:E` (its
+  values held to what the peer speaks), `keys CONTEXT SCOPE[@N] KEY ...` (the manifest's keys where they stand),
+  and for every version above 1 `version SCOPE N widens|within "..."` (required, no default: whether it lets a
+  plugin do more than its capability's install line; `pm_widens`, `pm_version_doc`); `tools/mkplugmsg.py` holds the
+  rules (since nondecreasing, `@N` within the declared version, HELLO/WELCOME/REFUSED and multi-scope messages
+  fixed, the greeting's lists of scopes 255 for good (`PM_SCOPES_MAX`; at most 255 scopes, versions u16), every
+  scope a capability's, `CAP_*` values each its own scope's from version 1 and under `CAPS_MAX` 64, the bits of
+  `pm_caps_t`/`PM_CAPBIT()`, hassmic's own set, never on the wire: WELCOME has no capability bits, what was granted
+  is the scopes spoken) and `sdk/scopes.lock` (each (scope, version)'s layout, enum fields, values, caps, keys and
+  mark as recorded; `--check` fails where a recorded one would change, one is missing or a version is unrecorded;
+  `--record` adds new ones only; every version any release tag's lock had (`v*`: main's betas and release's
+  releases, `released_locks`, `git cat-file --batch`) must be exactly that, in the lock and the def wherever either
+  has it (`released_why`: set equality), missing only where no tag HEAD descends from had it (`git merge-base
+  --is-ancestor`), and no two tags may differ on one; `--released` (CI) fails without tags, in a shallow clone
+  (`--is-shallow-repository`: merge-base says "no" past the boundary) and on a tag whose lock is no file (its
+  entry's mode in the tag's `sdk` tree: a directory, a symbolic link, a submodule) or has a line that is no lock's
+  (every `cat-file` answer passed over whole by its size), make unit-plugmsg says it skipped (shallow, no tags) or
+  names that tag and holds the rest; the release job runs `--released` again, tags fetched anew (`--prune
+  --prune-tags`: one deleted on GitHub gone here too), right before `gh release create` (main and release build at once; the way out of two releases that disagree: DEVELOPMENT.md "CI and
+  releases"); the lock's head is `LOCK_HEAD` word for word (`--check` fails, a plain run writes it; a note of its
+  own below a blank line); re-recorded once, 2026-11-23, before any release had a lock): change the def, run the tool with `--record`
+  for a new version, never edit the lock by hand but to delete a version no release carried;
+  `tests/unit/plugmsg_scopes/` the rules each broken, `tests/unit/plugmsg_scopes_test.py` the releases in a throwaway
+  repository with both branches tagged.  A value of a version above 1 names its fallback (`B=2@2>A`, a value of an
+  earlier version, recorded; refused without), `pm_<enum>_for` and `pm_fit` (in place, a packet's every such field)
+  map it to what the peer speaks: `psend` and the C client's `put` run `pm_fit` on every packet, never dropping one
+  for a value (the vectors' `fit` lines; the Rust client's `fit` and `*_LATER` tables), but for a value that names
+  none (`C=3@2>-`: no earlier value is right; `messages.def`'s head has the rule: the fallback is what an older peer
+  should act on, never a failure to a success, a command to another, an event to one that did not happen):
+  `pm_<enum>_for` `PM_NOT_SENT`, `pm_fit` 1, the packet not sent to that peer, without a word (`psend` 0 and
+  `p->unsent`, said once a start, never "hassmic's error"; the vectors' `unsent` lines).  `>-` only on an enum
+  that messages marked `drop` alone hold (`msg ... SCOPE drop "..."`, recorded in the lock, `pm_droppable`; never
+  the greeting, OK or ERR): events whose whole point is the value, `BUTTON` alone; never an answer, an end, a state
+  or a reason/qualifier (mkplugmsg refuses; a new value there names its fallback or is a new message).  So `psend`'s
+  0 for a packet left unsent is only ever `BUTTON`'s (any other is "hassmic's error", -1: `action_send`,
+  `entity_set`, the `told_*` never take it for sent), and `plugin_button` asks `pnot_for` before `bucket_take` (a
+  key a plugin does not hear spends none of its budget).  The clients refuse a request not of what is spoken
+  (`pm_check` -1, `pm_fit` 1) with their own code `0xffff` (`HM_ERR_NOT_SPOKEN`, Rust `ERR_NOT_SPOKEN`; ERR's
+  65535 refused by mkplugmsg), apart from `HM_ERR_BAD`.  `pm_fit` rewrites in place: `psend`/`put()` take a non-const `struct pm_w`,
+  mark it `fitted` and refuse it again (encode a packet per peer).  A multi-scope message holds
+  core's enums and `CAP` only.  Decoders are strict: bytes after the last field
+  are malformed, and so is an enum's value the peer does not speak (`pm_<enum>_ok`, in `pm_check`; `pm_cap_ok`: any
+  of this build's capabilities); `psend` and the C client's `put` hold every packet to `pm_check` before it goes,
+  and the C client's `answer()` every answer it takes (`PM_CONST_SPOKEN` for constants).  A version's words are
+  `PM_VERSION_DOC_MAX` 300 bytes at most: a raise lists every version between (`requires_wider`, last: after the
+  capabilities' lines and the settings' rows; versions within one after another folded into one line; the last
+  `PS_CHANGES_ASK` of `PS_CHANGES` only for lines that ask; what has no place counted, `more`/`more_shown`, the
+  check's `changes_more`/`shown_more`, "And N more." by `hmbrowse.changes`), a first install
+  and a capability asked for anew every widening one up to the one required (`ps_widens_json`, the check's and the
+  card's `"widens"`, `web/plugins.js` `plgCapList`/`hmbrowse.capLines`; `widening_lines`).  The manifest's keys by version: `plugin_store.c` `keys_versioned` (`pm_key`;
+  a key of a later version than required refuses, one unknown refuses where strict: capabilities' entries), the
+  index's `KEYS` the same, `tests/unit/scopes_demo.py` the def as a later hassmic's (net.lan 2 widens, 3 within, 4
+  widens; ha.entities 2 within; call 2 within with `HANGUP_ELSEWHERE`/`RESULT_ELSEWHERE` and their fallbacks;
+  button 2 `BUTTON_KEY_MIC>-` and audio.music 2 `MUSIC_BUFFERING>PLAYING`; state to 35, 2 to 4 within then by turns;
+  `build/scopes_demo/plugmsg.h`), which `make unit-plugin_store`, `unit-plugin_broker` and `unit-hmplugin` build
+  their tests against a second time (`-DSCOPES_DEMO`; the C client copied beside that header) and the index's `make
+  check` its cross-check.  A manifest's `requires`
+  (`{"core": 1, "<capability>": n, ...}`: exactly core and each capability asked for, `requires_parse`, read before
+  anything a version may bring) is not in the accepted section; a version this build lacks: refused at install and
+  marked at scan "needs a newer hassmic: <scope> <n>" (`m.newer`: name and version kept, the card says so, never
+  started, the self test does not wait for it: a fall back to an older build).  hassmic speaks exactly the
+  manifest's versions: WELCOME names them, `plugin.c` `plug.ver[]`, `psend` sends nothing of a later version,
+  `message()` answers one `ERR_UNKNOWN`; HELLO carries the client's whole table (a scope required and not offered,
+  or offered lower: `REFUSED_SCOPES`).  `ps_scope_have` is this build's table; `HASSMIC_PLUGIN_SCOPES=<scope>:<v>,...`
+  (`ps_scopes_env`; 0 = lacks it, never higher) makes the PC's build an older one, as the index's C cross-check
+  does.  "Never back" over the one package (`pkg_version`), for `web_plugin_push` too.  An update goes without the button only as what was accepted or less
+  (`wider`, docs/plugins.md 3.3: capabilities and settings value for value; a capability, a row, an entry of a list
+  of grants gone; `storage`, `files`, `max_kb`, `max_items` smaller); anything else, understood or not, asks.  A new
+  capability with parameters gets its own rule there or none; `memory_mb`/`threads` are shown (`PS_LIMIT`); a raised
+  `requires` (`requires_wider`) into a widening version is `PS_MORE` (asks), within `PS_SPEAKS` (shown, web.c kind
+  "speaks"), every raise listed; an unreadable installed manifest of the same section: held against version 1.
+  `ps_sealed`: an unread, newer or package-less plugin counts as sealed; `ps_scan`'s newer card keeps `requires`.
+  `pi_version.req` is u16 as written (never clamped).  A
+  manifest `ps_scan` cannot read is listed as a plugin that cannot run (`refused`), never skipped.  Community plugins (docs/plugins.md 2.7 "As built"; setting `plugins_community`, off by default, no entity): whatever
+  the index does not list as official (a community listing, a file) is refused by `ps_stage_check` and marked
+  `community_off` by `ps_scan` (refused: stopped and kept; no wake engine, `ps_engine_refused`, which asks the switch
+  as it is now, `ps_community_keeps_off`, never the scan's mark alone: that lags it until the broker rescans) while
+  it is off.  An
+  ordinary setting of the page (no press: each such plugin's install takes the button anyway; the maintainer's
+  decision, docs/plugins.md 12's eighth round): on and off by `/api/set` from an approved browser, exported, copied,
+  taken from an import and a preset; `plugin.c` `plugin_community` sets the store's flag
+  and leaves the rescan to the broker's thread (`community_due`: the caller holds `core_lock`); `settings.c` applies it
+  before the other lines of one request (`switches()`: an export lists `wake_engine` first); `main.c` sets it before
+  the first scan (`settings_peek`, as this start will have it), off unless set; `settings_load` only notes it and
+  `plugins` (`loading`), `settings_preset` tells both once at its end.  The page's dialog before "on", and the install
+  dialog of every plugin that is not official (`plgDialog`, `hmwall.of`: the step an import, a preset or a copy does
+  not skip), have the warning in full where `sandbox` is "hassmic" or "su", worded by `install_method` (`/api/plugins`,
+  and the installing Echo's check, `check_json` `sandbox`/`install_method`; the Makefile's `INSTALL_METHOD` from
+  device.conf `INSTALL`; `HASSMIC_INSTALL` for tests); tests that install files write
+  `plugins_community=on` into their `state/config` (`tests/fake_plugins_community.py` has the switch).
+  Install: the page uploads, the Echo checks, the action button accepts
+  (`web.c` `W_PLUGIN`, `plugins_api`; `web/plugins.js`).  An update needs the button only where it is wider than
+  what was accepted (`wider`, docs/plugins.md 3.3: a new capability, a larger number, a list entry the accepted
+  manifest lacks, a new secret/host/text row or such a row's label, name, author, `wake` dropped; the check's
+  `changes` as "New/More/Changed" lines), held against the installed manifest whose section `accepted` names; the
+  check also gives the author key's fingerprint (`ps_fingerprint`, as `plugcheck.py show`), named for a sideload.
+  Phase 2 (2026-11-21): capabilities `files`, `wake`, `storage`, `log.read`, `net.server`; phase 4 (same day) adds
+  `state`, `net.udp`, `net.discover`, `audio.music`, `audio.volume`, `ha.entities`, `ha.actions` (below); phase 5
+  `call`; phase 6 `request.audio`, `request.text` (below); then `net.lan`, `net.internet`, `log.read.full` (below),
+  `button` and an entity's `"page"` (below): every capability of 3.3's table, each a scope at version 1 (a name
+  the build does not know refuses the manifest; the index's `SCOPES` the same table).
+  Places (`plugin.c` "Places"): `RUN_MAX` = the launcher's `PLUGRUN_SLOTS` (8, users 6900+slot, `lockdown.sh`
+  `PLUGIN_SLOTS`), and the running ones' `memory_mb` (the launcher's RLIMIT_AS, 32 when left out) within `run_mem`
+  (`RUN_MEM_MB` 128, a quarter of `/proc/meminfo`'s MemTotal rounded up to the next 128 MB where less, `run_mem_of`):
+  `places()` counts processes, ones stopping and the wake engine's whenever it is wanted and not off, running or not
+  (`engine_waits`: between restarts, held back, waiting for `room`); one without a place waits (`waits`,
+  `wait_since`, card state "waiting", its why), `timers()` starts the oldest that fits, and the spawn asks the places
+  again (two starts at once); a wanted plugin left without a launcher slot is asked again in 250 ms; the wake
+  engine's plugin evicts the newest others until it fits, and they wait (a stop for its place is no crash:
+  `exited`'s `!p->waits`).  Sized by `RUN_MAX`: `LANES` `RUN_MAX + 2` (`LANE()` each; `core.h` `MUSIC_SOURCES` 14),
+  `RQ_MAX`; `plugin_net.c` `QUEUE` 16, `WORKERS` 8.  `PLUGIN_TEST_BETWEEN(id)` (the harness's `h_between`): what
+  another thread does while `start()` has `bl` let go.
+  Storage (`ps_store_*`, `state/plugins/<id>/storage/<key>`, the accepted kB and 128 keys; `plugin.c`
+  `store_message`: a bucket of 10 writes, one back a minute, `HASSMIC_PLUGIN_STORE=<bucket>:<ms>` for tests), the log
+  (`logread.c`: the page's tail and the plugins' filter and cursor; a line that carries what was said or answered, a
+  name a person gave, a media address, a code, the home's country or Home Assistant's words is written with
+  `log_private()`, a wake plugin's with `log_sealed()` (`plugin.c` `say`/`seal_note`): one buffer, control characters
+  spaced, one write; never `fprintf(stderr, ...)` with such a value, a new line included; a mark anywhere drops a
+  line, clock.c's reader carries it onto a cut line's next piece and never cuts one in two (`mark_begun`);
+  `tests/unit/logwriters_test.c` and `fake_plugins_net.py`'s sentinels, each set followed by a control line;
+  `log.read.full` (official only, `combination`; `ps_scan` holds it to a listing under `pi_least_index()` as to none,
+  the tier shown kept) the page's view, `logread_full`: every line but a sealed one or a
+  wake plugin's, the token blanked; `messages.def`'s capability column may name several, `a|b`, `pm_caps` a mask; a cursor
+  read only from a line's start, else the next one's with a gap, not MAC'd; `plugin.c` `log_pump`, sends only what
+  fits, nothing while a CONNECT waits, one LOG at a time: it has an id, the next after the client's OK of it,
+  `log_wait`; no OK in `LOG_ANSWER_MS` 10 s: said once and on the card, `log_deaf`, `/api/plugins` `log_unanswered`), the
+  first sockets (`net.server` entries `{setting: host row, proto, ports | "setting:<int row>"}`, neither row with a
+  default, `plugin_store.c` `net_parse`; `net.lan`/`net.internet` entries `{proto, ports | "any"}`,
+  `reach_parse`, `struct ps_reach`, lines by `reach_line`; `CONNECT` only after READY -> `plugin.c` `connect_message`
+  by `kind` (net.server: what the owner stored, `ps_config_owner`; net.lan: an address `a.b.c.d` the plugin names,
+  `ip_text` + `pnet_local`, never a name, no lookup, never DNS's 53/853 (`PS_PORT_RELAY`, also `net.udp`'s
+  `udp_dest_ok` and `net.discover`'s port: the router's forwarder asks the internet; the index's `DNS_PORTS`);
+  net.internet: a name or a public address, `ps_host_name_ok`, never `pnet_local` (the worker again after the lookup);
+  a listener's or caller's worker lines private, `pnet_req.mark`; the last 30 in a minute; a refusal said once in `REFUSAL_MS` 10 s, the rest counted,
+  `refusal()`: a new per-message line a plugin can cause goes through it) -> `plugin_net.c`'s workers (one per place,
+  each plugin's requests one at a time, `working[]`; 10 s a request in all, the lookup in a thread of its own waited
+  for until then and counted until it ends: `LOOKUPS_EACH` 2 a plugin, 16 for names plugins chose, `LOOKUPS_OWNER` 4
+  more for net.server's, `BUSY` past them; `HASSMIC_PLUGIN_LOOKUP_DELAY`,
+  `HASSMIC_PLUGIN_NET_MS` for tests; a dead start's dropped, `pnet_live`, by `struct plug` `gen`, new at every spawn
+  in a run): only the owner's host, never loopback, the Echo's own, an address not routed unicast
+  out of an interface other than lo (`RTM_GETROUTE`), 0/8, multicast, broadcast, port 5555; a private address a plain
+  socket, any other `net_socket`; handed over, no copy kept; a server's row changed: `plugin_restart`), after STOP
+  STORE_PUT/DEL done and answered, any other request answered FAILED (a worker's CONNECT too: never its socket); a
+  process's storage and files its plugin's until it is gone (an update's old process too: its stop's cursor), none
+  once removed (`revoked`, read under `ps_lock`): `store_mine`; the seal's wipe waits on `mdigest`
+  (`plugin_old_running`); hassmic ending in order (`SIGTERM`, `main.c` `on_term`/`term_thread`; `main()`'s end):
+  `plugin_shutdown` sends STOP to all and waits 2 s at most, nothing starts after it; root's `main.sh` `hm_term`
+  sends `SIGTERM` before its own restarts and its reboot (init's stop and `ctl.restart` are `SIGKILL` to the
+  process group: no stop callback then); the development flag (`state/plugins/<id>/develop`, SPAWN's `d`,
+  launcher version 3: `EPERM` refusals as `SECCOMP_RET_TRAP`, the SDK's `SIGSYS` handler names the call; `plugrun -T
+  -D`; not under launcher 2: `develop_flag`), storage in the copy between Echos (row `store <id>`, only when picked;
+  sealed both ways, web.c `seal2`: the answer under a nonce of the Echo's own in front of it, "hassmic sealed 3
+  <hex>", purpose "hassmic seal back 3", the GET taken once over restarts; its first line `hassmic storage 1
+  wake=<0|1>` (`ps_sealed`: `wake`, or a wipe still due): never a wake plugin's into one without `wake`, by the page's
+  word (not MAC'd: decided); `plugin_storage_replace`, `storage_settle` after a cut swap).
+  Phase 4 (docs/plugins.md 13 "Phase 4 on hassmic's side"): music sources are one table (`core.h` `struct
+  music_source`, `music_register`, `core_music(n, on)`: newest wins, the others' `pause`; button, stop word, volume,
+  `unyield` through it; Sendspin and A2DP registered, `a2dp_music_join` before `sendspin_start`); a plugin is one of
+  `LANES` sources (`lane_*` trampolines, `lane_of[]`, registered once).  `MUSIC_OPEN` -> a SOCK_STREAM pair, its
+  reader `mstream_thread` (40 ms reads at playback speed, stereo, `music_duck`, `musiclight_feed`, `MUSIC_POS` every
+  200 ms) onto the backend's own plugin stream (`audio.h` `plug_open/_write/_queued_us/_close`: one at a time,
+  `plug_mu`; a newer plugin's open ends the older one's stream); `MUSIC_STATE` is what the button, "stop" and HA's
+  media player go by (`plugin_music_state`, `plugin_music_ha`; `music_tell` sends `MUSIC_CMD` until state and wish
+  agree).  `STATE`/`VOLUME`/`NET` (`tell_echo` at READY; main.c `tell_plugins` -> `plugin_core_state`).  `net.udp`/
+  `net.discover`: `udp_message` binds ports of the plugin's own (`ps_udp_ports`, `state/plugins/<id>/ports`,
+  28940–28999), `private_only` (BPF on the source, `SO_LOCK_FILTER`), `UDP_PEER` (one a second, `r_peer`)/`SENDTO`
+  to private unicast the kernel routes out (`udp_dest_ok` -> `pnet_address_ok`'s `route_out`), `BROADCAST` to each
+  network's directed broadcast (`net_look`) or the manifest's group, one a second, `IP_MULTICAST_LOOP` 0; the
+  search's port never 2330 or 28928–28999 (`PS_DISCOVER_*`: a broadcast comes back to the Echo's own sockets; and
+  `lockdown.sh` `hassmic_self`); `PROPOSE` kept in memory per row (`prop[]`), written only by the page (`POST
+  /api/plugins/<id>/propose`, `plugin_propose_take`, which asks PROPOSE's rules again).  The stream while not heard
+  (paused, `myield` `MY_OTHER`/`MY_HELD`) read and dropped at its rate, never faster; every pause hassmic sends holds
+  whether the plugin obeys (`MY_HELD` until RESUME or a new start); the lanes' functions only mark `mdue`, the
+  broker's `music_due` tells the core and HA (they run inside `core_music`); a stream's end tells the core while the
+  entry still holds the stream and its lane (`HASSMIC_PLUGIN_MSTREAM_GAP_MS` widens that for the unit test);
+  `VOLUME_SET` 5/s and 20/min, applied from the latest every `VOL_APPLY_MS` (`vol_flush`), one that waits dropped when
+  the volume is set elsewhere (`plugin_core_state`, `vol_own`).  The stream's thread: a paused stream dropped at a
+  pace kept as a running frame total; a read under `READ_MIN_MS` (5 ms) of audio has the next wait that long;
+  it tells the core off by its lane's `src`, and `start()` takes no `P_FREE` entry with `.ms`.  `ha.entities`/
+  `ha.actions` (`entities_parse`, `actions_parse`: labels unique too): keys given once from a rising counter and kept
+  in `state/plugins/.hakeys` (`plugin_store.c` `hakeys_assign` at every scan; one not written down is not used),
+  never another's, above hassmic's own, starting at a random place when `.hakeys` is missing (a factory reset: Home
+  Assistant took a key used again for a rename); names "Plugin <len(id)> <id>: <label>" (`ha_name`: Home Assistant
+  keeps an entity by type and name and makes its entity id of `slugify("<area> <device> <name>")`, removing the entry of one
+  no longer listed, so the next alike took its id: no own name slugifies as `plugin_<digits>...`,
+  `tests/unit/ha_names_test.py` with HA's own slugify from `build/ha-venv`; the id's length makes two plugins' ids
+  two; no dedupe between plugins needed); object ids `p<len(id)>_<id, - as _>_<name>` (`ha_object_id`: unambiguous services); listed while the
+  plugin is enabled and runnable and plugins can run (`runnable()`: feature, launcher, sandbox; `ha_listed`);
+  whatever changes the list closes the links (`ha_relist`: a digest compared at every change and every 5 s ->
+  `core_plugin_entities_changed`); states checked against the manifest (`ent_value_ok`, a number's limits as the
+  float32 HA has them), every plugin text strict UTF-8 (`ps_utf8_char`; `shown_text` cuts, `ps_utf8_mend` for the
+  log and the page); `ENTITY_SET`/`ACTION` only over the keyed link (`proto_esphome.c` `plugin_command`), an
+  action's arguments typed by the manifest (`plugin_action`'s `ints`), the page's buttons (`page: true`, `POST
+  /api/plugins/<id>/action`).  Every per-plugin rate a `bucket_take` (`bucket_rate` for a minute's).  PC: `HASSMIC_PLUG_MUSIC` (the plugin stream into a file), `HASSMIC_FAKE_SOURCE`
+  (a stand-in music source), `make unit-plugin_broker`'s phase-4 block, `tests/fake_plugins_music.py`.
+  Phase 5 (docs/plugins.md 13 "Phase 5 on hassmic's side"): `call`.  One call on the Echo (call.c's claim,
+  "Call audio"), a plugin's `CALL_PLUGIN` + its entry.  `plugin.c` "calls": `pc` (C_RINGING, C_ANSWERED, C_CALLING,
+  C_LIVE), `call_message` (form, P_RUN, `call` by `pm_cap`, `r_call` 5/s), `call_over` (every end: `CALL_HANGUP` to
+  the plugin unless it said so, `media_stop`, a ring that ends unanswered counted in `rings[]`), `call_timers`
+  (`RING_MS` 30 s, `LIVE_WAIT_MS` 10 s after a person's answer, `CALLING_MS` 2 min; `HASSMIC_PLUGIN_CALL_TIMES`
+  for tests), `RINGS_MAX` 3 in `RINGS_WINDOW` 10 min -> `ERR_LIMIT`.  A token (`token_new`, 32 hex from
+  /dev/urandom, `TOKENS` 4 per plugin, `TOKEN_MS` 10 s, spent at its first use) goes into `ACTION` only for an action
+  marked `"calls"` (`actions_parse`: only with `call`), and both ways an action arrives are a person's (keyed link,
+  approved browser); `CALL_OUT` needs one, `CALL_LIVE` for a ringing call needs `CALL_ANSWER` sent (the button, the
+  screen) or one.  `CALL_LIVE` -> `call_begin(CALL_PLUGIN + i, CALL_CODEC_PCM, call_send, tag)`, a SOCK_SEQPACKET
+  pair (644-byte packets: u32 number, 640 bytes), hassmic's end under `cml` (a leaf: `call_send` under call.c's
+  `tx_mu`, one MSG_DONTWAIT send), read by `media_reader` (100/s at most) into `call_rx`; the plugin's end with the
+  OK.  The core hears every state from the `teller` thread (bl let go: `core_call` takes core_lock, and the button
+  and a "stop" call in from under it), which lets the claim go after "idle".  `stop()` and `exited()` end the
+  plugin's call.  The card's `call` (`plugin_json`), `web/plugins.js` "Calls".  `make unit-plugin_broker`'s call
+  block, `unit-call`, `tests/fake_plugins_call.py`.
+  Phase 6 (docs/plugins.md 13 "Phase 6 on hassmic's side"): a request's copy.  `main.c` `mic_out` (in
+  `lead_in` and `send_out`, after `proto->audio`) -> `plugin_request_audio` while `req_open`: set where listening
+  mode is set for a request (`pipeline_start(from, source)`; with `-w remote` only `core_remote_wake`), cleared in
+  `mic_stopped`; why it ends `req_ending` (first word wins; none: Home Assistant), a mute ends it (`mute_update`).
+  Muted, no microphone audio leaves the Echo: `mics_off` drops a queued follow-up (`barge_in`), stops `-w remote`'s
+  stream and the runs beside a reply, `mics_on` resumes; `core_restart_after`, `core_pipeline_finish`,
+  `core_remote_wake`, `wake_listen`, `pipeline_start`, `req_begin` all refuse while `core_muted()`.  REQ_TEXT only
+  for a request (`req_texts`; `plugin_request_none` where `-w remote`'s stream starts); Wyoming's `detection` is
+  `core_remote_wake` (under `-D` during a reply: the reply left to the client, no sound, the request begun, `wake_cut`
+  so its audio-stop ends nothing).  The broker's lines about a listener private (`say`, `SEAL_PRIVATE`; `seal_note`
+  keeps one place per entry of `plugs[]`, set by the start that spawns there: never a table that fills up).
+  `plugin.c` "a request's copy": per request and plugin (P_RUN, `request.audio`) a SOCK_SEQPACKET pair made under `bl`
+  by the holder of `core_lock` (`rq_fd`, valid only while `rq_open`), each packet u32 run + u32 offset + the block,
+  one MSG_DONTWAIT send (`REQ_SNDBUF` ~6 s: a start's lead-in and replay, 4.8 s at most, come at once; full:
+  dropped and counted), closed at the end (the plugin reads its end); `REQ_START` (the
+  plugin's end with it), `REQ_END`, `REQ_TEXT` queued (`rq_push`, `RQ_MAX` 32) for the broker (`rq_drain`, woken by
+  the `bwake` pipe; also from `timers()`).  `REQ_TEXT` (`request.text`) from `proto_esphome.c` (STT end after
+  `core_transcript`, TTS start) and `proto_wyoming.c` (the transcript).  A listener's (and a `call` plugin's:
+  `plugin.c` `PRIVATE_CAPS`) stderr lines are `LOG_PRIVATE_MARK`.  The second press: `plugin_store.c` `ps_second` (request.audio + any net.*): wherever the
+  button is asked for, `ps_stage_install` writes only with `PS_PRESSED2` or `PS_VOUCHED_PRESSED`, else
+  `PS_NEEDS_SECOND`; `web.c` slot state `PL_SECOND` (`pl.first`), armed again only by the screen's
+  `/api/plugins/install` (`pl_press.press`); page `plgSecond`.  The partner: `ps_engine_set` (from
+  `plugin_wake_engine`), `ps_partner` (install, and `start`: the listener is not started), `ps_engine_refused`
+  (`core_wake_engine`); "community" = not official, or withdrawn (`vouched`).  The card's `requests`, `second`, the page's `hears`.
+  `make unit-plugin_broker`'s request block, `unit-plugin_store` (second press, wider), `unit-hmplugin`,
+  `tests/fake_plugins_request.py`, `tests/fake_plugins_sync.py` (the voucher's second press).
+  `button` and rows (docs/plugins.md 3.3 "As built (2026-11-22)", on `button`): `button` (parameterless): `BUTTON { key, how }` (message 120)
+  from `main.c` `button_event` right after Home Assistant's "Button" is told (`plugin.c` `plugin_button`, no lock
+  held, P_RUN plugins with the capability, `BUTTON_PER_SEC` 5 by `bucket_take`, the rest counted apart, `button_n`, never `refusal` nor `dropped`): never call it
+  from elsewhere, the exclusions (a press that served a wait, a hold that served a note) hold by being that one call;
+  not with `wake` (`combination`'s list).  An entity of `ha.entities` marked `"page": true` (true/false; not on a
+  button or an event; `entities_parse`, ha.entities 1's; the index's `manifest_check` the same) is a read-only row on the plugin's card: `plugin_json`
+  `rows` (name, kind, label, unit, decimals, value) only while it runs and `ha_entity_out` (its key kept: no row for
+  a "nokey" entity), the value not again in `entities`; `web/plugins.js` `plgRows`, `hmrows.text`, `hmrows.listed`
+  (pure, `tests/unit/web_rows_test.py`); `page` alone is not
+  wider (`wider` `X_ENTS`/`X_ENT`, `x_skip`).  `tests/fake_plugins_button.py`, `tests/plugins/testbutton.c`.
+  `PS_CAP_LINE`: a capability's line
+  at its longest, every buffer of one sized by it.  The manifest is read as written
+  (`plugin_store.c` `form`, `whole`, `tstr`, `jlist`, on json.c's tokens; json.c stays lenient for mass.c): one
+  object from the first byte, no NUL, strict numbers, no escaped control characters or lone surrogates, no key twice
+  or escaped, whole numbers within 32 bits, lists where lists are meant, a default of its row's kind and range,
+  parameterless capabilities `true`; a new field gets a reader of its kind, never `json_int`/`json_bool`.
+  `hassmic-plugins`' `tools/index.py` `manifest_check` mirrors these rules and must never take what the Echo
+  refuses (its `make check` holds both to each other: change one, change the other).  3.3's combinations
+  (`combination`, whose signature that cross-check uses) and `requires` are asked at install and again by
+  `ps_scan` (`struct ps_plugin` `refused`): `plugin.c` `start` starts none that has a reason, the card shows it.
+  While an install waits for the button the ring shows stock's `wait` (ring slot `plugin`, the last; `web.h`
+  `attention(2)`, `main.c` `attention` keeps what the page and a phone's setup each asked for and shows the highest), not the login's.  Home Assistant: the event
+  entity "Plugin" (`KEY_PLUGIN`, `core_plugin_events`: installed, updated, removed, synced; types are a promise),
+  listed while `plugins` is on, which is a feature for it; `core_plugin_event` (no lock held: it takes `core_lock`)
+  from `web.c` after an install or a removal, `PLUGIN_SYNCED` for the sync to fire.
+  Watchdog (2.6; each ends the plugin, counted as a crash): three pings unanswered, counted on the broker's own
+  clock (`btime`: a round of its loop counts `STALL_MS` at most, so a broker that waited on `core_lock` kills
+  nobody); the control socket's queue taking nothing for 5 s (`full_since`, probed with a PING of id 0); an
+  ordinary plugin over a core's worth of CPU in a minute (`cpu_watch`, `/proc/<pid>/stat` read without `bl`; never
+  the wake engine's; `HASSMIC_PLUGIN_CPU=<percent>:<ms>` for tests).  hassmic's own crashes (`fall_*`): once a
+  plugin was started, a fatal signal's handler writes `state/plugins/.fall` ("fall <id>" when the broker's thread
+  was in that plugin's message, else "fall -"; one `write`, the only state file not through statefile.c) and hands
+  the signal on; the next start counts it in `.falls` (forgotten after 24 h up, not at 3), holds the named plugin
+  back for the run, at 3 all but the wake engine's until `plugin_resume` (`POST /api/plugins/resume`, the page's
+  "Switch plugins on again", or the feature switched on).  Dot names: "fall" would pass for a plugin's id.
+  A plugin as the wake word engine (`wake.c` `wake_plugin`, a model named `plugin:<id>/<word>`; setting
+  `wake_engine` = `plugin:<id>`, its choices made at run time, `core_wake_engines`): WAKE_OPEN is only asked, the
+  answer comes on the broker's thread; the stream is one SOCK_SEQPACKET pair (u64 position + the block, at most
+  `PM_WAKE_SAMPLES_MAX` 4096 samples a packet (`wp_feed` cuts a longer one), never
+  waited for, not while muted); WAKE_HEARD is held to the stream's clock (end at most 300 ms old, 0.3 to 1.5 s, one
+  a second, 20 in 10 min = broken).  `main.c`: `wake_engine` is what the owner chose, `wake_listed` whose words
+  are listed: the plugin missing (not installed, nothing may run) -> Amazon's words and wake word; installed and
+  down -> its words stay listed, none is loaded, never Amazon's (the maintainer's rule); `core_wake_problem` 0/1/2
+  for the page's warning on every page and the problem sensor "Wake word engine"; `core_wake_plugin_changed`
+  (plugin.c, no lock held) rescans (`plugin_installed` before the start too); `settings_set` reads the engine's
+  choices anew, the store scanned first, before it refuses a `plugin:<id>` (`core_wake_engines_fresh`; the test's
+  `HASSMIC_PLUGIN_INSTALLED_DELAY=<ms>:<file>`).  The wake plugin starts in `main()` before the engine opens; the others once the
+  self test passed (every start where the push port runs it, an Echo's: the others wait for it, also
+  where it passes late; no audio within its 30 s: not in that run) or, without the push port (`-o 0`), 10 s after
+  start.  No plugin lives in this tree, official ones neither
+  (docs/plugins.md 5.2): microWakeWord is the repository `hassmic-plugin-microwakeword` (beside this one:
+  `../hassmic-plugin-microwakeword`; the SDK and the engine's sources copied in by its `tools/sync.sh`, `make drift`
+  there says when they differ; `make test HASSMIC=<this tree>` runs it in this tree's PC build; its own author key),
+  where plugin authors start is the repository `hassmic-plugin-template` (`../hassmic-plugin-template`: the C
+  example on `sdk/`, the Rust one on a client written from `sdk/PROTOCOL.md`, held to `sdk/vectors/`; `make sync`
+  copies `sdk/` in, `make drift` says where it differs, `make test`/`rust-unit`/`arm-smoke`; sync it as mww's),
+  the list of plugins is `hassmic-plugins`, the one place for plugins (`tools/index.py`: check, fetch, build (adds
+  each package's listing: `--key`; `--arch x86_64` for this tree's tests), sign, verify; its own key; a copy of
+  `sdk/plugcheck.py`, `scripts/otatool.py`; `make check` compiles this tree's `plugin_store.c` with
+  `plugin_index.c` and `hash.c`).  Official = the index key's listing (`listing.sig`: hex signature, then
+  "hassmic plugin listing 2\nid ..\nversion ..\ntier official|community\nmanifest <digest>\nserial <index's>\n";
+  form 1 was the release key's, taken by no build), added by the index's build to the package the plugin's own
+  repository released, official and community alike (an entry's `package` is that release asset only; a community
+  entry also names its `signature`, `license_sha256` and capabilities), once its GitHub artifact attestation holds
+  (docs/plugins.md 5.3 "As built"; the index's `tools/attest.py`: `gh attestation verify` and its JSON read again:
+  the entry's `workflow` (each version names it) of its `source` at its `commit`, as both the signing workflow and
+  the run's, started by the push of the tag its release asset is under, built that SHA-256 on a GitHub-hosted
+  runner; gh's verdicts (`Refused`: left out) apart from its failures (`Unavailable`: a version the site lists fails
+  the build); the one bundle that held published beside the package; the index builds nothing, its harness a pull
+  request's smoke test; `broad` per community version in `index.json`, read by `plugin_index.c` into
+  `pi_version.broad`, at most `PI_BROAD_MAX`, shown by browse's `hmbrowse.broad`; `workflow`, `release`,
+  `release_sha256`, `attestation`, `attestation_sha256` read by no Echo; `tests/plugsite.py` writes them too).  The release key has no part in plugins.
+  `keys/plugins.pub` (a copy of the index's `keys/index.pub`) and `keys/plugins.conf` (`PLUGIN_INDEX`, `PLUGINS_PUB`,
+  `PLUGINS_PUB2` with `PLUGINS_PUB2_WITH` (a second index key and the hex of the first it belongs with, empty:
+  docs/plugins.md 5.2 "The steps, as built"; built in only where `PLUGINS_PUB` is that key by content (64 hex
+  digits, any case), so never beside a fork's own first key; where `PLUGINS_PUB` is keys/plugins.conf's own
+  (`PLUGINS_PUB_CONF`) another key stops the build (a typo); `fork-release.sh` keeps the lines and deletes the
+  repository variables fork.conf no longer names, `plugins-least.sh` the same rule),
+  `PLUGINS_LEAST_INDEX`, `PLUGINS_LEAST_REVOKED`: the least serials this build takes, set by hand before a release
+  with `scripts/plugins-least.sh`; a fork's in `secrets/fork.conf`) are built in (`-DPLUGIN_INDEX`, `-DPLUGINS_PUB`
+  hex, `-DPLUGINS_PUB2` hex or empty, `-DPLUGINS_LEAST_*`, `-DBUILD_EPOCH` the commit's time; `plugin_index.c`
+  `pi_keys` (the first and, where there is one, the second: `pi_signed` takes either, for every list and listing,
+  `pi_signer` says which; a kept revocation list neither key signs is no list and no word, `pi_revoked_unread`),
+  `pi_base`, `pi_least_*`; `HASSMIC_PLUGINS_PUB` a file (in place of both built-in keys), `HASSMIC_PLUGINS_PUB2` a
+  file (beside the first), `HASSMIC_PLUGIN_INDEX`, `HASSMIC_PLUGINS_LEAST=<index>:<revoked>`,
+  `HASSMIC_PLUGINS_BUILT` for tests; `make unit-plugin_index` builds its test a second time with a key built in).
+  A new index key's steps (5.2): the index's tool reads the published site with `keys/index-previous.pub` beside
+  `keys/index.pub` for the switch's publish, and publishes an unchanged revocation list under the published serial +
+  1 (`load()`: later builds keep the published serial for the same list; an Echo of both keys also keeps a list of
+  the same serial by the second key, never back to the first, `pi_revoked_take` `kept_by`); after every look the Echo takes the index's
+  listing of each version installed that the index lists by the other key, a higher tier or under the least
+  (`plugin_fetch.c` `relist_due`, `plugin_store.c` `ps_relist_wanted`/`ps_relist`: the same manifest, tier never
+  lower, no button, no install; -2 a failure of the moment, `R_FAILED`, asked again; `pf_json` `relist`, `POST
+  /api/plugins/index` "relist", the browse row); the daily look (`daily_fetch`) reads the index too and relists
+  wherever `ps_relist_reason` (1: one by the first of two keys, one under the least; 2: a listing that does not
+  hold, `listing_unread`) or a failed one says so, and `relist_tick` (the daily thread, every minute) where it says 2:
+  the index a minute after the start, at once when the network is back (`net_online`), hourly while it stands
+  (`RELIST_*`, `HASSMIC_PLUGIN_RELIST=<first>:<every>[:<check>:<gap>]`); versions the last look found not listed
+  (`unlisted[]`) are no reason, failures for versions gone are forgotten (`relist_upkeep`); the Echo's own looks are
+  `PF_DAILY` (one that fails leaves the page's list); `pf_shutdown` cancels them at the end.  A failed self test only
+  keeps a build from becoming the factory copy: nothing goes back, the build runs on.
+  `sdk/plugcheck.py`: `pack --listing` (tests), `list` (what the index's build adds), `show --index-pub`.  Change
+  `sdk/`, `scripts/otatool.py` or the
+  engine: sync the sibling repositories (mww's `tools/sync.sh`, the template's `make sync`; `make drift` in each).
+  The plugin index (docs/plugins.md 5.3 to 5.6 "As built", 13): `plugin_index.c` (the key; `pi_signed` over a
+  text that opens with its purpose; `pi_index_parse`/`pi_revoked_parse` on json.c's tokens, every field of its
+  kind and bound, a list that does not read refused whole, unused fields left alone; the bounds in one place,
+  `PI_*` in plugin_index.h, which the index's `tools/index.py` `BOUNDS` mirrors and its tests hold to: `PI_INDEX_MAX`
+  1 MB, `PI_PLUGINS_MAX` 4096 and `PI_VERSIONS` 16 (the highest; what is left out counted as `dropped` and shown),
+  `PI_REVOCATIONS` 2048 and `PI_REVOKED_MAX` 512 kB (past either the revocation list is refused whole, said), the
+  texts' bytes; the parsed index compact: its texts in one pool, its versions in one array, `pi_index_free`; both
+  serials are times: `pi_serial_ok` (clock set, `pi_clock(clock_synced)`: no more than `PI_AHEAD_S` a day ahead),
+  `pi_floor` (the floor line kept beside a list: never past now, or without a set clock the build's time
+  `BUILD_EPOCH`, + a day; kept as made; it holds only where `pi_held` cannot believe the kept serial: the clock set
+  and the serial more than a day ahead), `pi_least_index`/`_revoked` (a kept list under the least still withdraws:
+  `pi_revoked_current` 0); the revocation list kept in one file,
+  `state/plugins/.revoked` ("floor <n>", the signature's hex line, the list: statefile.c), checked again at the
+  first question after every start, `pi_revoked_take` (newer, the same, older: kept, said), `pi_revoked_age`,
+  `pi_revoked_file` (for the members), `pi_withdrawn` (every tier); `make unit-plugin_index`,
+  which also measures a look's peak at the bounds).  `plugin_fetch.c`: `pf_look` GETs `revoked.json`, `.sig` (taken
+  first, whatever becomes of the index; not taken: the look fails; older than kept: kept, the look goes on),
+  `index.json`, `.sig` through `update_fetch`
+  (update.c's one GET: libcurl, `net_socket`, all its time as `secs`; `stop` ends it from the progress, data and
+  socket callbacks; `User-Agent: hassmic` and nothing more; redirects to HTTPS only, as every fetch of update.c's),
+  the signature first, a serial under the build's least, from the future or under `state/plugins/.serial`'s floor
+  refused, and an index only beside a revocation list at least its `revoked_serial` (a newer list:
+  `plugin_withdrawn_changed`, which stops what it names and starts what it no longer names, and the members told);
+  `pf_best` per plugin the highest version whose `requires` this build meets (`unmet`; a newer one that needs more
+  named, "needs a newer hassmic"), not
+  withdrawn, not under `ps_official_least`; `pf_download` from `<base>packages/<id>-<version>.hmp` (never the list's
+  path), at most its size, refused unless size and SHA-256 are the list's; the list kept with its time, a failed
+  look too (`pf_json`, `GET /api/plugins/index`: per plugin `here` and `top`, `site`, `revoked_age`); the pace is the
+  Echo's, `pf_look`'s: `POST /api/plugins/index` "look" (a page by itself: "Browse plugins" opened, or the Plugins
+  page while `plugins` is on: `PF_AUTO`, an hour whatever came of the last look) or "again" (its button; fetches
+  too: `PF_ASKED`, 30 s); a cancelled look leaves the list as it was (`PF_CANCELLED`).  By itself (`pf_start`'s
+  thread, 5.6; only while `plugins` is on and one is installed, `plugin_feature_on`): `revoked.json` and its
+  signature once a day at a random time, and the members' list: arb `T_MSG` to all, kind 0x43 `M_REVOKED` (19 bytes:
+  serial, the settings port, a ticket; hourly and after a newer list; readable by the LAN, said; main.c `arb_message`
+  -> `pf_message`, which takes a word only from a private, link-local or loopback source), a newer one fetched from that member's `GET /api/plugins/revoked` (web.c -> `pf_revoked_serve`:
+  members only, `X-HM-Ticket` one of its last two tickets (`ticket_new`, two hours) + `X-HM-Ctr` nonce, refused
+  while among the ticket's last 64 (`TICKET_RING`, a ring: never a cap, which a member spent) + `X-HM-Mac` by `arb_derive("hassmic plugin revoked 2")`, anyone else and a request again the 404 of no
+  such path; `update_fetch_lan`: plain HTTP, a plain socket (the egress lock: local only), no redirect, 5 s), one fetch per place in 10 min whatever serial
+  (`struct sender`, 16 places keyed by arb id, source address and named port: ids are a member's own word; the one
+  that began to wait first asked first), fetches from all members 4 at once then one per 20 s (`MEMBERS_*`,
+  `budget_at`) and their log lines 5 then one per 10 min, the rest counted (`mlog`): bounds against mistakes and
+  non-members; a member with the key can delay another's list at will (the maintainer's decision: not held against
+  it; the site's daily look and the week's warning are the guarantee, docs/SECURITY.md);
+  `HASSMIC_PLUGIN_DAILY=<first>:<period>:<tell>`, `HASSMIC_PLUGIN_MEMBER=<ms>[:<burst>:<every ms>]` for tests).
+  `pi_revoked_take(..., PI_SITE|PI_MEMBER, ...)`: `PI_TAKEN`/`PI_SAME`/`PI_OLDER`/`PI_REFUSED`; word (`.revoked-at`
+  "word <wall> <age>", at most hourly, `pi_revoked_upkeep` from the daily thread; the older "<wall>" alone is no word
+  without a clock or ahead of it) is the site's answer (now) or a member's newer list (as of its serial, `word(as_of)`), never a
+  member's same one; the floor line never falls (`pi_revoked_take` keeps the line before); the floor `pi_held` (the kept serial wherever the clock vouches for it, the
+  revocation list's also without a clock; the line raised and written then).  A site's older revocation list:
+  `PI_OLDER`, the look goes on (`note`).  A package not the kept list's: `pf_download` looks once more (`PF_NOW`).
+  `pf_revoked_stale`: plugins on, one switched on, no word on the list in a week (or none, no word known, a kept
+  list under the build's least, which still withdraws): `/api/state` warnings and `/api/plugins` `revoked`.  Revocations apply
+  to every tier (`plugin_store.c`: `ps_stage_check` refuses, `ps_scan` sets `withdrawn` and `refused`, "the plugin
+  index withdrew it: ..."; `plugin.c` `plugin_withdrawn_now`; a withdrawn wake engine is down, main.c's words say
+  "choose another engine, or run it anyway").  "Run it anyway": `POST /api/plugins/<id>/anyway` "run"|"cancel"
+  (web.c W_ANYWAY, `anyway_ask`; the press writes `state/plugins/<id>/anyway` with the list's serial, `ps_anyway`;
+  `ps_scan` honours it while that is the kept list's serial).  A lower tier than the version installed is wider
+  (`ps_stage_check` `installed_tier`: the button, every path), and a listing under the build's least index serial
+  counts as none at install (a sideload).  The page: `web/plugins.js` Plugins page (switch, the
+  cards installed, "Update" where `pf_json`'s `here` is newer, "Browse plugins", "Install from file…") and the sub
+  page `#/plugins/browse` (`buildBrowse`, `renderBrowse`; pure `hmbrowse`: `find`, `offer`, `whyNot`,
+  `tests/unit/web_browse_test.py`); app.js `PAGES` entry `plugins/browse` with `sub` (no nav entry, the parent
+  marked), `route()` takes `#/<page>/<sub>` before a setting's id.  `web.c` "the install slot": one install at a time whoever brings the package, `pl` with an
+  owner (`PO_BROWSER` + pub, `PO_HASSMIC`) and a generation new with every claim and release; states
+  `PL_UPLOADING/FETCHING/CHECKING/CHECKED/WAITS/INSTALLING/INSTALLED/FAILED`; every change under `lk` and only from
+  the generation and state it names (`pl_claim`, the one place a slot changes hands, by the table `pl_rules`: an
+  upload after 30 s without a piece, a checked package after 2 min, CHECKING/WAITS/INSTALLING never, hassmic's own
+  fetch gives way to a browser or a push at once; `pl_move`, `pl_close`); the staging file checked and dropped only
+  by the holder in a state nobody takes (`/install`'s look too: CHECKED -> CHECKING -> WAITS, INSTALLING or back),
+  written with the claim's generation, which the store holds each write to (`ps_stage_begin`/`_chunk`'s `gen`,
+  `stage_gen`); the press armed for browser, generation and the listed digest (`pl_press`, `plugin_ask`, through
+  the page's one wait for the button: "Settings page") and installing only that (`plugin_accepted`,
+  `ps_stage_install`'s expect), else nothing and the browser told (`pl_note`); whether a press is needed is the
+  store's to decide as it writes (`ps_stage_install`'s `press`: PS_NO_PRESS, PS_PRESSED, PS_VOUCHED; the check run
+  again under `ps_lock`, which `ps_remove` takes; `PS_NEEDS_BUTTON`: nothing written, the slot CHECKED again, a
+  push and hassmic's own fetch install nothing): never hand a check's earlier "no button" down as the decision; a
+  new path into the slot goes through `pl_claim` and never writes `pl.state` from what it read under an earlier
+  hold of `lk`.  "packages the Echo brings itself": `POST /api/plugins/fetch` claims the slot,
+  `bring_thread` (one fetch, `FETCH_MS` 5 min as a whole; FETCHING while it downloads, CHECKING for the staging
+  file) downloads the highest
+  version `pf_best` names, stages and checks it as an upload (`bring_check`), refuses what has no listing, is not the
+  manifest, id, version and tier the index named (`bring_ok`; one needing a newer hassmic: the check's refusal), and leaves the page the check's answer
+  (`check_json`, `GET /api/plugins/fetch`) for the same dialog and `/api/plugins/install`.  Without the button,
+  hassmic's own (only where `ps_stage_check` asks for none: the pinned author, what was accepted or less):
+  `web_plugin_push` for ota.c's `HMOTA-PLUG1` (the update key's challenge over the package's digest,
+  `SEND`, the package; `scripts/ota-push.sh --plugin`, `otatool.py plugin`, the C otatool too).  The engine setting
+  at start is read as written first (`settings_peek_raw`): `plugin:<id>` is a value also when that plugin needs
+  a newer hassmic.  `HASSMIC_PLUGIN_FRESH`, `HASSMIC_PLUGIN_LEAST`, `HASSMIC_PLUGIN_SLOT=<checked ms>:<upload
+  ms>:<fetch ms>` (the table's times), `HASSMIC_PLUGIN_ASK_DELAY=<ms>` (slept between `/install`'s check and its
+  ask), `HASSMIC_PLUGIN_OWN_DELAY=<ms>` (between a push's check and its install) for tests.
+  The push port and libcurl's loader: "Push updates", "Online updates".  Crash marks of the second kind (`core <id>`,
+  `state/plugins/.cores`, `core_note`, `HASSMIC_PLUGIN_CORE=<count>:<ms>`): hassmic fell in the core's code on a
+  plugin's report; the broker's thread by `core_begin`, any other by `plugin_core_enter`/`_leave`, which bracket
+  only what is the plugin's own data (main.c `plugin_words_scan`; at start its word opened and its answer waited
+  for), never Amazon's models or the core's own lists.  The wake engine's plugin: at `CORE_MARKS` its start waits
+  `RETRY_MS`, each time anew, never refused; any other: the third mark waits 30 s, the fourth `RETRY_MS`, the
+  fifth within the window switches it off as five crashes do (`start()`, `p->off`).
+  Sync between Echos (docs/plugins.md 5.4 "As built", 13; web.c "sync"): the page (`web/plugins.js` "Copy
+  plugins": `drawCopy`, rows `pkg <id>` / `set <id>` / `item <id> <list>/<item>` on `matrixTable`, order by
+  `hmmatrix.steps`) reads the source's package member by member (`GET /api/plugins/<id>/pkg/<member>/<off>/<len>`,
+  `ps_pkg_read`), packs it (tar.js) and uploads it to the target through the install slot as its own claim.  Where
+  the check asks for the button: the target's nonce (`POST /api/plugins/accept/nonce`, signed, `acc_nonces` 8,
+  once, `ACC_NONCE_MS`), the source's voucher (`accept/issue`: only for a plugin installed, runnable and accepted
+  there; `ps_voucher`: BLAKE2b-128 keyed with `arb_web_key` over "hassmic plugin acceptance 1", target's web key,
+  nonce, browser key, node NUL, id NUL, manifest digest, author key, accepted digest; layout held by
+  `unit-plugin_store`'s vector), then `POST /api/plugins/install` "synced <node> <nonce> <voucher>".
+  `sync_judge` (all must hold, each the target's own finding): nonce this browser's and fresh; neither end in
+  Kiosk mode (`arb_mode`, `arb_member_mode`); the MAC over the target's own check of the staged package; the node
+  a member heard; tier official (a sideload never); its `requires` met here; `ps_changes.unsure` 0.  A voucher proves a
+  member's key, not a press and not which Echo (any member signs any node): never loosen 5 or 6 on its strength.
+  Also refused: a version older than the newest the target saw listed (`pf_seen`, `state/plugins/.listed`) or than
+  the highest ever installed there (`ps_installed_max`, `state/plugins/.installed`: raised by `ps_stage_install`
+  once the package is in place, by `ps_scan` from each folder and by `ps_remove` before it removes; only rising;
+  unknown = closed: the file unreadable, a raise whose write failed (kept in memory, `floors_owed`, until any later
+  raise or scan writes the file), or more than `FLOOR_MAX`
+  64 ids, which the file keeps as a line `+`, for good; `HASSMIC_PLUGIN_FAIL_FLOOR`, `ps_floors_forget` for
+  tests; Remove takes no button), `plugins`
+  off, no note written.  `ps_stage_install` with PS_VOUCHED looks again at the store's own rules (official, the
+  check, `unsure`, that floor); the listed version and `plugins` on are held as `sync_judge` read them.  Yes: `syn_begin` (the note on the flash first, "pending"; 16, never replaced, at the bound
+  "button"; `HASSMIC_PLUGIN_NOTES`), `pl_move` CHECKING -> INSTALLING for that claim and digest, `accepted` how
+  "synced, voucher named <node>" (`PS_HOW_SYNCED`), `syn_end` (done, or removed; `syn_load` settles a "pending" by
+  the store; `syn_failed`: an install that failed after its files were written keeps it), in `/api/plugins`
+  `synced` and `/api/state` `plugins_synced`: app.js `renderAttention` on every page of this Echo, the other
+  members' while polled.  Dismiss (`POST /api/plugins/synced`, `syn_ask`): at once only for a browser let in with
+  this Echo's button (`struct client` `button`, the positive fact in `state/web_button`, written by `web_approve`:
+  whatever is not listed counts as vouched) that is not the note's own and only for a note whose browser is known;
+  else the action button held 1 s (`W_NOTE`, `web_hold`).  A dismissal names "done" notes by number (`struct
+  syn_ids`, numbers at random, `ids_add` bounds it; 16 standing at most also from the file), never a pending one,
+  and the armed browser asking for other numbers is told "busy"; the wait is bounded per Echo whatever the notes
+  (`note_arms`: 3 armed per `NOTE_AGAIN_MS`, withdrawn ones counted, in `state/web_wait`, "later";
+  `HASSMIC_PLUGIN_NOTE_AGAIN`; a vouched browser can spend them: docs/SECURITY.md).  A note shows the bringer's
+  label and its key's first 8 bytes (`key`, as the clients list).  A pending or failed note is settled by the
+  folder's package (`syn_there`: its manifest digest, kept on the note's line; an unreadable manifest keeps the
+  note); `.synced` there and unreadable: `syn_blind`, no sync without the button.  Event `synced` in place of installed/updated,
+  held in the core until a link of Home Assistant's subscribes (`core_plugin_held_flush`; the note's `told` mark
+  over a restart, a dismissed note kept as "gone" until told; `PLUGIN_HELD` = `SYN_KEPT` 32: every kept note's
+  event has a place, and at 32 kept a sync is answered "button").  `HASSMIC_PLUGIN_SYNC_DELAY=<ms>:<file>`,
+  `HASSMIC_PLUGIN_FAIL_ACCEPTED=<file>` for tests.  No: `{"install":"button",
+  "why"}`, nothing armed, the slot stays CHECKED for `plgDialog` and a plain install.  Settings by
+  `/api/plugins/<id>/set` (a secret row refused), files by `GET /api/plugins/sync`'s digests (`ps_item_digest`,
+  by id, without `ps_lock` held by the caller; the answer grown, never cut) through the item upload.  The place for 3.3's second press is marked in `sync_judge`.
+  The engine in hassmic stays, deprecated, until the cut release (docs/plugins.md 5.9; the owner's move: "microWakeWord").
+  A hassmic update and the plugins (5.9 as built, 2026-11-23): nothing of the plugins holds an update back or is
+  fetched for it (a scope only adds, so every later hassmic speaks what an installed plugin requires); an online
+  update and a push go to root as they come.  The self test excuses the wake plugin only where the owner chose
+  that it does not run, or this build cannot run it, `plugin_selftest_ok`: plugins off, `PLUGINS=0` (`conf_off`),
+  not enabled, withdrawn, `m.newer` (a fall back to an older build: its card says so, Amazon's word stands in),
+  community off (not where its listing does not hold here: `listing_unread`, 5.2's build of the new key alone,
+  and the plugin ran as listed: the `ready` mark's `listed 1`, `ready_note`, an official listing only (a
+  community one ran by the owner's switch); a mark without the line counts as 1); the launcher, sandbox, unread,
+  acceptance hold the update, the self test asking again every 10 s (late: a mark gone since is no pass).  Gone
+  with versioned scopes (built 2026-11-21 for 0.x, never released): `pkg/<api>/`, `PS_BESIDE`, `/drop`,
+  `web_plugins_prepare`/`keep_beside`/`pf_for_api`, the bundle's `plugin-api`, held updates and "Install it all
+  the same", `ota_forget`, `ps_obsolete_sweep`/`.api-since`/`obsolete_thread`, `web_plugin_auto`.  An update that
+  drops `wake` asks for the button and, once it runs here accepted, wipes `files/` and `storage/` (`seal_upkeep`,
+  mark `state/plugins/<id>/sealed`, kept until both are gone: `rm_rf` says what is left; never while a process of
+  another package of it runs, `ps_busy` = plugin.c `plugin_old_running`, and done before the new one starts,
+  `program_open` -> `ps_seal_settle`; microWakeWord's models are its own copies, `state/mww` is never wiped).  PC:
+  `build/plugrun-host` (x86_64 filter, no user change), `HASSMIC_PLUGIN_SANDBOX`, `HASSMIC_PLUGIN_HEARD`,
+  `HASSMIC_PLUGIN_RETRY`, `HASSMIC_PLUGIN_CPU`, `HASSMIC_PLUGIN_LINES`; `make unit-hmplugin` (the SDK's C client
+  against a stand-in broker), `make unit-plugin_broker` (plugin.c itself, a clock the test moves), `make unit-plugrun` (also both seccomp programs against the table, `tests/unit/plugfilter_test.py`; a musl program's `raise()`/`abort()` where zig is, `tests/unit/plugrun_musl.c`),
+  `unit-plugmsg`, `unit-plugin_store`, `unit-plugin_broker` (plugin.c itself with a stand-in plugin and a clock the
+  test moves, `tests/unit/plugin_harness.h`: the watchdog and the marks), `make unit-plugfuzz` (libFuzzer over the
+  broker's `message()`, 60 s, clang; not in `make unit`).  On Echos (2026-11-19, PLAN.md "Plugins"): `scripts/plugin-probe.sh`
+  (`src/tools/plugprobe.c` under `plugrun -T`, built with zig) passes on biscuit, donut, checkers; hassmic under the
+  launcher and the ARM plugin as the engine on biscuit.  A new model: the probe first.
 - **Artifacts** (`artifacts.c`): Amazon's models (`wake:<name>` = `models/<name>/`, `sound` = `aed/`, `whisper`): files
   plus two levels of folders (`whisper_components/`, `BDPGeneratedFiles/`, `nttfusionconfig/ntt_conv/`; a file's name is then its path), listed
   with a digest (BLAKE2b-256 over name, size, content per file), read and written in pieces (`ART_CHUNK_MAX`) over
@@ -552,7 +1329,47 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   a GATT server on one link, `conns[SRV]` beside the proxy's slots; `ble_serve`/`ble_advertise`/`ble_server_notify`):
   advertises when not set up and offline 20 s (authorized), or set up and offline 10 min (the action button authorizes,
   `improv_authorize` in `on_action`); Wi-Fi through `wifi.c` -> root's `wifi.sh` like the page's switch; no host name
-  or device name commands (the Echo names itself).  `HASSMIC_IMPROV_TIMES`, `HASSMIC_FAKE_ONLINE`,
+  or device name commands (the Echo names itself).  Who may switch or scan is `may()`, asked per command, a fact
+  with an origin: mode `M_OOBE` and `core_oobe()`, or `M_LOST` and the button pressed less than `AUTH_SECS` ago
+  (`auth_until`, set only by `improv_authorize`; for the Echo, whichever phone is connected in that time; spent
+  by a switch that worked; gone with `M_LOST`).  Never derived from the state shown (`show()` derives that from
+  the facts) or from the mode being `M_OFF`: there nothing is authorized, a link that is up is dropped
+  (`on_connection`, the worker), and the advertising's data is cleared before a drop for `M_OFF` (ble.c's
+  `adv_upkeep` switches advertising on again when a link ends while data is set, `srv_gone` pokes the loop for it:
+  keep that order).  Anything else: `E_NOT_AUTHORIZED`, nothing asked of root.  The press is Improv's only while
+  a phone is connected, served and shown "authorization required" (`waits`, exactly while the ring shows it): never
+  with no phone there.  Improv has no link identity: the ring does not tell whose phone waits, and the press
+  lets whatever is connected within `AUTH_SECS` switch once; and a device in range can hold the one link, and the
+  ring's wait with it, for as long as the Echo is offline (improv.c's header, docs/SECURITY.md: not closed, not
+  bounded; do not word it as either.  The owner's rule: press only when your own app asked for the button).  How long a link is kept: set up
+  and not authorized, until nothing came from it for `WAIT_SECS` 120 (`heard_at`, ble.c's `heard` hook: any ATT
+  PDU; `wait_since`; for a forgotten phone only, past py-improv-ble-client's own 90 s idle disconnect, which is
+  what the owner sees: asked for the button he has 90 s, then the ring's wait goes off until the client connects
+  anew, and a press in that gap is the assistant's; no address
+  is held against anyone: the shun is gone, it broke Home Assistant's flow, which connects before its form);
+  "provisioned"
+  `PROVISIONED_SECS` whatever is connected; on a network `ONLINE_SECS` 60 in all, however often the network goes
+  and returns (`on_ms`: every look that finds the network counts the time since the look before, a second at most
+  after one that found none; begun anew only by a switch's end and, in `M_LOST`, by what the button paid for: the
+  press, a scan asked while authorized; in `M_OOBE` a scan does not: scans kept a central on an Echo that had its
+  network).  A scan beside a switch that runs after the button's time: `E_UNKNOWN` from `command()`, nothing asked of
+  wifi.c (`join_id` stands until the worker read root's answer).  A carrier while a switch runs, or within `SETTLE_SECS` 5 of one that failed
+  (until a look finds it gone or another switch begins), is not the network's return: `offline_since` stays, the Echo goes on advertising.  A link we end is `ended` (`end_link`): not served, not counted.  Identify once
+  per 10 s, set up and not authorized once per `IDENT_SECS` 60.  `M_LOST` is entered in one way only: set up and
+  `OFFLINE_LOST` without a network, counted from the adoption at the earliest; a mode kept for what runs is never
+  turned into it (keep that: web.c, main.c and SECURITY.md argue from "a phone's wait means ten minutes offline").
+  Adopted while it advertises as `M_OOBE`: a switch under way and its "provisioned" end as they would have (the
+  phone reads the result; `may()` is false, no wait, no press, `improv_holds` 0; device info and identify once per
+  `IDENT_SECS` still served, to whatever is connected), a scan that is out dropped at the adoption whatever else
+  stands, and "provisioned" ends at its time whether or not a scan is out; anything else is `stale()`: the
+  link ended, the mode by the network alone.  `show()` raises `a_waits`/`a_holds` before the hook
+  and lowers them after it, and web.c's `login_ask` (`improv_holds`) and `web_approve` (`improv_waits`) read them
+  BEFORE `login_expire` takes the mark of a wait's end: a 0 read means the mark is there to be taken or no wait
+  had begun (keep both orders).  Locks: `mu` is held for nothing that waits (the controller's and the button's threads take it): what a
+  command asks of wifi.c (a state file, PBKDF2) or the core is decided under it and done after (`command` ->
+  `ask` -> `asked`, `cmdn` kept meanwhile); the worker's wait is on the monotonic clock (root sets the wall clock
+  as the network returns).
+  `HASSMIC_IMPROV_TIMES` (`<oobe> <lost> <auth> <provisioned> [<online> [<wait> [<identify>]]]`), `HASSMIC_FAKE_ONLINE`,
   `HASSMIC_HOLD_TIMES` (the hold stages), wifi.sh's `WIFI_STEP` (its looks) for tests.  Reset (`core_reset`: action
   held 10 s via `buttons.c` hold stages, HA button `factory_reset`, page
   `POST /api/reset` "reset") writes `state/reset`; root's `main.sh` ota_watch stops hassmic, `wifi.sh forget`, empties
@@ -592,9 +1409,30 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   card's control events writes ours back when it sees stock, and leaves other values (the jack's 11) alone.
   `HASSMIC_FAKE_SPEAKER_GAIN=<file>[:<stock>:<steps>:<max>[:<per dB>]]` for tests (`tests/unit/spkgain_test.c`, `fake_web.py`).
 - **Push updates**: `ota.c` receives bundles on the device; `src/tools/otatool.c` verifies/unpacks there (monocypher).
-  The PC side is `scripts/otatool.py` (stdlib only: keygen, pack/sign, verify/install, push, adb; same CLI), so the PC
+  The PC side is `scripts/otatool.py` (stdlib only: keygen, pack/sign, verify/install, push, adb, plugin; same CLI), so the PC
   needs no compiler for it; `tests/otatool_test.sh` holds the two byte for byte to each other, and CI verifies every
-  bundle with both. `scripts/bundle.sh` packs (ota-push.sh and CI).
+  bundle with both. `scripts/bundle.sh` packs (ota-push.sh and CI).  The port (TCP 28929; `HMOTA-PUSH1` signature then
+  bundle, `HMOTA-ADB1` and `HMOTA-PLUG1` by challenge; ota.c's head argues each bound): a thread per connection,
+  `CONNS_MAX` 8; before a signature of its own was checked (`pconn.pre`, ended by `keyed`, for a bundle by
+  `body_done` in one hold with its place) `PRE_ADDR` 2 per source
+  address and `PRE_MAX` 4 in all, a newcomer over that ends the oldest that holds no bundle's place (`pconn.body`:
+  a push is before the key for all of its body; `body` is the place's own word, set and cleared with it under `cl`,
+  `ubody.who`: a takeover clears it, and the signature's read looks at the generation too; told "FAILED busy ..."
+  first, then `shutdown`); a refused connection
+  gets "FAILED busy ..." and stays half open `PARK_MS` 1 s so the line arrives (`park` in the listener, `refuse` in a
+  thread), and both otatools print it (they read the answer also when their upload was cut off).  Times as a whole:
+  the request line 5 s, a challenge's answer 10 s; a body (`body_read`) `BODY_STEP` 64 kB in every 10 s counted anew
+  from each step (a burst banks nothing) and all of it within 10 s + size at 32 kB/s.  A bundle is in memory before
+  its signature can be checked (EdDSA over all of it): `BODIES_MAX` 2 such, one per address (`body_take`, places
+  with a generation), a newcomer taking the slowest one's place unless that took `BODY_FAST` 256 kB or more in its
+  last one to two seconds or is younger than `BODY_YOUNG_MS` 2 s (a grace once per address: none within
+  `BODY_AGAIN_MS` 10 s of that address's bundle that ended unsigned by its own doing, `spent[]`/`spend`: the floor,
+  a close, a bad signature, or its place taken while nothing came from it; not a place taken while it was
+  arriving; a connection the listener ended, `pconn.ended`, takes no place, and the listener ends none that holds one); a bundle that
+  arrived whole keeps its place while its signature is checked (`body_whole`, `ubody.whole`;
+  `HASSMIC_OTA_CHECK_DELAY=<ms>:<file>` for tests; `HASSMIC_OTA_STAGE_DELAY=<ms>:<file>` holds the gap before a
+  handoff is marked); a package only after its challenge.  `tests/fake_ota_port.py` (strangers from 127.0.0.x
+  source addresses).
 - **Prebuilt** (`scripts/lib/build.sh`, `build_binaries`): deploy/install-system/ota-push/setup take the device binaries
   from the release CI published of HEAD (tag `v<commit time>[-beta]` pointing at HEAD, clean tree; else the release
   CI found HEAD's bundles alike to, `_ci_same`: its build run on HEAD passed with "Publish" skipped, the newest
@@ -604,13 +1442,17 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `PREBUILT=0` always builds. `scripts/probe.sh` compares with `devices/<codename>/probe.md5`, not the unpacked firmware.
 - **Online updates** (`update.c`): "Online updates" on the settings page (off default / beta / release, `state/config`) and an
   ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through the firmware's
-  libcurl (dlopen; sockets via `net_socket` so the egress lock lets them out), hands it to root through `ota_handoff`.
+  libcurl (`fwcurl.c` `fwcurl()`: the one loader for update.c, https.c and davs.c, dlopen and the library's first init
+  under its lock; a load that failed is tried again 60 s later at the earliest, one that lacks a function never;
+  a new user calls it, never dlopen; sockets via `net_socket` so the egress lock lets them out; `update_fetch` is
+  update.c's one GET, also plugin_fetch.c's; every fetch follows redirects to HTTPS only, the API's and the
+  bundles' say `hassmic/<version>`, update_fetch's only `hassmic`), hands it to root through `ota_handoff`.
   Root (`main.sh` ota_watch) accepts the owner's `update.pub` or the release key (`release.pub` of the running copy, else
   the system partition). Channel only from an approved browser on the page (no HA entity for it), install only over the keyed connection.  The page switches a channel on
   only once `update_probe` reached GitHub (web.c `updates_gate`, before `core_lock`; else `github_unreachable` in the
   answer and a warning under the row).
 - **Media over HTTPS** (`https.c`, issue #30): `proto_esphome.c` `http_get` hands `https://` to `https_open`, which
-  runs the firmware's libcurl (dlopen, BoringSSL, system CAs) in a thread writing the body into a socketpair: the
+  runs the firmware's libcurl (`fwcurl()`, as update.c; BoringSSL, system CAs) in a thread writing the body into a socketpair: the
   decoders and the cancel's `shutdown()` work as on a plain fetch.  Setting `https_verify` (default on; off takes any
   certificate).  HA with `ssl_certificate` hands out its external URL only (`get_url`: prefer external, no IP), so
   that name must resolve and be reachable from the LAN.  `HASSMIC_CA_FILE` for tests.
@@ -634,7 +1476,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `rd_tick` -> `ring_reload` (shown patterns set again).  What is confirmed installed is `state/ring-installed`
   (`installed()` promotes the applied file when its digest is the set's); a draft never installed goes back (`rd_start`).
   Listening/end turned by each LED at install (`hassmic_s_listen|hold|end_N`), others `hassmic_s_<slot>` just before
-  stock's name.  Slot ids are stored: keep them.  Theme packs (`state/ring/packs/<id>`, `/api/ring/pack*`) are folders
+  stock's name.  Slot ids are stored: keep them (a new slot goes last in both `ring_slots`, ring.c's and ring_band.c's, with its row in web/ring.js `RING_PLACES`).  Theme packs (`state/ring/packs/<id>`, `/api/ring/pack*`) are folders
   of the library: `has` lines (a design in one pack at most) and `use` lines naming only those (version 2,
   `pack_normal`); shared with their designs inside (version 1: the page's `.ringpack` and copies).  The page: ring.js.  Every pattern of the core goes
   through `led()` -> `ring_set`/`ring_unset`, which knows from each file how long it shows; while one does, HA's light
@@ -790,7 +1632,16 @@ TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get 
 must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
 `state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed, and with `kiosk_dlna` on its DLNA renderer (`kiosk_dlna` in `lockdown.sh`: the TCP port of the app's own setting `flutter.ks.dlna.port`, read through `runas` as its user, while its uid listens there per `/proc/net/tcp*`; UDP 1900 to 239.255.255.250 only while its uid alone holds 1900; issue #109); its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
-prints it.
+prints it. Plugins' users (6900–6907, `PLUGIN_UID`/`PLUGIN_SLOTS`) get nothing out at all: one DROP rule a user, first in `hassmic_out`
+after adbd's and before `-o lo`; a plugin's sockets are hassmic's (plain = local only, `net_socket` = anywhere, for the server the owner entered).
+Plugins' own UDP ports (28940–28999, `PLUGIN_PORTS`, plugin_store.h `PS_PORT_FIRST/LAST`; net.udp, net.discover) are
+admitted from the private and link-local ranges only: chain `hassmic_in` (`rules_in`: `KSRC` RETURN, then DROP),
+jumped from INPUT's second rule (`IN_JUMP`, Wi-Fi interface), checked by `wrong()` as the rest; each socket's own
+locked BPF filter holds the same where the chain is missing (the PC).  What comes in from a plugin's port and the
+Echo's own address (a broadcast the kernel hands back to the Echo's own sockets) is dropped by chain `hassmic_self`
+(`rules_self`: `-s <address>/32 -j DROP` for every address of the Echo's own, `own4`: `/proc/net/fib_trie`'s "/32 host
+LOCAL" entries but loopback's (no `ip` on the Dots, no `xt_addrtype` in any model's kernel), read at every look), jumped from INPUT's first rule (`SELF_JUMP`,
+`--sport 28940:28999`), checked by `wrong()` (both jumps the first two of INPUT, in that order).
 
 `tools/speechcorpus/` makes a speech corpus of OmniVoice's designed voices into `testdata/corpus/` (Git LFS, CC BY-NC: its README;
 DEVELOPMENT.md "Speech corpus"): checked by STT, words timed by MFA; look there before making speech for a test.

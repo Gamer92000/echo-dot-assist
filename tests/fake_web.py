@@ -4,7 +4,13 @@ X25519 and BLAKE2b from Python's libraries, not web/crypto.js), plus Home Assist
 Echo.  Login by the action button (SIGUSR2), signed reads and writes, replays and forged signatures, two logins at once,
 export and import, the settings file from before names, the speaker gain, features (entities in Home Assistant only while on), adb with
 a press of its own (a request withdrawn by "off" or a revoke), revoking; a login left waiting runs out by itself (asked again,
-a new one waits), and a restart clears its ring and names a new start."""
+a new one waits), and a restart clears its ring and names a new start.  One wait for the button at a time (one_wait: two
+logins at once contested, nobody else armed in the time after a login was contested, ran out or was approved, a stranger's
+asks against an approved browser's adb wait and the other way round, adb's "off" from another browser, with what the ring
+shows; a press that served nothing holds strangers back anew, and so does a restart within the boot) and the count
+of unsigned asks (ask_rate: the armed key's own not counted, an ask over the count still contests).  Files of the
+page's that are no regular files (a FIFO at state/web_clients), and the list of the button's browsers kept in step
+with the browsers let in (files)."""
 import asyncio, gzip, json, os, re, signal, subprocess, sys, tempfile, threading, time
 from aioesphomeapi import APIClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -48,7 +54,8 @@ async def main():
                HASSMIC_LOG=os.path.join(state, "log"),                              # boot.log, for the page's viewer
                HASSMIC_CLOCK_SYNCED="0",                                            # stamps: seconds since boot (clock.c)
                HASSMIC_FAKE_SPEAKER_GAIN=os.path.join(state, "speaker-gain"),       # an Echo Dot 2's codec control (spkgain.c)
-               HASSMIC_FAKE_ADAPTIVE_COLOUR=os.path.join(state, "adaptive-colour")) # root's confirmed Binder readback
+               HASSMIC_FAKE_ADAPTIVE_COLOUR=os.path.join(state, "adaptive-colour"), # root's confirmed Binder readback
+               HASSMIC_LOGIN_MS="60000:300")        # browsers log in right after another's press here: others kept back 0.3 s, not 30 (one_wait has the rule)
     with open(os.path.join(state, "speaker-gain"), "w") as f: f.write("6\n")          # stock: what the HAL's speaker path sets
     log = os.path.join(state, "log")
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Web", "-L", "-z", "0", "-o", "0",
@@ -319,6 +326,10 @@ async def main():
         b.call("POST", "/api/note", "Wohnzimmer, Regal".encode())
         args = proc.args
         proc.terminate(); proc.wait()
+        # (as after a reboot: within one boot the adb waits withdrawn above keep a browser that is not approved back
+        # for their minute over a restart too, state/web_wait; one_wait's "restart" has that)
+        with open(os.path.join(state, "boot-2"), "w") as f: f.write("another-boot\n")
+        env = dict(env, HASSMIC_BOOT_ID=os.path.join(state, "boot-2"))
         proc = subprocess.Popen(args, env=env, stderr=open(log, "a")); wait_port(PORT, WEB)
         b = Browser(WEB)
         check(hello()["note"] == "Wohnzimmer, Regal" and b.login_with_button(proc), "the note after a restart")
@@ -355,17 +366,13 @@ async def main():
         try: await ha2.disconnect()
         except Exception: pass
 
-        # two at once
-        y, z = Browser(WEB), Browser(WEB)
-        check(y.login() == "waiting" and z.login() == "refused" and y.login() == "refused", "two browsers asking at once: both refused")
-        proc.send_signal(signal.SIGUSR2); await asyncio.sleep(0.5)
-        check(y.call("GET", "/api/state")[0] == 401 and z.call("GET", "/api/state")[0] == 401, "and the button approves neither")
-
+        # (two browsers at once, and what comes after a login ended: one_wait() below, on an Echo with short times)
         # revoke
         w = Browser(WEB)
         check(w.login_with_button(proc), "another browser logged in")
         check(json.loads(b.call("POST", "/api/revoke", w.pub.hex().encode())[2]).get("revoked") is True and w.call("GET", "/api/state")[0] == 401,
               "revoke another browser: refused from then on")
+        await asyncio.sleep(0.4)                        # (the quiet time after w's own press, 0.3 s here: it is a stranger again)
         check(w.login() == "waiting", "...and when it asks to log in again, it waits for the button (it was told \"approved\", and kept out)")
         check(json.loads(b.call("POST", "/api/revoke", b.pub.hex().encode())[2]).get("revoked") is True, "revoke this browser")
         check(b.call("GET", "/api/state")[0] == 401, "revoked: refused")
@@ -373,6 +380,9 @@ async def main():
         except Exception: pass
 
         await login_runs_out()
+        await one_wait()
+        await ask_rate()
+        await files()
     finally:
         proc.terminate(); proc.wait()
     if check.failed:
@@ -406,8 +416,9 @@ async def login_runs_out():
         check(b.login() == "approved", "...and the button approves it")
         check(all(s["name"] != "screen_adaptive_colour" for s in b.state()["settings"]),
               "device without adaptive colour: no toggle")
-        c = Browser(WEB2)
-        check(c.login() == "waiting", "another browser asks")
+        c = Browser(WEB2); a = c.ask()
+        await asyncio.sleep(0.8)                        # (no other browser's login is armed for half a wait after a press: one_wait)
+        check(a.get("why") == "busy" and c.login() == "waiting", "another browser asks: not armed right after that press, armed a moment later")
         await until(lambda: open(log).read().count("login ran out without the button") == 2)
         await asyncio.sleep(3.5)                        # past web.c's REFUSED_MS (3 s) after it ran out, nobody asking meanwhile
         check(c.login() == "waiting", "asked again long after it ran out (the page opened again): a new login waits, not \"refused\" at once")
@@ -416,6 +427,308 @@ async def login_runs_out():
         check(again and first and again != first, f"restarted: /api/hello names another start ({first} -> {again})")
     finally:
         proc.terminate(); proc.wait()
+
+
+async def one_wait():
+    """One wait for the action button at a time, and a press is not turned from the wait it was armed for to another
+    browser (web.c "what waits for the action button"; two reviews, 2026-11-20.  The first: a second key asking ended
+    whatever waited and took its place, and the owner's press approved it.  The second: that held for an approved
+    browser's waits only; after a login had ended, contested, run out or approved, the next key was armed at once and
+    got the press that was on its way: cases a, b, c below, each with the second browser left asking).  Times here: a
+    wait 4 s, and 2 s of quiet after every wait in which no other browser that is not approved is armed; a contested
+    login is held for the first one's 4 s and those 2 s.  The ring: what ledctrl was asked (HASSMIC_FAKE_LED)"""
+    state = tempfile.mkdtemp(); leds = os.path.join(state, "ledctrl.log"); log = os.path.join(state, "log"); adb_req = os.path.join(state, "adb-request")
+    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
+               HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_FAKE_LED=leds,
+               HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"), HASSMIC_LOGIN_MS="4000:2000")
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT2), "-n", "Echo Two", "-L", "-z", "0",
+                             "-o", "0", "-a", "16977", "-W", str(WEB2)], env=env, stderr=open(log, "a"))
+    text = lambda: open(log).read()
+    ring = lambda: [l.split()[-2] + " " + l.split()[-1] for l in open(leds).read().splitlines() if "authenticated_setup_mode" in l or l.endswith(" wait")] if os.path.exists(leds) else []
+    last = lambda: (ring() or ["none"])[-1]
+    armed = lambda: ring().count("-s authenticated_setup_mode")
+    approved = lambda: text().count("login approved")
+    out = lambda b: b.call("GET", "/api/state")[0] == 401
+    ON, OFF = "-s authenticated_setup_mode", "-u authenticated_setup_mode"
+
+    pressed = [0.0]
+
+    async def press():
+        """a press, and whether it went on to the assistant (served no wait)"""
+        n = text().count("button: "); proc.send_signal(signal.SIGUSR2); await until(lambda: text().count("button: ") > n, 1.5)
+        pressed[0] = time.monotonic()
+        return text().count("button: ") > n
+
+    async def quiet(t):
+        """until T, and until the quiet time after the last press that served nothing: such a press holds strangers
+        back for 2 s of its own (whoever pressed may press again)"""
+        await asyncio.sleep(max(0, t - time.monotonic(), pressed[0] + 2.3 - time.monotonic()))
+
+    async def asking(b, secs, every=0.3):
+        """b left asking for SECS: the reasons it was given ("waiting" where it was armed)"""
+        end = time.monotonic() + secs; got = []
+        while time.monotonic() < end: a = b.ask(); got.append(a.get("why") or a["login"]); await asyncio.sleep(every)
+        return got
+    try:
+        wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
+        # ---- a: contested, then one of the two left asking alone
+        y, z = Browser(WEB2), Browser(WEB2)
+        t0 = time.monotonic()
+        check(y.login() == "waiting" and last() == ON, "a login waits: armed, the ring shows it")
+        a = z.ask()
+        check(a["login"] == "refused" and a.get("why") == "contested" and 4 <= a.get("retry_s", 0) <= 6,
+              f"a second browser asks meanwhile: told it is contested, and for how long: the first one's whole time and the quiet time after it ({a})")
+        await until(lambda: last() == OFF)
+        check(last() == OFF, "...the ring goes dark: a press approves nobody now")
+        a = y.ask()
+        check(a["login"] == "refused" and a.get("why") == "contested", "...and the first is told the same, not \"waiting\" (its page says so; its owner may be on his way already)")
+        went = await press()
+        check(went and approved() == 0 and out(y) and out(z), "the press: nobody is approved, and it is the assistant's as any press (not swallowed)")
+        # the first one's page asks no more; the second keeps asking alone, past the ten seconds' worth (0.7 s here) that
+        # used to be the whole hold: it was armed then, with the ring the first one's owner was walking towards
+        got = await asking(z, t0 + 3.6 - time.monotonic())
+        went = await press()                             # the owner arrives: within the minute his page gave him
+        got += await asking(z, t0 + 5.4 - time.monotonic())
+        went2 = await press()                            # ...or a little late
+        check(set(got) == {"contested"} and armed() == 1 and went and went2 and approved() == 0 and out(z),
+              f"a: the second browser left asking alone while the first one's owner walks over: never armed in the first one's time or the quiet time after it, and his presses let nobody in ({len(got)} asks)")
+        a = z.ask(); b2 = z.ask()
+        check(a.get("why") == "contested" and b2.get("why") == "contested" and b2.get("retry_s", 9) <= 2, f"...its own asks make that time no longer ({b2})")
+        # the press at 5.4 s found nothing to serve: the record is held for 2 s from it, not only from the arming
+        # (web_press.py case 1: armed at 6.0 s, the owner's next press let the stranger in)
+        got = await asking(z, t0 + 6.9 - time.monotonic())
+        check(set(got) == {"contested"} and armed() == 1, f"...and the owner's late press holds it back for the quiet time once more: not armed at the first one's 6 s ({len(got)} asks)")
+        await quiet(t0 + 6.2)
+        t1 = time.monotonic()
+        check(z.login() == "waiting" and last() == ON and armed() == 2, f"...and once it is over ({t1 - t0:.1f} s after the first was armed) the one that asks alone has its turn: a login as any other")
+
+        # ---- b: a login runs out, and another browser asks at once
+        await until(lambda: text().count("login ran out without the button") == 1, 6)
+        x = Browser(WEB2); a = x.ask()
+        went = await press()                             # the late press, for the login that just ran out
+        got = await asking(x, min(1.2, t1 + 5.6 - time.monotonic()))
+        check(a["login"] == "refused" and a.get("why") == "busy" and 1 <= a.get("retry_s", 0) <= 2 and set(got) == {"busy"} and armed() == 2 and went and approved() == 0 and out(x) and out(z),
+              f"b: another browser asking as a login runs out, and left asking: not armed in the quiet time after it, the late press lets nobody in ({a})")
+        # (web_press.py case 2: the late press at ~4.2 s, the stranger armed at 6.0 s, the second press let it in)
+        got = await asking(x, pressed[0] + 1.7 - time.monotonic()); went = await press()
+        got += await asking(x, 1.5)
+        check(set(got) == {"busy"} and armed() == 2 and went and approved() == 0, f"...nor for the quiet time after that press, nor after the next: each press that served nothing keeps strangers back anew ({len(got)} asks)")
+        await quiet(t1 + 6.3)
+        check(x.login() == "waiting" and last() == ON and armed() == 3, "...after the quiet time it is armed as any login")
+
+        # ---- c: a login approved, and another browser asks at once
+        tp = time.monotonic(); proc.send_signal(signal.SIGUSR2); await until(lambda: approved() == 1); went = False
+        check(not went and approved() == 1 and x.login() == "approved", "the press approves that one")
+        s2 = Browser(WEB2); a = s2.ask()
+        went = await press()                             # the second press of someone not sure the first one took
+        got = await asking(s2, min(1.2, tp + 1.6 - time.monotonic()))
+        check(a["login"] == "refused" and a.get("why") == "busy" and 1 <= a.get("retry_s", 0) <= 2 and set(got) == {"busy"} and armed() == 3 and went and approved() == 1 and out(s2),
+              f"c: another browser asking right after a login was approved, and left asking: not armed in the quiet time, a second press lets nobody in ({a}, {len(got)} asks)")
+        await quiet(tp + 2.3)
+        t2 = time.monotonic()
+        check(s2.login() == "waiting" and armed() == 4, "...after the quiet time it is armed as any login")
+        # its own "Try again" after its time: at once, inside the quiet time that keeps the others out
+        await until(lambda: text().count("login ran out without the button") == 2, 6)
+        o = Browser(WEB2); a = o.ask(); b2 = s2.ask(); t3 = time.monotonic(); c2 = s2.ask()
+        check(a.get("why") == "busy" and b2.get("why") == "timeout" and c2["login"] == "waiting" and armed() == 5,
+              f"a login that ran out, asked again by its own browser: armed at once (the page's Try again), while another's is not ({a})")
+        a = o.ask()
+        check(a.get("why") == "contested" and last() == OFF, "...and the other one asking now contests it, as two at once do")
+
+        # ---- an approved browser's wait (adb) against a stranger's asks.  It is armed over the contested record
+        open(leds, "w").close()
+        r = json.loads(x.call("POST", "/api/adb", b"on")[2])
+        check(r == {"adb": "waiting", "holds": "adb"} and last() == ON, f"adb asked by an approved browser while that contest is held: armed at once ({r})")
+        got = [o.ask() for _ in range(3)]
+        check(all(g["login"] == "refused" and g.get("why") == "busy" for g in got), f"a stranger asks to log in three times meanwhile: busy each time ({got[0]})")
+        st = x.state()
+        check(st["adb"]["waiting"] and st["button"]["holds"] == "adb" and st["button"]["mine"] and st["button"]["left_s"] > 0 and OFF not in ring()
+              and "withdrawn" not in text(),
+              "...the adb wait is as it was: still armed, the ring never went off, and the page is told what the press serves")
+        went = await press(); await until(lambda: os.path.exists(adb_req))
+        check(not went and os.path.exists(adb_req) and "adb over Wi-Fi approved with the button" in text() and approved() == 1 and out(o),
+              "the press opens adb and approves nobody")
+        a = o.ask(); went = await press()
+        check(a["login"] == "refused" and a.get("why") == "busy" and 1 <= a.get("retry_s", 0) <= 6 and went and approved() == 1 and last() == OFF,
+              f"right after it the stranger still cannot be armed: a second press finds nothing of his ({a})")
+        await asyncio.sleep(1.0)
+        check(o.ask().get("why") == "busy", "...nor a second later")
+        await quiet(t3 + 6.3)            # (the contest's own time: s2's second arming + 6 s)
+        check(o.login() == "waiting" and last() == ON, "after the quiet time, and the contest's, his login is one like any other: armed, shown")
+
+        # ---- the other way: a stranger's login is armed, an approved browser wants the button
+        r = json.loads(x.call("POST", "/api/adb", b"on")[2]); st = x.state()
+        check(r == {"adb": "busy", "holds": "login"} and o.login() == "waiting" and st["button"]["holds"] == "login" and not st["button"]["mine"] and not st["adb"]["waiting"],
+              f"adb asked while that login waits: busy, told what the press would serve, and the login is not ended for it ({r})")
+        await until(lambda: text().count("login ran out without the button") == 3, 6)
+        a = o.ask(); b2 = o.ask(); st = x.state()
+        check(a.get("why") in ("timeout", "busy") and b2.get("why") == "busy" and st["button"]["holds"] == "none",
+              "once it ran out the stranger's own \"Try again\" is not armed (an approved browser was told busy for it), and the page is told the button holds no login any more")
+        ta = time.monotonic(); r = json.loads(x.call("POST", "/api/adb", b"on")[2])
+        check(r == {"adb": "waiting", "holds": "adb"} and o.ask().get("why") == "busy", "...so the approved browser's next ask (the page asks by itself then) is armed, and the stranger cannot take the button before it")
+        # "off": only the browser that armed the wait withdraws it
+        r = json.loads(x.call("POST", "/api/adb", b"off")[2])
+        check(r["adb"] == "closed" and text().count("adb request withdrawn") == 1 and o.ask().get("why") == "busy",
+              "its owner's own \"off\" ends that wait (and strangers are kept back after it)")
+        await asyncio.sleep(max(0, ta + 6.2 - time.monotonic()))            # (a wait withdrawn: its whole time and the quiet time, as its page promised)
+        check(o.login_with_button(proc) and approved() == 2, "a second browser let in with the button, once the quiet time after that wait is over")
+        r = json.loads(x.call("POST", "/api/adb", b"on")[2]); r2 = json.loads(o.call("POST", "/api/adb", b"off")[2]); st = x.state()
+        check(r == {"adb": "waiting", "holds": "adb"} and r2["adb"] == "closed" and st["adb"]["waiting"] and st["button"]["mine"] and text().count("adb request withdrawn") == 1,
+              f"adb \"off\" from another approved browser: adb is closed, the wait the first one armed stays ({r2})")
+        if os.path.exists(adb_req): os.remove(adb_req)
+        went = await press(); await until(lambda: os.path.exists(adb_req))
+        check(not went and os.path.exists(adb_req), "...and the press its owner walked over for opens adb")
+
+        # ---- a restart within the boot (an update, a crash) forgets no wait (web_press.py case 3)
+        await quiet(time.monotonic() + 2.3)
+        own = Browser(WEB2); t4 = time.monotonic()
+        check(own.login() == "waiting", "a login waits")
+        await asyncio.sleep(0.5)
+        proc.kill(); proc.wait(); proc = subprocess.Popen(proc.args, env=env, stderr=open(log, "a")); wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
+        n0 = approved(); st = Browser(WEB2); a = st.ask(); went = await press()
+        check(a["login"] == "refused" and a.get("why") == "busy" and 3 <= a.get("retry_s", 0) <= 6 and went and approved() == n0 and out(st) and "something waited for the action button when hassmic last ended" in text(),
+              f"hassmic restarted while it waited: a stranger's first ask is not armed, and the press on its way lets nobody in ({a})")
+        got = await asking(st, 1.0)
+        check(set(got) == {"busy"}, "...nor while it keeps asking")
+        await quiet(t4 + 6.3)
+        check(st.login() == "waiting", "...once the wait's own time and the quiet time are over, counted from before the restart, a login is taken as ever")
+        # ...and not a pause after every start: nothing waited, nothing is held
+        await until(lambda: text().count("login ran out without the button") >= 4, 6); await asyncio.sleep(2.3)
+        proc.kill(); proc.wait(); proc = subprocess.Popen(proc.args, env=env, stderr=open(log, "a")); wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
+        check(Browser(WEB2).login() == "waiting", "a restart with nothing waiting and no quiet time running: the first to ask is armed at once")
+        # another boot: its clock is another, the file says nothing
+        with open(os.path.join(state, "boot-2"), "w") as f: f.write("another-boot\n")
+        proc.kill(); proc.wait(); proc = subprocess.Popen(proc.args, env=dict(env, HASSMIC_BOOT_ID=os.path.join(state, "boot-2")), stderr=open(log, "a")); wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
+        check(Browser(WEB2).login() == "waiting", "after a reboot (another boot id) what waited before it holds nobody back")
+        # no boot id to read (it wrote nothing then, and said nothing): said once, the file names "-", and a restart
+        # holds the wait by the clock alone
+        noid = dict(env, HASSMIC_BOOT_ID=os.path.join(state, "no-such-file"))
+        proc.kill(); proc.wait(); proc = subprocess.Popen(proc.args, env=noid, stderr=open(log, "a")); wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
+        own = Browser(WEB2); t5 = time.monotonic()
+        check(own.login() == "waiting" and text().count("this boot's id cannot be read") == 1 and open(os.path.join(state, "web_wait")).read().startswith("- "),
+              "the boot's id cannot be read: said in the log, a login is armed as ever (what the other boot left holds nobody), and the file names no boot")
+        await asyncio.sleep(0.5)
+        proc.kill(); proc.wait(); proc = subprocess.Popen(proc.args, env=noid, stderr=open(log, "a")); wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
+        n0 = approved(); st = Browser(WEB2); a = st.ask(); went = await press()
+        check(a["login"] == "refused" and a.get("why") == "busy" and 3 <= a.get("retry_s", 0) <= 6 and went and approved() == n0 and out(st),
+              f"...and hassmic restarted while it waited: the stranger's first ask is not armed, the press lets nobody in ({a})")
+        await quiet(t5 + 6.3)
+        # ---- a press that came too late for a login is a press in vain for its own key too: no "Try again" armed
+        # at once after it (`again` was the one exception to "QUIET_MS from each press")
+        late = Browser(WEB2); n0 = text().count("login ran out without the button")
+        check(late.login() == "waiting", "a login waits")
+        await until(lambda: text().count("login ran out without the button") == n0 + 1, 6)
+        went = await press(); a = late.ask(); a2 = late.ask(); n1 = approved(); went2 = await press()
+        check(went and a.get("why") == "timeout" and a2["login"] == "refused" and a2.get("why") == "busy" and went2 and approved() == n1 and out(late),
+              f"its time ran out, then a press (the assistant's): its own Try again is not armed at once, and the next press lets nobody in ({a} {a2})")
+        await quiet(time.monotonic())
+        check(late.login() == "waiting", "...after the quiet time from that press it is armed as any login")
+        check(proc.poll() is None, "hassmic still runs")
+    finally:
+        proc.terminate(); proc.wait()
+    if check.failed: print(open(log).read())
+
+
+async def ask_rate():
+    """Unsigned asks to log in are counted per source address and overall; over the count they are refused and arm
+    nothing (here 5 an address and 12 in all, per 10 s).  Not counted: the asks of the key whose login is armed.  And an
+    ask over the count from another key still turns an armed login contested (web_press.py case 4: a stranger kept its
+    own login armed and used the count of all up with its own "waiting" asks; the owner's open page, told "rate",
+    never contested it)"""
+    state = tempfile.mkdtemp(); leds = os.path.join(state, "ledctrl.log"); log = os.path.join(state, "log")
+    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
+               HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_FAKE_LED=leds, HASSMIC_LOGIN_RATE="5:12",
+               HASSMIC_LOGIN_MS="4000:1000")
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT2), "-n", "Echo Two", "-L", "-z", "0",
+                             "-o", "0", "-a", "16977", "-W", str(WEB2)], env=env, stderr=open(log, "a"))
+    text = lambda: open(log).read()
+    dark = lambda: "-u authenticated_setup_mode" in open(leds).read().split("-s authenticated_setup_mode")[-1]
+    try:
+        wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
+        a, o = Browser(WEB2), Browser(WEB2)
+        got = [a.ask(src=f"127.0.0.{2 + i % 3}") for i in range(40)]
+        check(all(g["login"] == "waiting" for g in got) and "more asks to log in than" not in text(),
+              "forty asks from three addresses by the browser whose login is armed: \"waiting\" each time, and none of them counted")
+        r = o.ask(src="127.0.0.9")
+        check(r["login"] == "refused" and r.get("why") == "contested" and dark(), f"...so another browser's ask is still taken, and contests it: the ring goes dark ({r})")
+        await asyncio.sleep(5.3)                         # the contest's time: 4 s + 1 s
+        # the count used up by keys that are not armed; then one is, and an ask over the count meets it
+        t0 = time.monotonic(); junk = [Browser(WEB2) for _ in range(3)]
+        check(a.ask(src="127.0.0.2")["login"] == "waiting", "a login is armed again")
+        got = [junk[i % 3].ask(src="127.0.0.7") for i in range(5)]
+        over = junk[0].ask(src="127.0.0.7"); own = a.ask(src="127.0.0.7")
+        check(got[0].get("why") == "contested" and over["login"] == "refused" and over.get("why") == "rate" and 1 <= over.get("retry_s", 0) <= 10,
+              f"five asks from one address are taken, the sixth is not ({over})")
+        await asyncio.sleep(max(0, t0 + 5.3 - time.monotonic()))
+        check(a.ask(src="127.0.0.2")["login"] == "waiting" and not dark(), "once that contest is over the first browser is armed anew")
+        n0 = text().count("a second browser asked")
+        over = o.ask(src="127.0.0.7"); own = a.ask(src="127.0.0.2")
+        check(over.get("why") == "rate" and dark() and own.get("why") == "contested" and text().count("a second browser asked") == n0 + 1,
+              f"another browser's ask over the count: refused for the count, and it still contests the login that waits: the ring dark, its browser told ({over}, {own})")
+        for _ in range(4): o.ask(src="127.0.0.7")
+        check(text().count("a second browser asked") == n0 + 1, "...said once in the log for that login, however many more come over the count")
+        proc.send_signal(signal.SIGUSR2); await asyncio.sleep(0.4)
+        check("login approved" not in text(), "...and a press lets nobody in")
+        # the count of all: eight addresses' worth
+        await asyncio.sleep(10.2)
+        got = [junk[i % 3].ask(src=f"127.0.0.{20 + i // 4}") for i in range(12)]; over = junk[1].ask(src="127.0.0.30")
+        check(all(g.get("why") != "rate" for g in got) and over.get("why") == "rate", f"twelve from all addresses together: the thirteenth is not taken, from whichever address ({over})")
+        await asyncio.sleep(0.3)
+        check(1 <= text().count("more asks to log in than") <= 3, "said in the log once a window, not per ask")
+    finally:
+        proc.terminate(); proc.wait()
+    if check.failed: print(open(log).read())
+
+
+async def files():
+    """What the page reads at start is regular files or nothing (a FIFO at state/web_clients or state/web_button had
+    web_start wait for a writer for good, with its lock held); state/web_button is written again when a browser of the
+    button's is pushed out of the list of 32, so that it is none after a restart when it came back on nothing but a
+    voucher's worth (here: put back by hand into web_clients, as a login on a voucher would), and at a start that
+    finds a line in it naming no browser of the list"""
+    state = tempfile.mkdtemp(); log = os.path.join(state, "log")
+    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
+               HASSMIC_MDNS_FILE=os.path.join(state, "none"), HASSMIC_ARB_ADDR="127.255.255.255", HASSMIC_LOGIN_MS="4000:1")
+    run = lambda: subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT2), "-n", "Echo Two", "-L", "-z", "0",
+                                    "-o", "0", "-a", "16977", "-W", str(WEB2)], env=env, stderr=open(log, "a"))
+    sf = lambda n: os.path.join(state, n)
+    os.mkfifo(sf("web_clients")); os.mkfifo(sf("web_button")); os.mkfifo(sf("web_wait"))
+    proc = run()
+    try:
+        wait_port(PORT2, WEB2, secs=5); up = True
+        try: b = Browser(WEB2)
+        except OSError: up = False
+        check(up and b.login_with_button(proc), "FIFOs where the page keeps its browsers, the button's and its waits: it starts all the same, and a browser is let in")
+        import stat
+        check(stat.S_ISREG(os.stat(sf("web_clients")).st_mode) and stat.S_ISREG(os.stat(sf("web_button")).st_mode), "...and the lists are files again")
+        check(b.pub.hex() in open(sf("web_button")).read(), "the browser let in with the button is listed as one")
+        # 32 more with the button: the first is pushed out of the list, and out of the button's
+        for i in range(32):
+            if not Browser(WEB2).login_with_button(proc): check(False, f"browser {i + 2} let in"); break
+            await asyncio.sleep(0.05)
+        check(b.call("GET", "/api/state")[0] == 401 and b.pub.hex() not in open(sf("web_clients")).read(), "after 32 more the first browser is out of the list")
+        check(b.pub.hex() not in open(sf("web_button")).read(), "...and out of the button's list with it (it stayed there: back on a voucher, a restart made it a browser of the button's again)")
+        proc.terminate(); proc.wait()
+        lines = open(sf("web_clients")).read().splitlines()
+        with open(sf("web_clients"), "w") as f: f.write("\n".join(lines[1:] + [f"{b.pub.hex()} {b.ctr} back on a voucher"]) + "\n")
+        proc = run(); wait_port(PORT2, WEB2)
+        me = next((c for c in (b.state() or {}).get("clients", []) if c["me"]), None)
+        check(me is not None and me["vouched"] is True, f"...so after a restart, in the list again without the button, it counts as let in on a voucher ({me})")
+        # A line of web_button that names no browser of the list (a revoke or a push out whose rewrite of the file
+        # failed; here the browser taken out of web_clients by hand above, whose line stayed): gone with the start
+        # that finds it, so that key back on a voucher is none of the button's after the start after that
+        gone = lines[0].split()[0]
+        check(gone not in open(sf("web_button")).read() and "named a browser that is not approved here" in open(log).read(),
+              "a line of the button's list that names no approved browser: the list is written again without it at the start")
+        proc.terminate(); proc.wait()
+        lines = open(sf("web_clients")).read().splitlines()
+        with open(sf("web_clients"), "w") as f: f.write("\n".join(lines[1:] + [f"{gone} 0 the stale line's"]) + "\n")
+        proc = run(); wait_port(PORT2, WEB2)
+        it = next((c for c in (b.state() or {}).get("clients", []) if c["label"] == "the stale line's"), None)
+        check(it is not None and it["vouched"] is True, f"...and that key in the list again, a restart later: let in on a voucher, not with the button ({it})")
+    finally:
+        proc.terminate(); proc.wait()
+    if check.failed: print(open(log).read())
 
 
 asyncio.run(main())

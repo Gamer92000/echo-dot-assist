@@ -1,0 +1,9 @@
+{ "id": "testlan", "name": "Test reach", "version": 1, "version_name": "0.1", "requires": {"core": 1, "storage": 1, "log.read.full": 1, "net.lan": 1, "net.internet": 1},
+  "author": "hassmic's tests", "description": "Reaches devices on your network and the internet, and reads the whole log.", "license": "MIT",
+  "memory_mb": 16, "threads": 2,
+  "capabilities": { "storage": 4, "log.read.full": true,
+                    "net.lan": [ { "proto": "tcp", "ports": [ 16996 ] }, { "proto": "udp", "ports": "any" } ],
+                    "net.internet": [ { "proto": "tcp", "ports": [ 16996 ] } ] },
+  "settings": [
+    { "name": "reach", "label": "Reach", "type": "text", "help": "<lan|internet> <entry> <host> <port> [keep]" },
+    { "name": "mode", "label": "Mode", "type": "select", "options": [ "reach", "forward" ], "default": "reach" } ] }

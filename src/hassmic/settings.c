@@ -1,6 +1,7 @@
 #include "settings.h"
 #include "board.h"
 #include "core.h"
+#include "plugin.h"
 #include "a2dp.h"
 #include "arb.h"
 #include "dropin.h"
@@ -34,7 +35,6 @@
 const char *const denoise_names[4] = { "Off", "Low", "Medium", "High" };
 static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
-static const char *const wake_engines[3] = { "amazon", "microwakeword", "homeassistant" };  /* WAKE_AMAZON, WAKE_MWW, WAKE_HA */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
 static const char *const call_mics[2] = { "call", "assistant" };         /* call_mic_source() 1, 0 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
@@ -75,6 +75,9 @@ static int kiosk_mic;                                     /* off: main.sh keeps 
 static int kiosk_cam;                                     /* off: and CAMERA */
 static int kiosk_dlna;                                    /* off: lockdown.sh admits the app's DLNA renderer only on "=on" */
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
+static int plugins;                                     /* off: no plugin runs (plugin.h, docs/plugins.md) */
+static int community;                                   /* off: only official plugins are installed and run (plugin_community) */
+static int loading;                                     /* settings_load reads state/config (put) */
 static int wake_events;                                 /* off: an event per near miss is HA history most homes never read */
 static int request_text;                                /* off: what people say kept in HA's history is theirs to choose */
 static int ring_live;                                   /* off: thirteen more entities only for those who want them */
@@ -106,7 +109,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -192,6 +195,15 @@ static const struct setting table[NSET] = {
     [WHISPER]     = { "whisper_detection", "Whisper detection", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* proto_esphome.c's "Wake word" event entity (core_wake_events, issue #48) */
     [WAKE_EVENTS] = { "wake_events", "Wake word events", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
+    /* plugin.c: programs beside hassmic, in a sandbox.  Not exported: what it switches on is what this Echo has
+     * installed.  A feature: proto_esphome.c's "Plugin" event entity is listed while it is on (docs/plugins.md 5.4) */
+    [PLUGINS]     = { "plugins", "Plugins", "Features", NULL, S_BOOL, 0, 1, 0, 1 },
+    /* plugin.c, plugin_store.c: plugins the plugin index does not list as official (its community listings, files)
+     * installed and run at all (docs/plugins.md 2.7, 3.3).  Off by default; a setting of the page's as any other, on
+     * and off from an approved browser (no press: every such plugin is installed with the action button all the
+     * same, W_PLUGIN), so exported, copied by Compare & copy and taken from a preset: what it lets in on another Echo
+     * still takes that Echo's button at each install.  No entity: Home Assistant does not say what this Echo runs */
+    [COMMUNITY]   = { "plugins_community", "Community plugins", "Features", NULL, S_BOOL, 0, 1, 1, 0 },
     /* proto_esphome.c's "Last heard" and "Last reply" text sensors (issue #53) */
     [REQUEST_TEXT] = { "request_text", "Request and reply text", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* ringlive.c: the ring's LEDs from Home Assistant, written by hassmic itself (12 lights, frames, animations, designs) */
@@ -335,7 +347,7 @@ int settings_choices(const struct setting *s, const char *const **names)
         *names = bt_lang_codes; return bt_lang_count;
     case UPDATES: *names = update_channels; return 3;
     case ARB_MODE: *names = arb_modes; return 2;
-    case WAKE_ENGINE: *names = wake_engines; return 3;
+    case WAKE_ENGINE: return core_wake_engines(names);        /* the fixed three and the wake plugins (main.c) */
     case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
     case CALL_MIC: *names = call_mics; return 2;
@@ -410,6 +422,8 @@ int settings_get(const struct setting *s)
     case WHISPER: return whisper;
     case LIGHT_SENSOR: return light_sensor;
     case WAKE_EVENTS: return wake_events;
+    case PLUGINS: return plugins;
+    case COMMUNITY: return community;
     case REQUEST_TEXT: return request_text;
     case RING_LIVE: return ring_live;
     case DROPIN: return dropin_enable(-1);
@@ -490,6 +504,12 @@ static void put(enum id i, int v)
     case WHISPER: whisper = v; core_whisper_enable(v); break;
     case LIGHT_SENSOR: light_sensor = v; break;
     case WAKE_EVENTS: wake_events = v; break;
+    /* (settings_load only notes these two: main.c told plugin.c and the store already, as this start ends up with
+     * them, a preset's included, and settings_preset tells them once more at its end.  Told here, state/config's
+     * value went to them in between where a preset says otherwise, and the broker could start or stop what the
+     * preset keeps off; a review of 00d492a, 4) */
+    case PLUGINS: if (plugins != v) { plugins = v; if (!loading) plugin_feature(v); } break;
+    case COMMUNITY: community = v; if (!loading) plugin_community(v); break;
     case REQUEST_TEXT: request_text = v; break;
     case RING_LIVE: ring_live = v; ringlive_enable(v); break;    /* off: the ring back to ledcontroller, the palette's light */
     case BT_OUT_DELAY: a2dp_out_delay(v); break;                    /* a2dp.c saves it */
@@ -555,12 +575,17 @@ static size_t format(const struct setting *s, char *out, size_t cap)
 /* ---------------------------------------------------------------- file */
 
 /* Applied before the rest, whatever order a file has them in (state/config by hand, an import): switching seeds what
- * comes after it (separate volumes the levels, following the music the offset), and the saved values must then win */
-static int switches(int i) { return i == VOL_SPLIT || i == ASSIST_LINK || i == SOUNDS_LINK || i == TIMER_LINK || i == CALL_LINK; }
+ * comes after it (separate volumes the levels, following the music the offset), and the saved values must then win.
+ * Community plugins too: the wake word engine is judged by that switch (plugin_store.c ps_engine_refused), and an
+ * export lists the engine first, so an import, "make like this Echo" or a preset that switches them on and chooses a
+ * community plugin as the engine had the engine refused (a review of 00d492a, 1); first, one request ends the same
+ * whatever order its lines come in */
+static int switches(int i) { return i == VOL_SPLIT || i == ASSIST_LINK || i == SOUNDS_LINK || i == TIMER_LINK || i == CALL_LINK || i == COMMUNITY; }
 
 /* What state/config holds: the settings no other module keeps */
 static int ours(enum id i) { return i != ARB && i != SS_UNPAIRED && i != EQ_BASS && i != EQ_MID && i != EQ_TREBLE && i != BT_OUT_DELAY && i != VOLUME; }
 
+static int peek_in(const char *rel, const char *name, const struct setting *s, char *out, size_t cap);
 void settings_save(void)
 {
     char p[300], v[48]; struct statefile s;
@@ -572,6 +597,13 @@ void settings_save(void)
         if (i == SCR_COLOUR) {
             if (!colour_supported()) continue;
             snprintf(v, sizeof v, "%s", adaptive_colour ? "on" : "off");
+        } else if (i == WAKE_ENGINE && core_wake_engine_forced()) {
+            /* -w remote in hassmic.conf's ARGS: the engine reads "homeassistant" while it is there, and written so, the
+             * owner's own choice was gone once ARGS lost it (any setting saved meanwhile wrote it: the mute switch,
+             * the volume).  What the file says stays, or nothing (found by a review of b294fa0's tests) */
+            char own[64];
+            if (!peek_in("config", table[i].name, NULL, own, sizeof own)) fprintf(s.f, "%s=%s\n", table[i].name, own);
+            continue;
         } else { if (!present(i)) continue; format(&table[i], v, sizeof v); }
         fprintf(s.f, "%s=%s\n", table[i].name, v);
     }
@@ -640,10 +672,13 @@ void settings_load(void)
     if (!(f = fopen(p, "r"))) {
         /* an Echo from before features: what it showed in Home Assistant stays (the speaker if one played) */
         bt_speaker = ble_present() && a2dp_out_enabled();
+        loading = 1;
         if (load_old()) { wake_sound_was_all(); settings_save(); fprintf(stderr, "settings: moved to %s\n", p); }
+        loading = 0;
         core_mic_level(mic_level);
         return;
     }
+    loading = 1;
     for (int pass = 0; pass < 2; pass++, rewind(f)) while (line_of(line, sizeof line, f)) {
         char *eq = strchr(line, '='), *v; int x;
         if (line[0] == '#' || !eq) continue;
@@ -657,6 +692,7 @@ void settings_load(void)
         }
     }
     fclose(f);
+    loading = 0;
     if (!led_auto) { if (led_level >= 0) core_led_brightness(led_level); else core_led_auto(0); }
     core_mic_level(mic_level);
     char own[8];
@@ -665,7 +701,18 @@ void settings_load(void)
 
 /* A preset (an export from another Echo's settings page) that scripts/setup.sh left in state/preset: applied once, at
  * start, as an import would be, then kept as state/preset.applied */
+static void preset_apply(void);
 void settings_preset(void)
+{
+    preset_apply();
+    /* plugins and community plugins as this start ends up with them, told once: settings_load only noted state/config's
+     * (put), and the preset's went through settings_set to plugin.c and the store, which had it already from main.c
+     * (settings_peek: config, then the preset).  Nothing changes here then, but where the preset could not be applied
+     * after all (unreadable), state/config's value is the one that stands, and they follow it now, once */
+    plugin_community(community);
+    plugin_feature(plugins);
+}
+static void preset_apply(void)
 {
     char p[300], done[310], err[2048]; FILE *f; long n; char *t;
     path(p, sizeof p, "preset"); snprintf(done, sizeof done, "%s.applied", p);
@@ -712,6 +759,16 @@ int settings_peek(const char *name, char *out, size_t cap)
     return !peek_in("preset", name, s, out, cap) ? 0 : r;
 }
 
+/* The same without asking whether the value is one the setting takes now.  The wake word engine's "plugin:<id>" is
+ * one only while that plugin is installed or already known as the chosen one (main.c wake_engines_scan): at start
+ * neither holds for a plugin whose package is gone or is for a newer hassmic (a fall back), and the owner's choice
+ * read as no value */
+int settings_peek_raw(const char *name, char *out, size_t cap)
+{
+    int r = peek_in("config", name, NULL, out, cap);
+    return !peek_in("preset", name, NULL, out, cap) ? 0 : r;
+}
+
 int settings_mic_level(void) { return mic_level; }
 const char *settings_speech_language(void) { int l = speech_lang; return l > 0 && l < SPEECH_LANGS ? speech_langs[l] : ""; }
 int settings_bt_proxy(void) { return bt_proxy; }
@@ -726,7 +783,9 @@ int settings_set(const char *name, const char *value, char *err, size_t errsz)
     const struct setting *s = settings_find(name); int v;
     if (!s && loading_preset && colour_supported() && !strcmp(name, table[SCR_COLOUR].name)) s = &table[SCR_COLOUR];
     if (!s) { snprintf(err, errsz, "%s: no such setting on this Echo", name); return -1; }
-    if (parse(s, value, &v)) { snprintf(err, errsz, "%s: \"%s\" is not a value it takes", name, value); return -1; }
+    /* (a wake word engine not among the choices may be a plugin installed a moment ago: the list read anew, the store's
+     * folder first, before it is refused; P4 of a review of 7be9343) */
+    if (parse(s, value, &v) && (s - table != WAKE_ENGINE || (core_wake_engines_fresh(), parse(s, value, &v)))) { snprintf(err, errsz, "%s: \"%s\" is not a value it takes", name, value); return -1; }
     int was = settings_get(s);
     put((enum id)(s - table), v);
     if (s - table == WAKE_ENGINE && settings_get(s) != v) { snprintf(err, errsz, "%s: %s", name, core_wake_refused()); return -1; }

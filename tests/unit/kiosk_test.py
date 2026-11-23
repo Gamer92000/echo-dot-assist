@@ -29,6 +29,30 @@ def moved(text, tmp):
             .replace("/data/system", tmp + "/system").replace("/data/app", tmp + "/app").replace("/data/data", tmp + "/appdata"))
 
 
+OWN = "10.0.0.5"
+
+
+def fake_ifconfig(bin_, addr=None):
+    """toybox's ifconfig as the Echo prints it (wifi.sh and lockdown.sh read "inet addr:"); ADDR None: the Echo's"""
+    os.makedirs(bin_, exist_ok=True)
+    a = OWN if addr is None else addr
+    tool(bin_, "ifconfig", f'echo "wlan0     Link encap:Ethernet  HWaddr 00:11:22:33:44:55"; {"echo " + chr(34) + "          inet addr:" + a + "  Bcast:10.0.0.255  Mask:255.255.255.0" + chr(34) if a else ":"}')
+
+
+def fake_fib(tmp, addrs=None):
+    """/proc/net/fib_trie as a 4.x kernel prints it (lockdown.sh own4 reads its "/32 host LOCAL" entries): loopback's,
+    ADDRS' (None: the Echo's; a text: that one; "": none) in the main and the local table, each with its broadcast"""
+    a = [OWN] if addrs is None else [addrs] if isinstance(addrs, str) and addrs else [] if isinstance(addrs, str) else list(addrs)
+    os.makedirs(tmp + "/net", exist_ok=True)
+    t = ("  +-- 0.0.0.0/0 3 0 5\n     |-- 0.0.0.0\n        /0 universe UNICAST\n     +-- 127.0.0.0/8 2 0 2\n"
+         "        +-- 127.0.0.0/31 1 0 0\n           |-- 127.0.0.0\n              /8 host LOCAL\n           |-- 127.0.0.1\n"
+         "              /32 host LOCAL\n        |-- 127.255.255.255\n           /32 link BROADCAST\n")
+    for x in a:
+        net = ".".join(x.split(".")[:3])
+        t += f"     +-- {net}.0/24 2 0 2\n        |-- {net}.0\n           /24 link UNICAST\n        |-- {x}\n           /32 host LOCAL\n        |-- {net}.255\n           /32 link BROADCAST\n"
+    with open(tmp + "/net/fib_trie", "w") as f: f.write("Main:\n" + t + "Local:\n" + t)
+
+
 def lockdown(tmp, conf, config, pkglist):
     """the rules for this state: every line of hassmic_out and of keep"""
     os.makedirs(tmp + "/hassmic/state", exist_ok=True); os.makedirs(tmp + "/system", exist_ok=True)
@@ -38,10 +62,11 @@ def lockdown(tmp, conf, config, pkglist):
     t = open(ROOT + "/scripts/device/lockdown.sh").read()
     t = t[:t.index('OTA_ONLY=; [ "$1" = ota-only ]')]
     t = moved(t, tmp).replace('CONF="$HERE/device.conf"', f'CONF="{tmp}/device.conf"').replace("/proc/net/", tmp + "/net/")
-    t += "\nkiosk_state; DNS=; rules iptables; keep iptables; echo \"by:$KSSDP_BY\"\n"
+    t += "\nkiosk_state; DNS=; rules iptables; keep iptables; rules_in; rules_self; echo \"jump:$IN_JUMP\"; echo \"self:$SELF_JUMP\"; echo \"by:$KSSDP_BY\"\n"
     with open(tmp + "/l.sh", "w") as f: f.write(t)
     if config is None: os.unlink(tmp + "/hassmic/state/config")
-    r = subprocess.run(["sh", tmp + "/l.sh"], capture_output=True, text=True)
+    fake_ifconfig(tmp + "/bin"); fake_fib(tmp)
+    r = subprocess.run(["sh", tmp + "/l.sh"], capture_output=True, text=True, env={**os.environ, "PATH": tmp + "/bin:" + os.environ["PATH"]})
     return r.stdout + ("STDERR:" + r.stderr if r.stderr else "")
 
 
@@ -61,7 +86,18 @@ with tempfile.TemporaryDirectory() as tmp:
     # adb (issue #130): no process but root's reaches adbd's port, first in the chain, before lo is let through
     rules = lockdown(tmp, CONF, "", LIST).splitlines()
     adb = "-A hassmic_out -p tcp -m tcp --dport 5555 -m owner ! --uid-owner 0 -j DROP"
-    check("adb port: dropped for every user but root, first", rules[:2] == [adb, "-A hassmic_out -o lo -j RETURN"], rules[:3])
+    plug = [f"-A hassmic_out -m owner --uid-owner {u} -j DROP" for u in range(6900, 6908)]
+    check("adb port: dropped for every user but root, first", rules[0] == adb, rules[:3])
+    # plugins' users (docs/plugins.md 4.6): whatever they own dropped, before lo and every local address is let through
+    check("then everything the plugins' users 6900-6907 own, then lo", rules[1:10] == plug + ["-A hassmic_out -o lo -j RETURN"], rules[:11])
+    # plugins' own UDP ports (net.udp, net.discover; docs/plugins.md 4.6): private and link-local sources, then nothing
+    pin = [r for r in rules if r.startswith("-A hassmic_in")]
+    check("plugins' ports: a private or link-local source passes, any other is dropped", pin == ["-A hassmic_in -s 10.0.0.0/8 -j RETURN", "-A hassmic_in -s 172.16.0.0/12 -j RETURN",
+          "-A hassmic_in -s 192.168.0.0/16 -j RETURN", "-A hassmic_in -s 169.254.0.0/16 -j RETURN", "-A hassmic_in -j DROP"], pin)
+    check("... for UDP 28940-28999 on the network's interface, the jump worded as iptables -S prints it",
+          "jump:INPUT -i wlan0 -p udp -m udp --dport 28940:28999 -j hassmic_in" in o, [r for r in rules if r.startswith("jump:")])
+    o = lockdown(tmp, CONF, "arbitration_mode=kiosk\n", LIST)
+    check("so in every mode", all(r in o.splitlines() for r in plug), o)
     check("off on a last line without its newline", "--uid-owner 10042" not in lockdown(tmp, CONF, "mute=off\nkiosk_internet=off", LIST))
     o = lockdown(tmp, CONF, None, LIST)
     check("no state/config: nothing said, internet on", "STDERR" not in o and UID_RULE in o, o)
@@ -69,7 +105,7 @@ with tempfile.TemporaryDirectory() as tmp:
     o = lockdown(tmp, CONF, "", "com.other 10001 0 /x default 3003\n")
     check("not installed: no uid rule and no ports", "--uid-owner 10042" not in o and "2324" not in o and "6053" not in o, o)
     o = lockdown(tmp, CONF, "kiosk_internet=off\n", LIST)
-    check("internet off: its ports stay", "--dport 2324" in o and "--uid-owner" not in o.replace("--uid-owner 0", ""), o)
+    check("internet off: its ports stay", "--dport 2324" in o and "--uid-owner 10042" not in o, o)
     o = lockdown(tmp, CONF, "", f"me_jxl.kiosk_satellite 10190 0 /x default 3003\n{PKG}x 10191 0 /x default 3003\n{LIST}")
     check("a name that only looks like it: not taken", UID_RULE in o and "10190" not in o and "10191" not in o, o)
     o = lockdown(tmp, CONF, "", "me_jxl.kiosk_satellite 10190 0 /x default 3003\n")
@@ -100,11 +136,14 @@ a = [x for x in sys.argv[1:] if x not in ("-w", "--noflush")]
 if sys.argv[0].endswith("-restore"):
     for l in sys.stdin.read().split("\n"):
         if l.startswith(":hassmic_out"): s["chains"] = ["hassmic_out"]; cmd(["-F", "hassmic_out"])
+        elif l.startswith(":hassmic_in"): s["chains"].append("hassmic_in"); cmd(["-F", "hassmic_in"])
+        elif l.startswith(":hassmic_self"): s["chains"].append("hassmic_self"); cmd(["-F", "hassmic_self"])
         elif l.startswith(":INPUT"): s["pol"] = l.split()[1]
         elif l[:2] in ("-A", "-D", "-I"): cmd(l.split())
 elif a[:1] == ["-S"]:
-    if a[1:] == ["hassmic_out"]: print("\n".join(["-N hassmic_out"] + [r for r in s["rules"] if r.startswith("-A hassmic_out ")]))
+    if a[1:] in (["hassmic_out"], ["hassmic_in"], ["hassmic_self"]): print("\n".join(["-N " + a[1]] + [r for r in s["rules"] if r.startswith("-A " + a[1] + " ")]))
     elif a[1:] == ["OUTPUT"]: print("\n".join(["-P OUTPUT ACCEPT"] + [r for r in s["rules"] if r.startswith("-A OUTPUT ")]))
+    elif a[1:] == ["INPUT"]: print("\n".join(["-P INPUT " + s["pol"]] + [r for r in s["rules"] if r.startswith("-A INPUT ")]))
     else: print("\n".join(["-P INPUT " + s["pol"]] + s["rules"]))
     sys.exit(0)
 else: cmd(a)
@@ -112,9 +151,9 @@ json.dump(s, open(st, "w"))
 '''
 
 
-def firewall(tmp, steps):
-    """one shell over lockdown.sh's functions with stand-in iptables: returns its output"""
-    b = tmp + "/bin"; os.makedirs(b, exist_ok=True)
+def firewall(tmp, steps, addr=None):
+    """one shell over lockdown.sh's functions with stand-in iptables (and ifconfig: ADDR the Echo's): returns its output"""
+    b = tmp + "/bin"; os.makedirs(b, exist_ok=True); fake_ifconfig(b, addr if isinstance(addr, str) else None); fake_fib(tmp, addr)
     for n in ("iptables", "iptables-restore", "ip6tables", "ip6tables-restore"):
         with open(f"{b}/{n}", "w") as f: f.write(FAKE_IPT)
         os.chmod(f"{b}/{n}", 0o755)
@@ -142,6 +181,35 @@ with tempfile.TemporaryDirectory() as tmp:
         o = firewall(tmp, f"{load}; wrong && echo RIGHT")
         check(f"{name}: installed, ports and uid in, and the check agrees", "RIGHT" in o and len(ports()) == 8 and UID_RULE in rules(), o + str(rules()))
         check(f"{name}: no port rule in IPv6", "--dport 2324" not in open(tmp + "/ip6tables.json").read())
+        r0 = [r for r in rules() if r.startswith("-A INPUT ")][:2]
+        check(f"{name}: what a plugin's port sends the Echo itself, then the plugins' ports' chain: jumped to first in INPUT",
+              r0 == ["-A INPUT -i wlan0 -p udp -m udp --sport 28940:28999 -j hassmic_self", "-A INPUT -i wlan0 -p udp -m udp --dport 28940:28999 -j hassmic_in"]
+              and "-A hassmic_in -j DROP" in rules() and "hassmic_in" not in open(tmp + "/ip6tables.json").read() and "hassmic_self" not in open(tmp + "/ip6tables.json").read(), r0)
+        check(f"{name}: A1: from the Echo's own address and a plugin's port: dropped", [r for r in rules() if r.startswith("-A hassmic_self")] == [f"-A hassmic_self -s {OWN}/32 -j DROP"], rules())
+        if name == "load_once":
+            # a rule of stock's inserted ahead of the jump, or the chain changed: noticed, and the load mends it
+            js = json.load(open(tmp + "/iptables.json")); js["rules"].insert(0, "-A INPUT -i wlan0 -p udp -m udp --dport 16384:32767 -j ACCEPT"); json.dump(js, open(tmp + "/iptables.json", "w"))
+            o = firewall(tmp, "wrong || echo NOTICED")
+            check(f"{name}: the jump not first any more: noticed", "NOTICED" in o and "are not first" in o, o)
+            # A1: a new lease (another address): noticed, and loaded for the new one
+            o = firewall(tmp, "wrong || echo NOTICED", addr="10.0.0.77")
+            check(f"{name}: A1: the Echo's address changed: noticed", "NOTICED" in o and "hassmic_self is not as loaded" in o, o)
+            o = firewall(tmp, f"{load}; wrong && echo RIGHT", addr="10.0.0.77")
+            check(f"{name}: A1: loaded for the new address", "RIGHT" in o and "-A hassmic_self -s 10.0.0.77/32 -j DROP" in rules() and f"-A hassmic_self -s {OWN}/32 -j DROP" not in rules(), o)
+            o = firewall(tmp, f"{load}; wrong && echo RIGHT", addr="")
+            check(f"{name}: A1: no address: the chain empty, and that is right", "RIGHT" in o and not [r for r in rules() if r.startswith("-A hassmic_self")], o)
+            # L2 of a review of 92ac2e1: a second address beside the first (a lease left behind by a network switch, an
+            # address on another interface): each of them, since a broadcast to its own net comes back from it too
+            # (ifconfig shows the first alone: the chain had that one only)
+            firewall(tmp, load)                                          # (loaded for the one address first)
+            o = firewall(tmp, "wrong || echo NOTICED", addr=[OWN, "10.0.1.9"])
+            check(f"{name}: L2: a second address: noticed", "NOTICED" in o and "hassmic_self is not as loaded" in o, o)
+            o = firewall(tmp, f"{load}; wrong && echo RIGHT", addr=[OWN, "10.0.1.9"])
+            check(f"{name}: L2: every address of the Echo's own dropped as a plugin port's source, loopback's not named",
+                  "RIGHT" in o and [r for r in rules() if r.startswith("-A hassmic_self")] == [f"-A hassmic_self -s 10.0.0.5/32 -j DROP", "-A hassmic_self -s 10.0.1.9/32 -j DROP"], o + str(rules()))
+            js = json.load(open(tmp + "/iptables.json")); js["rules"].remove("-A hassmic_in -j DROP"); json.dump(js, open(tmp + "/iptables.json", "w"))
+            o = firewall(tmp, f"{load}; wrong && echo RIGHT")
+            check(f"{name}: loaded again, as it has to be", "RIGHT" in o and [r for r in rules() if r.startswith("-A INPUT ")][:2] == r0 and all(rules().count("-A " + x[3:]) == 1 for x in r0), o)
         state(False)
         o = firewall(tmp, "wrong || echo NOTICED")
         check(f"{name}: uninstall noticed", "NOTICED" in o, o)

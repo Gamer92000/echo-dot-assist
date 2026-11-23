@@ -209,7 +209,8 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
                       music = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 },
                       earcon = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
                       voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &call_q16 },
-                      bt = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 };
+                      bt = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 },
+                      plug = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 };
 
 /* --- volume: Android's own, the music stream's index (0..its maximum, 30 on the Show), set through IAudioService with
  * the firmware's service tool as the front end is reached (afe_parcel.c): setStreamVolume(stream, index, flags,
@@ -576,6 +577,11 @@ int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, c
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 void      bt_close(void) { s_close(&bt, 0); }
+/* a music plugin's (plugin.c): a player of its own on the music stream, as the phone's.  Untried on a Show */
+int       plug_open(unsigned rate, unsigned channels) { return s_open(&plug, rate, channels, SL_ANDROID_STREAM_MEDIA); }
+int       plug_write(const void *data, size_t len) { return s_write(&plug, data, len); }
+long long plug_queued_us(void) { return s_queued_us(&plug); }
+void      plug_close(void) { s_close(&plug, 0); }
 
 /* Drop In's call audio: the voice stream, its own volume and routing in Android */
 int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, rate, channels, SL_ANDROID_STREAM_MEDIA); }

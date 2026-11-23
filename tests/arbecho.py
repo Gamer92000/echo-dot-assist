@@ -45,7 +45,8 @@ class Echo:
         self.log = os.path.join(self.state, "log")
         self.api_key = base64.b64encode(os.urandom(32)).decode()
         with open(os.path.join(self.state, "api_key"), "w") as f: f.write(self.api_key + "\n")     # as Home Assistant provisioned it
-        self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_SETTINGS=os.path.join(self.state, "settings"),
+        self.env = dict(os.environ, HASSMIC_LOGIN_MS="60000:300",     # (browsers log in one after the other here: web.c keeps others back 0.3 s after a press, not 30)
+                                    HASSMIC_STATE=self.state, HASSMIC_SETTINGS=os.path.join(self.state, "settings"),
                         HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(self.state, "play.raw"),
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_KIOSK_PORT=str(KIOSK),
                         HASSMIC_TEST_SCORE=str(score), HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_ARB_SCALE=str(SCALE))

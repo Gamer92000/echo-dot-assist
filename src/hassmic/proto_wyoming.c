@@ -4,7 +4,9 @@
 #include <sys/socket.h>
 #include <time.h>
 #include "board.h"
+#include "logread.h"
 #include "core.h"
+#include "plugin.h"
 #include "screen.h"
 #include "wyoming.h"
 
@@ -61,13 +63,20 @@ static void handle(const struct wy_event *ev)
     else if (!strcmp(t, "describe")) send_info();
     else if (!strcmp(t, "run-satellite")) { fprintf(stderr, "satellite: running\n"); core_link(1, 1); }
     else if (!strcmp(t, "pause-satellite")) core_link_pause();
-    else if (!strcmp(t, "detection")) core_set_state(LISTENING);
+    /* Home Assistant's wake word (-w remote): as ESPHome's WAKE_WORD_END, what the Echo does on one of its own (the
+     * sound, the ring, listening mode) and where a request begins, a plugin's copy with it (core_remote_wake).  Until
+     * a review of b294fa0 (M3) only the state: no copy under Wyoming, and the transcript went to the last request's
+     * number.  (With the wake word here no detection comes: the run starts at speech to text) */
+    else if (!strcmp(t, "detection")) { if (core_local_wake) core_set_state(LISTENING); else core_remote_wake(); }
     else if (!strcmp(t, "voice-stopped") || !strcmp(t, "transcript")) {
         if (!strcmp(t, "transcript")) {
             char text[256] = "";
             wy_json_str(strchr(ev->json, '\n') ? strchr(ev->json, '\n') : ev->json, "text", text, sizeof text);
-            fprintf(stderr, "transcript: %s\n", text);
+            log_private("transcript: %s", text);
             screen_words(SCREEN_WORDS_HEARD, text);              /* Wyoming tells no reply text, only the words */
+            /* request.text (3.6): as the screen has it.  Wyoming's transcript is not asked of core_transcript (the
+             * satellite protocol has no cancel to stop a ring with): what Home Assistant heard, "stop" too, is passed */
+            plugin_request_text(PLUGIN_TEXT_HEARD, text);
             core_mic_off();
         }
         if (core_state() == LISTENING) core_set_state(THINKING);
@@ -79,7 +88,7 @@ static void handle(const struct wy_event *ev)
     } else if (!strcmp(t, "audio-stop")) core_tts_end();
     else if (!strcmp(t, "error")) {
         char code[64] = "";
-        fprintf(stderr, "server error: %s\n", ev->json);
+        log_private("server error: %s", ev->json);           /* (its text may quote what was said) */
         wy_json_str(ev->json, "code", code, sizeof code);
         if (!strcmp(code, "stt-no-text-recognized")) core_no_speech(); else core_error();     /* nothing said: quietly */
     }

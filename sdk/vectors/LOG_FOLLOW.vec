@@ -1,0 +1,22 @@
+# LOG_FOLLOW: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message LOG_FOLLOW 50
+id 65586
+from str 66726f6d2d35302dc3a9  # 'from-50-é'
+packet 32000000320001000a0066726f6d2d35302dc3a9
+case empty
+id 65586
+from str -  # ''
+packet 32000000320001000000
+case long
+id 65586
+from str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééééééé'
+packet 32000000320001002800c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9
+case full
+id 65586
+from str -  # ''
+packet 32000000320001000000
+refuse short 32000000320001
+refuse truncated 32000000320001000a0066726f6d2d35302dc3
+refuse trailing 32000000320001000a0066726f6d2d35302dc3a900
+refuse over:from 320000003200010029006161616161616161616161616161616161616161616161616161616161616161616161616161616161
+refuse nul:from 32000000320001000300610062

@@ -77,7 +77,21 @@ const hmmatrix = (() => {
     return out;
   }
 
-  return { groups, distinct, rank, pick, skip, column, changes };
+  // Copies that build on each other, in the order they must run ("Copy plugins", plugins.js: a plugin's package, then
+  // its settings, then its files, each of which needs the plugin on that Echo first).  stage(row): 0 what the others
+  // need; of(row): what a row belongs to (the plugin); has(of, col): that Echo has it already.  run: one Echo after
+  // the other, in the order they first come, stage by stage, rows as the table has them; left: rows of a later stage
+  // for an Echo that neither has their plugin nor gets it in this run: nothing is done for those
+  function steps(changes, stage, of, has) {
+    const brought = new Set(changes.filter((c) => stage(c.row) === 0).map((c) => `${of(c.row)}\n${c.to.key}`));
+    const run = [], left = [], order = new Map();
+    for (const c of changes) (stage(c.row) === 0 || has(of(c.row), c.to) || brought.has(`${of(c.row)}\n${c.to.key}`) ? run : left).push(c);
+    for (const c of run) if (!order.has(c.to.key)) order.set(c.to.key, order.size);
+    run.sort((a, b) => order.get(a.to.key) - order.get(b.to.key) || stage(a.row) - stage(b.row));       // (stable since ES2019)
+    return { run, left };
+  }
+
+  return { groups, distinct, rank, pick, skip, column, changes, steps };
 })();
 
 if (typeof module !== 'undefined') module.exports = hmmatrix;

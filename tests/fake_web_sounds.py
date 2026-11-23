@@ -58,7 +58,8 @@ class Echo:
         addrs = os.path.join(tmp, "addrs"); open(addrs, "w").write("127.0.0.1\n")
         env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(tmp, "play.raw"),
                    HASSMIC_MDNS_FILE=os.path.join(tmp, "mdns"), HASSMIC_FAKE_ADDRS=addrs, HASSMIC_ARB_ADDR="127.255.255.255",
-                   HASSMIC_MODELS=os.path.join(tmp, "models"), HASSMIC_LED_ROOT=os.path.join(tmp, "etc"), HASSMIC_EARCONS=earcons, **extra)
+                   HASSMIC_MODELS=os.path.join(tmp, "models"), HASSMIC_LED_ROOT=os.path.join(tmp, "etc"), HASSMIC_EARCONS=earcons,
+                   HASSMIC_LOGIN_MS="60000:300", **extra)        # (a new browser logs in after each restart here: web.c keeps others back 0.3 s after a press, not 30, also over a restart)
         keys = os.path.join(tmp, "keypad")
         if not os.path.exists(keys): os.mkfifo(keys)
         self.keypad = os.open(keys, os.O_RDWR)                # opened first: hassmic's open() would wait for a writer

@@ -1,0 +1,6 @@
+# PING: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message PING 6
+id 65542
+packet 0600000006000100
+refuse short 06000000060001
+refuse trailing 060000000600010000

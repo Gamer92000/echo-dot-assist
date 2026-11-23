@@ -20,6 +20,7 @@
  * queue), "qc" (its items changed), lists as "L"/"I"/"E", images as "img" with the bytes (the server's imageproxy
  * scales them: sizes 80, 160, 256, 512).  Tested against a stand-in server by tests/fake_ma_api.py.
  */
+#include "logread.h"
 #include "mass.h"
 #include "json.h"
 #include "net.h"
@@ -1035,7 +1036,7 @@ int mass_set(const char *u, const char *t)
     pthread_mutex_lock(&wslk);
     if (wsopen) shutdown(w.fd, SHUT_RDWR);                     /* the session sees the new settings at once */
     pthread_mutex_unlock(&wslk);
-    fprintf(stderr, "mass: %s, %s\n", u && u[0] ? u : "server found by itself", token[0] ? "a token" : "no token");
+    log_private("mass: %s, %s", u && u[0] ? u : "server found by itself", token[0] ? "a token" : "no token");      /* (the address the owner entered) */
     return rc;
 }
 

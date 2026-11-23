@@ -101,7 +101,7 @@ void play_close(int drain)
  * is modelled: bytes written minus bytes that real time has consumed since the stream started draining (it drains at
  * exactly the sample rate, and MixerGetBufPlay blocks once its ring is full, which keeps the model honest). */
 struct stream { MixerHandle h; unsigned bps; long long t0, written; atomic_int *gain; float g; };   /* g: the glide's now */
-static struct stream music = { .gain = &music_q16 }, bt = { .gain = &music_q16 }, voip = { .gain = &call_q16 };
+static struct stream music = { .gain = &music_q16 }, bt = { .gain = &music_q16 }, voip = { .gain = &call_q16 }, plug = { .gain = &music_q16 };
 
 static long long raw_us(void)
 {
@@ -156,6 +156,11 @@ int       music_write(const void *data, size_t len) { return s_write(&music, dat
 void      music_close(void) { s_close(&music); }
 long long music_prime_us(void) { return 0; }                /* the queue is a model at playback speed: no burst */
 int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, channels, MIXER_PLAY_MUSIC); }
+/* a music plugin's (plugin.c): a third stream of the music type, as the phone's beside Sendspin's.  Untried on a Dot */
+int       plug_open(unsigned rate, unsigned channels) { return s_open(&plug, rate, channels, MIXER_PLAY_MUSIC); }
+long long plug_queued_us(void) { return s_queued_us(&plug); }
+int       plug_write(const void *data, size_t len) { return s_write(&plug, data, len); }
+void      plug_close(void) { s_close(&plug); }
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 void      bt_close(void) { s_close(&bt); }
