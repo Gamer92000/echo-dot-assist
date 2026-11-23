@@ -49,7 +49,7 @@
 #include <unistd.h>
 
 #define POLL_S      2
-#define MAX_ADDRS   16
+#define MAX_ADDRS   64          /* an Echo has two or three; a PC with containers and VPNs had 17 */
 #define MAX_LINKS   16          /* ESPHome takes 4 clients; the rest are refused at once */
 #define MAX_PEERS   4
 static int FIRST_S;             /* HASSMIC_ANNOUNCE_TIMES: instead of each peer's own first_s */
@@ -83,15 +83,19 @@ static int addrs_get(struct addrs *s)
         fclose(f);
         s->own = s->n;
     } else {
-        struct ifaddrs *ifs, *i; uint32_t lo[MAX_ADDRS]; int nlo = 0;
+        struct ifaddrs *ifs, *i; uint32_t lo[MAX_ADDRS]; int nlo = 0, over = 0;
         if (getifaddrs(&ifs)) return -1;
         for (i = ifs; i; i = i->ifa_next) {
             if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
             uint32_t a = ((struct sockaddr_in *)i->ifa_addr)->sin_addr.s_addr;
-            if (i->ifa_flags & IFF_LOOPBACK) { if (nlo < MAX_ADDRS) lo[nlo++] = a; }
+            if (i->ifa_flags & IFF_LOOPBACK) { if (nlo < MAX_ADDRS) lo[nlo++] = a; else over = 1; }
             else if (s->own < MAX_ADDRS) s->a[s->own++] = a;
+            else over = 1;
         }
         freeifaddrs(ifs);
+        /* More than fit, own and loopback together: a set cut short would have an address that is there look gone
+         * and its links closed (a PC with 17 had its link over 127.0.0.1 shut, which was the 17th), so cannot tell */
+        if (over || s->own + nlo > MAX_ADDRS) return -1;
         s->n = s->own;
         for (int k = 0; k < nlo && s->n < MAX_ADDRS; k++) s->a[s->n++] = lo[k];
     }
