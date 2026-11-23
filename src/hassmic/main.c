@@ -1175,7 +1175,9 @@ void core_pipeline_finish(void)
     mic_stopped();
     if (barge_in && connected && satellite_running) duck_follow();    /* the next run starts below: no "off" between */
     core_set_state(IDLE);
-    if (mono_ms() - last_wake_ms > 3000) wake_reset();      /* a reset puts the engine back to sleep: "<wake word>, stop" would lose its "stop" */
+    /* Only microWakeWord has a reset now (wake_pryon.c has none).  The 3 s came from Pryon's reset, which lost the
+     * "stop" of "<wake word>, stop": kept, so that microWakeWord behaves as before */
+    if (mono_ms() - last_wake_ms > 3000) wake_reset();
     if (!connected) barge_in = 0;
     if ((barge_in || !core_local_wake) && satellite_running && connected) {
         if (barge_in) sound_request(SND_WAKE);

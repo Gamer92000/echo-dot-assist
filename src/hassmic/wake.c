@@ -43,7 +43,7 @@ void wake_on_miss(wake_miss_cb cb) { miss_cb = cb; }
 void wake_near_miss(int slot, const char *keyword) { if (miss_cb) miss_cb(slot, keyword); }
 
 uint64_t wake_fed(void) { return fed; }
-void wake_reset(void) { for (int i = 0; i < WAKE_SLOTS; i++) if (cur[i]) cur[i]->reset(i); }
+void wake_reset(void) { for (int i = 0; i < WAKE_SLOTS; i++) { const struct wake_engine *e = cur[i]; if (e && e->reset) e->reset(i); } }
 void wake_property(const char *name, int value) { wake_vendor.property(name, value); }
 
 void wake_close(int slot)

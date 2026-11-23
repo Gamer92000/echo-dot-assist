@@ -22,7 +22,7 @@ typedef void (*wake_miss_cb)(int slot, const char *keyword);
 void wake_on_miss(wake_miss_cb cb);
 void wake_near_miss(int slot, const char *keyword);     /* the engines: hand one on */
 void wake_feed(const int16_t *samples, size_t count);   /* every open slot */
-void wake_reset(void);                 /* audio discontinuity */
+void wake_reset(void);                 /* a run is over (main.c): every engine that has a reset */
 void wake_property(const char *name, int value);   /* engine hint, e.g. "AlarmState" 1: the model lowers its threshold */
 void wake_close(int slot);             /* -1: every slot */
 /* Where the last accepted keyword (whichever slot) lies on the clock of Amazon's front end (ms, 16 bit, wraps), which
@@ -36,7 +36,7 @@ const char *wake_attributes(void);
 struct wake_engine {
     int  (*open)(int slot, const char *model, wake_cb cb);
     void (*feed)(int slot, const int16_t *samples, size_t count);
-    void (*reset)(int slot);
+    void (*reset)(int slot);           /* NULL: the engine has none */
     void (*property)(const char *name, int value);
     void (*close)(int slot);
     int  (*afe_times)(int slot, long *start, long *end);
