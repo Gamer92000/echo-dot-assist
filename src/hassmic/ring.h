@@ -67,6 +67,7 @@ int  ring_designs_live(void);
  * patterns, frame by frame); malloc'd.  NULL: stock's files are the animations (ringdesign.c rd_stock reads them) */
 char *ring_stock(int i, size_t *n);
 void ring_unset(const char *pattern);
+int ring_pattern_active(const char *pattern);   /* set and still within its duration */
 /* One of the Echo's own patterns shows now (ring_set and not unset or played out): the live ring (ringlive.h) waits */
 int  ring_busy(void);
 /* The live ring draws Home Assistant's light (ringlive.h, "Light ring live" on): ring.c plays no palette pattern for it

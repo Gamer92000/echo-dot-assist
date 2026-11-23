@@ -293,7 +293,7 @@ const HELP = {
         h('button', { class: 'link', onclick: () => { updCheck.why = ''; paintStatus('online_updates'); } }, 'Dismiss')))
       : null; } },
 
-  arbitration: { icon: 'net', ha: ['Arbitration peers'], help: 'When several Echos hear the wake word, only the one that heard you best answers; the others stay silent and dark. Only devices listening for the same wake word compete. Off: this Echo answers every wake word it hears.',
+  arbitration: { icon: 'net', ha: ['Arbitration peers'], help: 'When several Echos hear the wake word, only the one that heard you best answers; the others stay silent. Only devices listening for the same wake word compete. Off: this Echo answers every wake word it hears.',
     status: () => {
       const a = state.arbitration; if (!a || !a.arbitrates || a.mode !== 'kiosk') return null;
       if (!a.kiosk_port) return h('p', { class: 'f-bad' }, icon('warn'), h('span', {}, 'Port 2330 could not be opened, so this Echo answers every wake word. The Echo\'s log (boot.log) says why.'));
@@ -389,6 +389,8 @@ const HELP = {
     ] },
   arbitration_offset: { parent: 'arbitration', when: () => settingValue('arbitration_mode') === 'kiosk',
     help: 'Evens out the Echo\'s loudness against your tablets\' microphones, which hear differently. If a tablet answers when you spoke to the Echo, raise it; if the Echo answers when you faced a tablet, lower it. Only counts against devices in Kiosk Satellite mode with a different offset: set the same on every Echo. Default 0 dB.' },
+  arbitration_ring: { parent: 'arbitration', when: () => settingValue('arbitration_mode') !== 'kiosk',
+    help: 'Lights the ring as soon as this Echo hears the wake word. If another Echo wins, this ring goes dark. Only the winner sends the request.' },
   arbitration_window_auto: { parent: 'arbitration', when: () => settingValue('arbitration_mode') !== 'kiosk',
     help: 'Each Echo measures how long the other Echos\' claims take to reach it and waits just long enough. That is for nearly all of them (95 %, plus a little), between 0.15 and 1 s. Wi-Fi repeaters, and routers that hold broadcasts back for devices saving power, make claims late; a wait too short for your network lets the farther Echo answer. Until it has measured ten claims it waits 0.5 s. It answers as soon as every other Echo\'s claim is in, so the wait costs time only when another Echo did not hear you. It also learns which Echos could beat it: it waits for another Echo only if, the last times it heard you about as clearly as now, that Echo heard you better or nearly as well. An Echo in another room that hears you faintly or not at all is not waited for; one close by is. Off: the fixed window below. On by default.',
     status: () => {
@@ -502,6 +504,7 @@ const SUB = {
   wake_engine: 'What listens for the wake word',
   arbitration_mode: 'How the Echos agree on who answers',
   arbitration_offset: 'Evens out the Echo against your tablets',
+  arbitration_ring: 'Show local wake word detection before an Echo is chosen',
   arbitration_window_auto: 'Waits just long enough for the other Echos',
   arbitration_window: 'How long the Echo waits for other devices',
   sound_detection: 'Events for smoke alarms, breaking glass, barking and more',

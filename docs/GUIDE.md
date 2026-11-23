@@ -269,8 +269,10 @@ satellite for a few seconds. `-w remote` in [`ARGS`](#hassmicconf) does the same
 ## Several Echos
 
 The Echos compare by how clearly the word stood out of the room's noise. An Echo in a conversation, or ringing, keeps
-the next wake word. With only one Echo there is no delay. The wait delays only the sound and the ring, not what you
-say: the Echo that answers sends Home Assistant everything from the end of the wake word, so speak on without a pause.
+the next wake word. With only one Echo there is no delay. By default the wake sound and listening ring wait for the
+decision. The Echo that answers sends Home Assistant everything from the end of the wake word, so speak on without a pause.
+- **Show the ring while choosing an Echo** (off by default, Echo network mode) lights the ring as soon as this Echo hears
+  the wake word. If a different Echo wins, this ring goes dark. Only the winner plays the wake sound and sends the request.
 How clearly the word stood out comes from Amazon's audio front end, which takes 0.15 s to answer on the Dots and up to
 0.4 s on an Echo Show; the Echo keeps listening meanwhile, and after 0.5 s without an answer it uses its own measure.
 

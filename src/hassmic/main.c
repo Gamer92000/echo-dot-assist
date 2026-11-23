@@ -416,6 +416,15 @@ static void led(const char *op, const char *pattern)
     screen_led(op, pattern);                        /* the face on a screen says the same (screen.h) */
 }
 
+/* The optional wake acknowledgement owns active-start while a local arbitration round is pending.
+ * core_lock protects changes; the LED worker reads the deadline so it can also clear the ring if capture stalls. */
+static atomic_llong wake_ring_until;
+
+static void wake_ring_clear(void)         /* core_lock held */
+{
+    if (atomic_exchange(&wake_ring_until, 0)) led("-u", "active-start");
+}
+
 /* "active-start"/"active-end", not the "ca-" ones of uxconfig.json (same look): ledcontroller turns only these two
  * towards the talker (issue #22).  The mixer's front end sends its beam on LIPC (com.doppler.lasp beam_index);
  * ledcontroller's EchoAnimationStore::getBeamIndexTask (libled_resources.so) stores it in every frame of exactly
@@ -426,6 +435,10 @@ static void led(const char *op, const char *pattern)
 static void led_for(enum state from, enum state to)
 {
     static const char *const pattern[] = { NULL, "active-start", "active-thinking", "active-talking" };
+    if (to == LISTENING && atomic_exchange(&wake_ring_until, 0)) {
+        if (ring_pattern_active("active-start")) return;     /* listening now owns the same animation */
+        /* A finite design may have finished before the decision; start it normally below. */
+    } else wake_ring_clear();
     if (pattern[from]) led("-u", pattern[from]);
     if (pattern[to]) led("-s", pattern[to]);
     else if (from != IDLE) led("-s", "active-end");
@@ -1264,6 +1277,7 @@ void core_call(int who, int st, const char *peer, int outgoing)
         else log_private("call: %s%s%s", call_names[st], peer[0] ? " " : "", peer);
         /* by name: connected and "answered here" share one animation, which the compiler need not merge into one
          * pointer: compared as pointers the change between them unset it and set it again */
+        if (call_led[st]) wake_ring_clear();
         int same = call_led[was] && call_led[st] && !strcmp(call_led[was], call_led[st]);
         if (call_led[was] && !same) led("-u", call_led[was]);
         if (call_led[st] && !same) led("-s", call_led[st]);
@@ -1493,7 +1507,7 @@ static void mute_update(int was, int sound)   /* lock held: ring, sound + Home A
     if (now == was) return;
     if (sound) sound_request(now ? SND_MICS_OFF : SND_MICS_ON);
     /* a plugin's copy of a request stops with the microphones, whatever the run does (3.3: soft mute too) */
-    if (now) { req_ending(PLUGIN_REQEND_MUTED); mics_off(); req_end(); led("-s", "mics-off_on"); }
+    if (now) { wake_ring_clear(); req_ending(PLUGIN_REQEND_MUTED); mics_off(); req_end(); led("-s", "mics-off_on"); }
     else { led("-u", "mics-off_on"); led("-s", "mics-off_end"); mics_on(); }
     if (connected && proto->mute_changed) proto->mute_changed(now);
     tell_plugins();
@@ -1566,6 +1580,7 @@ void core_restart_after(void)
 
 void core_pipeline_finish(void)
 {
+    wake_ring_clear();
     wake_fails = 0;
     if (atomic_exchange(&streaming, 0) && connected) {
         /* a run that only listened for the wake word is aborted, not ended: a stale error from it must not reach the next */
@@ -1714,6 +1729,7 @@ static void trigger(int touch, uint64_t from)
         barge_in = 1; barge_from = from; barge_src = touch ? PLUGIN_REQ_BUTTON : PLUGIN_REQ_WAKE_WORD;
         atomic_store(&flush_playback, 1);   /* playback thread drops TTS up to audio-stop, then we restart */
     }
+    wake_ring_clear();                              /* a trigger may have stopped or cancelled instead of listening */
     pthread_mutex_unlock(&core_lock);
 }
 
@@ -1828,8 +1844,8 @@ void core_alarm_stop_elsewhere(const char *why)
 /* ---------------------------------------------------------------- wake word arbitration (arb.c)
  * With other Echos in the arbitration network, a detection is scored and only acted on once the others' claims are in:
  * when every member's is (arb_settled), at the latest after the window (arb.c: learned, 150-1000 ms), in the capture
- * thread.  Until then nothing shows (no sound, no ring), so the Echos that lose stay
- * quiet.  The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream.
+ * thread. The optional early ring shows local recognition. Only the winner plays the wake sound and starts Assist.
+ * The audio of the window is not lost: the winner sends it from the ring buffer ahead of the live stream.
  * Nor is it without arbitration: Pryon accepts a keyword 116-128 ms after its end (6 accepts in device logs, "samples
  * <begin>-<end> (fed <n>)"), and the live stream starts with the next 50 ms block, so what the talker says right after
  * the wake word would be cut.  Every pipeline a wake word starts sends the ring from the end of the word's tail, which
@@ -2402,6 +2418,11 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     if (arb_due || score_due) return;               /* the same wake word once more while its round runs */
     pthread_mutex_lock(&core_lock);
     int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
+    if (can && error_shows() && settings_on("arbitration_ring") && arb_rounds()) {
+        /* 500 ms for the front end, up to 1000 ms for claims, with time for the next capture block. */
+        atomic_store(&wake_ring_until, mono_ms() + 2000);
+        led("-s", "active-start");
+    }
     pthread_mutex_unlock(&core_lock);
     if (!can) { trigger(0, end); return; }               /* could not answer: a claim would only silence the Echos that can */
     /* the one heard: with two wake words, Echos compete per wake word as they do with one each */
@@ -2826,6 +2847,7 @@ static void alarm_set(int on)          /* lock held */
      * alert's start until it stops, layer 3, so listening and replies show over it and it comes back after them.
      * "active_timer" has a file but no entry in layer_config_common.json on any model: ledcontroller refuses it
      * ("not in map"), and the ring stayed dark */
+    if (on) wake_ring_clear();
     led(on ? "-s" : "-u", "ready-timer");
     playback_hint();
     ringstop_ringing(on);               /* the other Echos may end it (timer_stop_from_others, issue #161) */
@@ -4027,6 +4049,12 @@ static void *volume_led_thread(void *arg)
         }
         at = atomic_load(&identify_until);
         if (at && mono_ms() >= at && atomic_compare_exchange_strong(&identify_until, &at, 0)) led("-u", "zzz_rainbow");
+        at = atomic_load(&wake_ring_until);
+        if (at && mono_ms() >= at) {
+            pthread_mutex_lock(&core_lock);
+            if (atomic_load(&wake_ring_until) == at) wake_ring_clear();
+            pthread_mutex_unlock(&core_lock);
+        }
         ring_tick();
         if (tick % 5 == 0) rd_tick();               /* root's answer to designs applied on the settings page */
         if (tick % 5 == 2) live_names_check();
@@ -4197,7 +4225,14 @@ static void *capture_thread(void *arg)
     (void)arg;
     while (!atomic_load(&quit)) {
         const void *pcm; int n = cap_read(&pcm);
-        if (n < 0) { fprintf(stderr, "capture: fatal\n"); atomic_store(&quit, 1); break; }
+        if (n < 0) {
+            fprintf(stderr, "capture: fatal\n");
+            pthread_mutex_lock(&core_lock);
+            wake_ring_clear();
+            pthread_mutex_unlock(&core_lock);
+            atomic_store(&quit, 1);
+            break;
+        }
         if (atomic_exchange(&button_pending, 0)) on_action();      /* SIGUSR2: action button, for tests on the PC */
         if (atomic_exchange(&pair_pending, 0)) on_pair();          /* SIGWINCH: both volume keys held, for tests on the PC */
         if (atomic_exchange(&held_pending, 0) && !on_held(mono_ms() - 1000)) button_event(BUTTON_ACTION, 1);    /* SIGURG: the action button held 1 s, as buttons.c tells it: down a second ago */
@@ -4321,7 +4356,17 @@ static void *capture_thread(void *arg)
         }
         if (score_due) score_wait();
         afe_late_check();
-        if (arb_due && (mono_ms() >= arb_due || arb_settled())) { arb_due = 0; if (arb_decide()) answer(arb_from, 1); else { afe_done(); wake_tell("answered_elsewhere"); } }    /* after this block went out live */
+        if (arb_due && (mono_ms() >= arb_due || arb_settled())) {    /* after this block went out live */
+            arb_due = 0;
+            if (arb_decide()) answer(arb_from, 1);
+            else {
+                pthread_mutex_lock(&core_lock);
+                wake_ring_clear();
+                pthread_mutex_unlock(&core_lock);
+                afe_done();
+                wake_tell("answered_elsewhere");
+            }
+        }
 
         pthread_mutex_lock(&core_lock);
         if ((state == LISTENING || state == THINKING) && time(NULL) - state_since > PIPELINE_TIMEOUT) {

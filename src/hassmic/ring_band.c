@@ -800,6 +800,16 @@ void ring_unset(const char *pattern)
     pthread_mutex_unlock(&lock);
 }
 
+int ring_pattern_active(const char *pattern)
+{
+    int i = find(pattern, NULL);
+    if (i < 0) return 0;
+    pthread_mutex_lock(&lock);
+    int active = act[i].on && (act[i].ms < 0 || now_ms() < act[i].at + act[i].ms);
+    pthread_mutex_unlock(&lock);
+    return active;
+}
+
 void ring_tick(void) {}
 
 void ring_light_live(int on) { (void)on; }     /* the band has no live ring (ringlive.h) */

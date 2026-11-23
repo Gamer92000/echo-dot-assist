@@ -28,6 +28,7 @@ TESTS = [
     ("arb-window", [PY, "tests/fake_ha_arbitration_window.py"]),
     ("arb-kiosk", [PY, "tests/fake_ha_arbitration_kiosk.py"]),
     ("arb-rounds", [PY, "tests/fake_ha_arbitration_rounds.py"]),
+    ("arb-ring", [PY, "tests/fake_ha_arbitration_ring.py"]),
     ("arb-join", [PY, "tests/fake_ha_arbitration_join.py"]),
     ("arb-afe", [PY, "tests/fake_ha_arbitration_afe.py"]),
     ("arb-duck", [PY, "tests/fake_ha_arbitration_duck.py"]),

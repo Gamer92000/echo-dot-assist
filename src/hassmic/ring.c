@@ -1409,6 +1409,15 @@ void ring_unset(const char *pattern)
     pthread_mutex_unlock(&lock);
 }
 
+int ring_pattern_active(const char *pattern)
+{
+    pthread_mutex_lock(&lock);
+    const struct shown *s = find(pattern);
+    int active = s && (s->ms < 0 || now_ms() < s->at + s->ms);
+    pthread_mutex_unlock(&lock);
+    return active;
+}
+
 void ring_tick(void)
 {
     long long now = now_ms();
