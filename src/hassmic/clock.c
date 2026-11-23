@@ -66,7 +66,7 @@ void clock_from_ha(uint32_t epoch)
     long long off = (long long)epoch - (long long)time(NULL);
     if (epoch < EPOCH_MIN) { fprintf(stderr, "clock: Home Assistant says %u, earlier than this build: ignored\n", epoch); return; }
     if (clock_synced() && off >= -2 && off <= 2) return;
-    clock_gettime(CLOCK_BOOTTIME, &bt);
+    if (clock_gettime(CLOCK_BOOTTIME, &bt)) clock_gettime(CLOCK_MONOTONIC, &bt); /* Echo 1: Linux 2.6.37 */
     snprintf(p, sizeof p, "%s/clock", state_dir());
     snprintf(t, sizeof t, "%u %lld.%02ld\n", epoch, (long long)bt.tv_sec, bt.tv_nsec / 10000000);
     if (statefile_write(p, 0666, t, strlen(t))) { fprintf(stderr, "clock: cannot write %s\n", p); return; }
@@ -119,7 +119,7 @@ static size_t stamp(char *o, size_t cap)
         return (size_t)snprintf(o, cap, "%04d-%02d-%02d %02d:%02d:%02d.%03ldZ ", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
                                 tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000);
     }
-    clock_gettime(CLOCK_BOOTTIME, &ts);
+    if (clock_gettime(CLOCK_BOOTTIME, &ts)) clock_gettime(CLOCK_MONOTONIC, &ts); /* kernels before 2.6.39 */
     return (size_t)snprintf(o, cap, "boot+%lld.%03ld ", (long long)ts.tv_sec, ts.tv_nsec / 1000000);
 }
 

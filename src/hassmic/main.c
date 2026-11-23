@@ -2760,6 +2760,7 @@ static void music_volume_write(void)
 
 int core_separate_volumes(int set)
 {
+    if (board.codename && !strcmp(board.codename, "misto")) return 0;
     if (set >= 0 && (set != 0) != vol_split) {
         /* on: each starts where everything was on the Echo's own speaker, so nothing jumps (levels after it, from
          * state/config or an import, then win: settings.c lists them later) */
@@ -2773,6 +2774,7 @@ int core_separate_volumes(int set)
 
 int core_even_volume(int set)
 {
+    if (board.codename && !strcmp(board.codename, "misto")) return 0;
     if (set >= 0 && (set != 0) != vol_even) {
         vol_even = set != 0;
         if (stream_owns_volume() || speaker_mode == SPEAKER_NONE) music_volume_keep();
@@ -2836,6 +2838,16 @@ static const char *own_volume_path(void)
 
 int core_volume(void)
 {
+    /* EchoRoot's wheel and audiod are authoritative. The Dot 2 curve and an
+     * old volume.music must not remap or restore the physical wheel's level. */
+    if (board.codename && !strcmp(board.codename, "misto") && volume < 0) {
+        vol_even = vol_split = 0;
+        volume = read_volume();
+        main_written = volume;  /* merely starting must not write the fallback to hardware */
+        tts_written = volume;
+        fprintf(stderr, "volume: EchoRoot native MainVolume %d\n", volume);
+        return volume;
+    }
     if (volume < 0) {                        /* whatever it was left at: in line now */
         /* volume.music only while state/config says the volumes are separate or the steps even (this may run before
          * settings_load): a hand edit or an older build (a fallback after an update) leaves the file behind with the
@@ -2891,6 +2903,8 @@ void core_speaker(int mode, int pct)
  * (ring.c; stock's otherwise, the two then look alike) */
 static void volume_led(int v, int assistant)
 {
+    /* EchoRoot/buttond owns the volume animation. Only sync the audio level. */
+    if (board.codename && !strcmp(board.codename, "misto")) return;
     char pat[32]; int step = v * board.volume_steps / 100 ? v * board.volume_steps / 100 : 1;
     if (assistant && ring_assistant_steps()) snprintf(pat, sizeof pat, "hassmic_assist_%02d", step);
     else snprintf(pat, sizeof pat, "volume_step-%02d", step);
@@ -3409,7 +3423,9 @@ int main(int argc, char **argv)
     if (print_mdns) { proto->print_mdns(); return 0; }
     clock_log_start();                              /* before any thread: it forks */
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch);
-    if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
+    if (board.codename && !strcmp(board.codename, "misto")) {
+        if (!use_led) setenv("MISTO_RING_DISABLE", "1", 1);
+    } else if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);
     { char rows[8];                                 /* the band's height before it starts (a preset's too): else the
                                                      * default 10 px came up first, and with "Light band" 0 the apps were

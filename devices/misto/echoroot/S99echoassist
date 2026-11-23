@@ -1,0 +1,43 @@
+#!/bin/sh
+BASE=${ECHOASSIST_HOME:-/home/root/echo1-assist}
+RUN=${ECHOASSIST_RUN:-/var/run/echoassist}
+LOG=${ECHOASSIST_LOG:-/tmp/echoassist.log}
+PROC=${ECHOASSIST_PROC_ROOT:-/proc}
+export ECHOASSIST_HOME="$BASE" ECHOASSIST_RUN="$RUN" ECHOASSIST_LOG="$LOG"
+running() {
+    [ -r "$RUN/pid" ] || return 1
+    read -r pid < "$RUN/pid"
+    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$pid" 2>/dev/null && grep -q 'echoassist-supervise.sh' "$PROC/$pid/cmdline" 2>/dev/null
+}
+start() {
+    if running; then echo "Echo Assist already running (supervisor $pid)"; return 0; fi
+    if [ -d "$RUN" ]; then
+        if [ ! -r "$RUN/pid" ]; then echo "Echo Assist startup in progress (or stale lock without PID: $RUN)"; return 1; fi
+        # Only remove this service's known stale files, never a directory tree.
+        rm -f "$RUN/pid" "$RUN/child"
+        rmdir "$RUN" || return 1
+    fi
+    mkdir "$RUN" || return 1
+    [ -x "$BASE/hassmic" ] && [ -r "$BASE/run-local.sh" ] && [ -r "$BASE/echoassist-supervise.sh" ] || {
+        rmdir "$RUN"; echo 'Echo Assist files missing' >&2; return 1;
+    }
+    (trap '' HUP; exec /bin/sh "$BASE/echoassist-supervise.sh") </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "$!" > "$RUN/pid"
+    echo "Echo Assist starting; log: $LOG"
+}
+stop() {
+    if ! running; then echo 'Echo Assist is not running'; return 0; fi
+    kill -TERM "$pid" || return 1
+    n=0
+    while running && [ "$n" -lt 15 ]; do sleep 1; n=$((n+1)); done
+    if running; then echo 'Supervisor has not stopped; inspect before restarting' >&2; return 1; fi
+    echo 'Echo Assist stopped'
+}
+case "${1:-}" in
+ start) start ;;
+ stop) stop ;;
+ restart) stop && start ;;
+ status) if running; then echo "Echo Assist running (supervisor $pid)"; if [ -r "$RUN/child" ]; then read -r child < "$RUN/child"; echo "hassmic PID: $child"; fi; else echo 'Echo Assist stopped'; exit 1; fi ;;
+ *) echo "Usage: $0 {start|stop|restart|status}"; exit 2 ;;
+esac

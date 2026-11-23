@@ -91,6 +91,13 @@
 #include "net.h"
 #include "netio.h"
 #include "statefile.h"
+#ifdef MISTO_BUILD
+#include "misto_lipc.h"
+#define MISTO_BT_HELPER "/home/root/echo1-assist/misto-bt-pair.py"
+static int misto_bt_available(void) { return access(MISTO_BT_HELPER, X_OK) == 0; }
+static int misto_bt_state(void) { int v=0; return misto_tool_int(MISTO_BT_HELPER,"bt","pair",NULL,&v) ? -1 : !!v; }
+static void misto_bt_set(int on) { if (misto_tool_int(MISTO_BT_HELPER,"bt","pair",&on,NULL)) fprintf(stderr,"misto: Bluetooth pairing change failed\n"); }
+#endif
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
 #include "../third_party/minimp3.h"
@@ -111,6 +118,7 @@ enum {
     LIST_UPDATE = 116, UPDATE_STATE, UPDATE_COMMAND, LIST_BUTTON = 61, BUTTON_COMMAND = 62,
     LIST_LIGHT = 15, LIGHT_STATE = 24, LIGHT_COMMAND = 32,
 };
+static int ring_color_mode(void) { return board.codename && !strcmp(board.codename, "misto") ? 1 : 35; }
 enum { COLOR_MODE_RGB = 35 };           /* on/off, brightness and RGB: the light ring's one mode */
 enum { UPDATE_CMD_INSTALL = 1, UPDATE_CMD_CHECK = 2 };
 /* Proxy features: passive scan, active connections, remote caching (Home Assistant keeps the GATT database and writes the
@@ -391,13 +399,17 @@ static int listed(int key);
 static void send_setting(int key)       /* lock held */
 {
     if (!listed(key)) return;
-    PB(b, 48);
+    PB(b, 128); /* LightStateResponse includes the full effect name. */
     pb_fixed32(&b, 1, key);
     switch (key) {
     case KEY_MIC_LEVEL: pb_float(&b, 2, settings_mic_level()); send_state(NUMBER_STATE, &b); break;
     case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
-    case KEY_BT_PAIRING: if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
+    case KEY_BT_PAIRING:
+#ifdef MISTO_BUILD
+        if (misto_bt_available()) { int state=misto_bt_state(); if (state>=0) { pb_uint(&b, 2, state); send_state(SWITCH_STATE, &b); } break; }
+#endif
+        if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_ANNOUNCE: if (ble_present()) { pb_uint(&b, 2, core_bt_announce(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_DND:   pb_uint(&b, 2, core_dnd(-1)); send_state(SWITCH_STATE, &b); break;
     case KEY_DENOISE: pb_str(&b, 2, denoise_names[core_mic_denoise(-1)]); send_state(SELECT_STATE, &b); break;
@@ -432,7 +444,7 @@ static void send_setting(int key)       /* lock held */
         pb_fixed32(&t, 1, key); pb_str(&t, 2, key == KEY_LAST_HEARD ? last_heard : last_reply); send_state(TEXT_SENSOR_STATE, &t); } break;
     case KEY_LIGHT: {
         struct ring_light l; ring_light_get(&l);
-        pb_uint(&b, 2, l.on); pb_float(&b, 3, l.brightness); pb_uint(&b, 11, COLOR_MODE_RGB); pb_float(&b, 10, l.color_brightness);
+        pb_uint(&b, 2, l.on); pb_float(&b, 3, l.brightness); pb_uint(&b, 11, ring_color_mode()); pb_float(&b, 10, l.color_brightness);
         pb_float(&b, 4, l.r); pb_float(&b, 5, l.g); pb_float(&b, 6, l.b); pb_str(&b, 9, ring_effects[l.effect]);
         send_state(LIGHT_STATE, &b);
     } break;
@@ -546,7 +558,7 @@ static void send_light_entities(void)
     /* Home Assistant's light on the ring (ring.h): a palette made beforehand, so the colour shows as the nearest of
      * it; the state says what was asked for */
     if (listed(KEY_LIGHT)) { PB(b, 256); pb_str(&b, 1, "light_ring"); pb_fixed32(&b, 2, KEY_LIGHT); pb_str(&b, 3, "Light ring");
-      pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1);
+      pb_uint(&b, 12, ring_color_mode()); if (ring_color_mode() == COLOR_MODE_RGB) { pb_uint(&b, 5, 1); pb_uint(&b, 6, 1); }
       for (int i = 0; i < ring_neffects; i++) if (ring_effect_listed(i)) pb_str(&b, 11, ring_effects[i]);
       pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
     /* Its fill (issue #57): a timer's or a washing machine's progress, a battery.  Kept over the light being off, as its
@@ -608,7 +620,11 @@ static int listed(int key)
     case KEY_SOUND: return settings_on("sound_detection");
     case KEY_WAKE: return settings_on("wake_events");
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: return settings_on("request_text");
-    case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
+    case KEY_BT_PAIRING:
+#ifdef MISTO_BUILD
+        if (misto_bt_available()) return 1;
+#endif
+        return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
     case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
@@ -784,7 +800,12 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_WAKE_SOUND) core_wake_sound(on);
     else if (type == SWITCH_COMMAND && key == KEY_BT_ANNOUNCE) core_bt_announce(on);
     else if (type == SWITCH_COMMAND && key == KEY_DND) core_dnd(on);
-    else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) { a2dp_pair(on); return; }     /* its state follows through bt_changed */
+    else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) {
+#ifdef MISTO_BUILD
+        if (misto_bt_available()) { misto_bt_set(on); send_setting(KEY_BT_PAIRING); return; }
+#endif
+        a2dp_pair(on); return;
+    }
     else if (type == SWITCH_COMMAND && key == KEY_BT_OUT_SEARCH && ble_present()) { a2dp_out_search(on); return; }   /* a2dp.c keeps them */
     else if (type == SWITCH_COMMAND && key == KEY_BT_OUT && ble_present()) { a2dp_out_enable(on); send_setting(key); return; }
     else if (type == NUMBER_COMMAND && key == KEY_BT_OUT_DELAY && ble_present()) { a2dp_out_delay(num < 0 ? 0 : (int)lroundf(num)); send_setting(key); return; }

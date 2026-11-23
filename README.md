@@ -1,5 +1,8 @@
 # echo-dot-assist
 
+> **Vibe-coded:** the Echo 1 / EchoRoot port on this branch was developed with AI
+> assistance and is experimental. See [port status and limitations](devices/misto/README.md).
+
 **Turn an old Amazon Echo into a Home Assistant voice satellite that never talks to Amazon.**
 
 The Echo keeps what it is good at: Amazon's microphone processing and wake word engine, so it still hears you across

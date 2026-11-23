@@ -159,14 +159,14 @@ static int pending(char kind[8], unsigned *id)
 /* mu held.  0 if a new request may go now; else -1 with the reason */
 static int may_ask(const char *kind, unsigned *id, int *busy, char *err, size_t errsz)
 {
-    char k[8]; unsigned pid; struct result r;
+    char k[8]; unsigned pid;
     *busy = 1;
     if (pending(k, &pid)) {
         if (!strcmp(kind, "scan") && !strcmp(k, "scan")) { *id = pid; return 1; }           /* the same scan, asked twice */
         snprintf(err, errsz, "The Echo has not taken the last request yet: try again in a few seconds"); return -1;
     }
-    if (out_exists("lock") && !read_result(&r) && !strcmp(r.state, "switching")) {
-        snprintf(err, errsz, "The Echo is switching networks right now"); return -1;
+    if (out_exists("lock")) {
+        snprintf(err, errsz, "The Echo is switching networks or scanning right now"); return -1;
     }
     *busy = 0;
     return 0;

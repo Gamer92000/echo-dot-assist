@@ -410,3 +410,20 @@ clean:
 	rm -rf build
 
 .PHONY: all host unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE
+
+# Echo 1 prototype. Static Linux, not the Android NDK. Caller supplies compiler
+# and static opus/zlib archives in MISTO_DEPS (see devices/misto/README.md).
+MISTO_CC ?= arm-linux-musleabi-gcc
+MISTO_DEPS ?= /tmp/misto-deps
+MISTO_SRC := $(HASSMIC) devices/misto/board.c src/hassmic/audio_misto.c src/hassmic/misto_lipc.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c
+MISTO_OBJ := $(patsubst %.c,build/misto/obj/%.o,$(MISTO_SRC))
+MISTO_CFLAGS ?= -O2 -march=armv7-a -mfloat-abi=soft
+build/misto/obj/%.o: %.c $(HASSMIC_H) Makefile
+	@mkdir -p $(dir $@)
+	$(MISTO_CC) $(MISTO_CFLAGS) -DMISTO_BUILD -std=gnu11 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic -I$(MISTO_DEPS)/include -c $< -o $@
+misto: $(MISTO_OBJ)
+	$(MISTO_CC) -static -march=armv7-a $(MISTO_OBJ) -o build/misto/hassmic -L$(MISTO_DEPS)/lib -lpthread -lopus -lz -lm -ldl
+
+misto-host: $(MISTO_SRC) $(HASSMIC_H)
+	@mkdir -p build/misto
+	cc -O2 -std=gnu11 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o build/misto/hassmic-host -lpthread -lopus -lz -lm -ldl

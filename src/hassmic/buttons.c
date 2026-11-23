@@ -312,6 +312,41 @@ static void grab(const struct input *in)
     else fprintf(stderr, "buttons: %s grabbed: its keys reach nothing else\n", in->dev);
 }
 
+/* Echo 1 keeps buttond in charge of mute/volume. KEY_HELP's polarity is
+ * board-specific: sample its idle bit at start, while the key is released.
+ * Observe without EVIOCGRAB; never open the rotary encoder's event1. */
+static void *misto_reader(void *arg)
+{
+    const struct input *in = arg;
+    unsigned long keys[(KEY_MAX + 1 + 8 * sizeof(unsigned long) - 1) / (8 * sizeof(unsigned long))];
+    int idle = 1;  /* observed on this Echo; ioctl normally supplies the truth */
+    memset(keys, 0, sizeof keys);
+    if (!ioctl(in->fd, EVIOCGKEY(sizeof keys), keys))
+        idle = !!(keys[KEY_HELP / (8 * sizeof *keys)] & (1UL << (KEY_HELP % (8 * sizeof *keys))));
+    else fprintf(stderr, "buttons: misto cannot read idle state, default released=1\n");
+    const char *override = getenv("HASSMIC_MISTO_ACTION_IDLE");
+    if (override && (!strcmp(override, "0") || !strcmp(override, "1"))) idle = override[0] - '0';
+    fprintf(stderr, "buttons: misto %s KEY_HELP=138, released=%d; observing, no grab\n", in->dev, idle);
+    int down = 0; long long since = 0, last = 0;
+    struct input_event ev;
+    while (read(in->fd, &ev, sizeof ev) == sizeof ev) {
+        if (ev.type != EV_KEY || ev.code != KEY_HELP || (ev.value != 0 && ev.value != 1)) continue;
+        long long now = now_ms();
+        if (ev.value != idle) {
+            if (!down) { down = 1; since = now; }
+        } else if (down) {
+            down = 0;
+            if (now - since < SHORT_PRESS_MS && (!last || now - last >= 150)) {
+                last = now;
+                fprintf(stderr, "buttons: misto short action\n");
+                if (handler.action) handler.action();
+            }
+        }
+    }
+    fprintf(stderr, "buttons: misto reader stopped\n");
+    return NULL;
+}
+
 int buttons_start(const char *device, const struct button_handler *h)
 {
     pthread_t t; int pfd, f2;
@@ -321,6 +356,11 @@ int buttons_start(const char *device, const struct button_handler *h)
     int f1 = open_input(device);
     if (f1 < 0) return -1;
     keypads[0] = (struct input){ f1, device };
+    if (board.codename && !strcmp(board.codename, "misto")) {
+        if (pthread_create(&t, NULL, misto_reader, &keypads[0])) { close(f1); return -1; }
+        pthread_detach(t);
+        return 0;
+    }
     if (board.keypad2 && (f2 = open_input(board.keypad2)) >= 0) {   /* keys split over two nodes (biscuit) */
         keypads[1] = (struct input){ f2, board.keypad2 };
         if (pthread_create(&t, NULL, reader, &keypads[1])) close(f2);

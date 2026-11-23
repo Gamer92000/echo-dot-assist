@@ -3095,7 +3095,7 @@ function wifiDialog() {
     body.replaceChildren(
       newAddress(net.ssid),
       open ? null : passField,
-      h('p', { class: 'help' }, 'If the Echo does not get on it within about a minute, it goes back to the network it is on now, and this page tells you why. Once it works, the Echo forgets the networks it knew before.'));
+      h('p', { class: 'help' }, 'If the Echo does not get on it within about a minute, it goes back to the network it is on now, and this page tells you why. It saves the new network after connecting.'));
     foot.replaceChildren(h('button', { type: 'button', onclick: pickView }, 'Back'), go);
     repaint();
     if (!open && !pass.value) pass.focus();
