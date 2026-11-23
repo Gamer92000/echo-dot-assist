@@ -133,6 +133,8 @@ static void grab(const struct input *in);
 static void *reader(void *arg)
 {
     const struct input *in = arg; int rfd = in->fd;
+    const char *action_key_env = getenv("HASSMIC_ACTION_KEY");
+    const int action_key = action_key_env ? atoi(action_key_env) : 0;
     struct input_event ev; long long action_down = 0, vol_down[2] = { 0, 0 }; int combo_done = 0, held = 0;
     int action_told = 0, vol_told[2] = { 0, 0 };   /* this press went to handler.event already, or must not (a pair) */
     grab(in);
@@ -166,6 +168,7 @@ static void *reader(void *arg)
         }
         if (read(rfd, &ev, sizeof ev) != sizeof ev) break;
         if (ev.type != EV_KEY) continue;
+        if (action_key > 0 && ev.code == action_key) ev.code = KEY_HELP;
         now = now_ms();
         switch (ev.code) {
         case KEY_HELP:

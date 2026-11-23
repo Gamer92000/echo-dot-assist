@@ -141,6 +141,10 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef L09G_PORT
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
 #include "hash.h"
 #include "ws.h"
 #include "statefile.h"
@@ -229,7 +233,11 @@ enum { F_QUIET = 1, F_KIOSK = 2, F_HELLO = 4 };
 #define KIOSK_PHRASE  64
 
 static pthread_mutex_t lk = PTHREAD_MUTEX_INITIALIZER; /* everything below; taken after core_lock, never before it */
-static int sock = -1, running, arbitrate = 1;    /* arbitrate: take part in rounds (the network runs regardless) */
+#ifdef L09G_PORT
+static int sock = -1, running, arbitrate = 0;    /* Keep existing wake behaviour until explicitly enabled. */
+#else
+static int sock = -1, running, arbitrate = 1;
+#endif
 static struct sockaddr_in dest;
 static const struct arb_hooks *hooks;
 static char node[NLEN];
@@ -426,6 +434,26 @@ static int tag_ok(const uint8_t *p, size_t n)
 static void send_pkt(const struct pkt *b)
 {
     static int last_err;
+#ifdef L09G_PORT
+    /* The device firewall permits the local subnet, but rejects the all-networks broadcast.
+     * Refresh so boot before DHCP and a later network change both recover automatically. */
+    static long long addr_at;
+    long long now = now_ms();
+    if (!getenv("HASSMIC_ARB_ADDR") && (!addr_at || now - addr_at >= 3000)) {
+        struct ifaddrs *ifs;
+        addr_at = now;
+        if (!getifaddrs(&ifs)) {
+            for (struct ifaddrs *i = ifs; i; i = i->ifa_next) {
+                if (i->ifa_addr && i->ifa_addr->sa_family == AF_INET &&
+                    i->ifa_broadaddr && (i->ifa_flags & IFF_BROADCAST) && !strcmp(i->ifa_name, "wlan0")) {
+                    dest.sin_addr = ((struct sockaddr_in *)i->ifa_broadaddr)->sin_addr;
+                    break;
+                }
+            }
+            freeifaddrs(ifs);
+        }
+    }
+#endif
     if (sendto(sock, b->p, b->n, 0, (const struct sockaddr *)&dest, sizeof dest) >= 0) { last_err = 0; return; }
     if (errno != last_err) fprintf(stderr, "arbitration: send: %s\n", strerror(errno));      /* once, not every beacon while Wi-Fi is down */
     last_err = errno;

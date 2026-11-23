@@ -1,3 +1,11 @@
+# Xiaomi Mi Smart Speaker L09G — experimental port
+
+This branch contains an experimental port of echo-dot-assist to the Xiaomi Mi Smart Speaker L09G. Start with the [L09G documentation](devices/l09g/README.md) ([по-русски](devices/l09g/README_RU.md)). The Echo installation instructions below do **not** install this port.
+
+**Vibecoded:** the L09G port was developed with AI assistance (OpenAI Codex), with iterative testing on a real speaker. It is experimental, not an official Xiaomi or upstream echo-dot-assist release.
+
+The original project's README follows.
+
 # echo-dot-assist
 
 **Turn an old Amazon Echo into a Home Assistant voice satellite that never talks to Amazon.**

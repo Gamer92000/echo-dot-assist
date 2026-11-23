@@ -51,6 +51,9 @@
 #include "musiclight.h"
 #include "ringdesign.h"
 #include "ledq.h"
+#ifdef L09G_PORT
+#include "led_l09g.h"
+#endif
 #include "screen.h"
 #include "davs.h"
 #include "dropin.h"
@@ -389,6 +392,9 @@ static void led_run(const char *op, const char *pattern) { ledq_run(op, pattern)
 static void led(const char *op, const char *pattern)
 {
     if (!pattern) return;
+#ifdef L09G_PORT
+    l09g_led_event(op, pattern);
+#endif
     if (!strcmp(op, "-s")) { ringlive_yield(); ring_set(pattern); ringlive_yield_end(); } else ring_unset(pattern);
     screen_led(op, pattern);                        /* the face on a screen says the same (screen.h) */
 }
@@ -3012,7 +3018,11 @@ void core_speaker_volume(int pct)
 static void level_step(int k, int dir)
 {
     static const char *const what[VOL_KINDS] = { "assistant", "sounds", "timers", "calls" };
+#ifdef L09G_PORT
+    int v = kinds[k].level = clamp100(kinds[k].level + dir * 3);
+#else
     int v = kinds[k].level = clamp100((kinds[k].level + 5) / 10 * 10 + dir * 10);
+#endif
     mix_apply();
     volume_led(v, k == VOL_ASSISTANT);
     fprintf(stderr, "volume: %s %d\n", what[k], v);
@@ -3379,7 +3389,11 @@ static void on_volume(int dir)
     int k = !vol_split ? -1 : atomic_load(&dropin_live) ? VOL_CALLS : atomic_load(&tts_on) && !tts_media ? VOL_ASSISTANT
           : atomic_load(&alarm_on) ? VOL_TIMERS : -1;
     if (k >= 0 && !kinds[k].linked) level_step(k, dir);
+#ifdef L09G_PORT
+    else core_set_volume(core_volume() + dir * 3);
+#else
     else core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
+#endif
     int now = k >= 0 ? kind_volume(k) : core_volume();         /* linked: the music moved, the kind with it */
     /* at 0 the lowest step's, so a press is still heard where another kind keeps the speaker up (separate volumes;
      * above the loudest, scaled() leaves it at full) */
@@ -3714,6 +3728,9 @@ int main(int argc, char **argv)
       if (core_local_wake && !settings_peek("wake_engine", eng, sizeof eng) && !strcmp(eng, "homeassistant")) core_local_wake = 0; }
     if (print_mdns) { proto->print_mdns(); return 0; }
     clock_log_start();                              /* before any thread: it forks */
+#ifdef L09G_PORT
+    if (l09g_led_start()) fprintf(stderr, "l09g leds: cannot start\n");
+#endif
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);

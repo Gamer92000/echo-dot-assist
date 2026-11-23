@@ -26,6 +26,7 @@
  */
 #include "wifimotion.h"
 #include <limits.h>
+#include <sys/socket.h>
 #include <linux/wireless.h>
 #include <math.h>
 #include <pthread.h>

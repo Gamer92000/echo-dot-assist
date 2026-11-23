@@ -8,6 +8,7 @@
 float diag_soc_temp(void)
 {
     char path[80], type[32]; float t = NAN;
+    if (!board.thermal_type || !board.thermal_type[0]) return t;
     for (int z = 0; z < 16; z++) {
         snprintf(path, sizeof path, "/sys/class/thermal/thermal_zone%d/type", z);
         FILE *f = fopen(path, "r"); if (!f) break;

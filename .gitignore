@@ -22,3 +22,7 @@ xda_post.md
 __pycache__/
 *.pyc
 /kiosk-satellite-*.apk
+# L09G: device-extracted libraries, credentials and local build tools
+/devices/l09g/target-libs/
+/devices/l09g/toolchain/
+/devices/l09g/state/

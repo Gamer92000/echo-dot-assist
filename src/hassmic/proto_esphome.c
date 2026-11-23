@@ -97,6 +97,12 @@
 #include "net.h"
 #include "netio.h"
 #include "statefile.h"
+#ifdef L09G_PORT
+#include "led_l09g.h"
+extern int l09g_bt_power(int set);
+#define KEY_L09G_BLUETOOTH 0x4c303942
+#define KEY_L09G_LIGHT 0x4c30394c
+#endif
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
 #include "../third_party/minimp3.h"
@@ -401,6 +407,13 @@ static void send_setting(int key)       /* lock held */
     case KEY_MIC_LEVEL: pb_float(&b, 2, settings_mic_level()); send_state(NUMBER_STATE, &b); break;
     case KEY_MUTE:  pb_uint(&b, 2, core_muted()); send_state(SWITCH_STATE, &b); break;
     case KEY_WAKE_SOUND: pb_uint(&b, 2, core_wake_sound(-1)); send_state(SWITCH_STATE, &b); break;
+#ifdef L09G_PORT
+    case KEY_L09G_BLUETOOTH: pb_uint(&b, 2, l09g_bt_power(-1)); send_state(SWITCH_STATE, &b); break;
+    case KEY_L09G_LIGHT: { struct l09g_light l; l09g_light_get(&l); PB(t, 96);
+        pb_fixed32(&t, 1, key); pb_uint(&t, 2, l.on); pb_float(&t, 3, l.brightness);
+        pb_float(&t, 4, l.r); pb_float(&t, 5, l.g); pb_float(&t, 6, l.b);
+        pb_float(&t, 10, l.color_brightness); pb_uint(&t, 11, COLOR_MODE_RGB); send_state(LIGHT_STATE, &t); } break;
+#endif
     case KEY_BT_PAIRING: if (ble_present()) { pb_uint(&b, 2, a2dp_pairing()); send_state(SWITCH_STATE, &b); } break;
     case KEY_BT_ANNOUNCE: if (ble_present()) { pb_uint(&b, 2, core_bt_announce(-1)); send_state(SWITCH_STATE, &b); } break;
     case KEY_DND:   pb_uint(&b, 2, core_dnd(-1)); send_state(SWITCH_STATE, &b); break;
@@ -557,6 +570,9 @@ static void send_light_states(void)     /* lock held */
     if (listed(KEY_LUX)) { sent_lux = core_lux(); sent_at = time(NULL); send_sensor(KEY_LUX, sent_lux); }
     sent_level = core_led_brightness(-1); level_at = time(NULL);
     send_setting(KEY_LED_AUTO); send_setting(KEY_LED_BRIGHTNESS); send_setting(KEY_LIGHT);
+#ifdef L09G_PORT
+    send_setting(KEY_L09G_LIGHT);
+#endif
     send_setting(KEY_RING_FILL); send_setting(KEY_RING_ROTATION);
     for (int i = 0; i < RING_LEDS_MAX; i++) send_setting(KEY_LIVE_LED + i);
     send_setting(KEY_LIVE_DESIGN);
@@ -565,6 +581,10 @@ static void send_light_states(void)     /* lock held */
 
 static void send_light_entities(void)
 {
+#ifdef L09G_PORT
+    { PB(b, 160); pb_str(&b, 1, "l09g_light_ring"); pb_fixed32(&b, 2, KEY_L09G_LIGHT); pb_str(&b, 3, "Light ring");
+      pb_uint(&b, 12, COLOR_MODE_RGB); pb_uint(&b, 5, 1); pb_uint(&b, 6, 1); pb_str(&b, 14, "mdi:circle-slice-8"); send_msg(LIST_LIGHT, &b); }
+#endif
     /* Home Assistant's light on the ring (ring.h): a palette made beforehand, so the colour shows as the nearest of
      * it; the state says what was asked for.  With "Light ring live" on the Echo draws it itself (ringlive.h): the
      * exact colour, more effects, a fade, under the LEDs' own lights */
@@ -699,6 +719,9 @@ static void send_setting_entities(void)
         pb_float(&b, 6, -6); pb_float(&b, 7, 6); pb_float(&b, 8, 1); pb_str(&b, 11, "dB"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b);
     }
     { PB(b, 128); pb_str(&b, 1, "mute"); pb_fixed32(&b, 2, KEY_MUTE); pb_str(&b, 3, "Mute"); pb_str(&b, 5, "mdi:microphone-off"); send_msg(LIST_SWITCH, &b); }
+#ifdef L09G_PORT
+    { PB(b, 128); pb_str(&b, 1, "l09g_bluetooth"); pb_fixed32(&b, 2, KEY_L09G_BLUETOOTH); pb_str(&b, 3, "Bluetooth pairing"); pb_str(&b, 5, "mdi:bluetooth"); send_msg(LIST_SWITCH, &b); }
+#endif
     { PB(b, 128); pb_str(&b, 1, "do_not_disturb"); pb_fixed32(&b, 2, KEY_DND); pb_str(&b, 3, "Do not disturb"); pb_str(&b, 5, "mdi:minus-circle");
       send_msg(LIST_SWITCH, &b); }
     if (listed(KEY_SENDSPIN_TOKEN)) { PB(b, 192); pb_str(&b, 1, "sendspin_pairing_token"); pb_fixed32(&b, 2, KEY_SENDSPIN_TOKEN); pb_str(&b, 3, "Sendspin pairing token");
@@ -859,6 +882,9 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     }
     else if (type == SWITCH_COMMAND && key == KEY_MUTE) { core_soft_mute(on); settings_save(); send_setting(KEY_MUTE); return; }
     else if (type == SWITCH_COMMAND && key == KEY_WAKE_SOUND) core_wake_sound(on);
+#ifdef L09G_PORT
+    else if (type == SWITCH_COMMAND && key == KEY_L09G_BLUETOOTH) { l09g_bt_power(on); send_setting(key); return; }
+#endif
     else if (type == SWITCH_COMMAND && key == KEY_BT_ANNOUNCE) core_bt_announce(on);
     else if (type == SWITCH_COMMAND && key == KEY_DND) core_dnd(on);
     else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) { a2dp_pair(on); return; }     /* its state follows through bt_changed */
@@ -953,6 +979,16 @@ static void on_light(const unsigned char *p, const unsigned char *end)      /* l
         else if (f.field == 3) v[3] = f.v != 0;
         else has[f.field] = f.v != 0;
     }
+#ifdef L09G_PORT
+    if (key == KEY_L09G_LIGHT) {
+        struct l09g_light light; l09g_light_get(&light);
+        if (has[2]) light.on = v[3] != 0;
+        if (has[4]) light.brightness = v[5];
+        if (has[20]) light.color_brightness = v[21];
+        if (has[6]) { light.r = v[7]; light.g = v[8]; light.b = v[9]; }
+        l09g_light_set(&light); send_setting(key); return;
+    }
+#endif
     if (key >= KEY_LIVE_LED && key < KEY_LIVE_LED + RING_LEDS_MAX && listed(key)) {      /* one LED of the live ring */
         struct live_led ll; ringlive_led_get((int)(key - KEY_LIVE_LED), &ll);
         if (has[2]) ll.on = v[3] != 0;
@@ -1741,6 +1777,9 @@ static void on_va_set_config(const unsigned char *p, const unsigned char *end)
 static void send_all_settings(void)
 {
     send_setting(KEY_MIC_LEVEL); send_setting(KEY_DENOISE); send_setting(KEY_MUTE); send_setting(KEY_WAKE_SOUND); send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_ANNOUNCE); send_setting(KEY_DND); send_setting(KEY_SOUND_DETECTION);
+#ifdef L09G_PORT
+    send_setting(KEY_L09G_BLUETOOTH);
+#endif
         send_setting(KEY_BT_LANG);
         for (int k = KEY_EQ_BASS; k <= KEY_EQ_TREBLE; k++) send_setting(k);
         for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k);
