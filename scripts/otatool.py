@@ -7,6 +7,7 @@
   otatool.py install PUBLIC BUNDLE SIG DESTDIR           verify, then unpack into DESTDIR (must not exist yet)
   otatool.py push    HOST PORT BUNDLE SIG                send to a running hassmic, print its answer (exit 0 on "OK ...")
   otatool.py adb     HOST PORT SECRET                    open adb over Wi-Fi on it for 30 min (sign its challenge)
+  otatool.py plugin  HOST PORT SECRET PACKAGE [WAIT]     an official plugin's .hmp to it (scripts/ota-push.sh --plugin)
 
 The same commands, files and answers as src/tools/otatool.c, which stays the Echo's own (it has no Python) and is
 what checks these bundles there.  tests/otatool_test.sh holds the two to each other: same keys, signatures byte for
@@ -17,7 +18,7 @@ SHA-512), so no Python package does it; the arithmetic below is RFC 8032's.  Not
 the owner's PC or in CI, where nobody times it.
 Bundle: "HMOTA1\\n" "version <v>\\n" then per file "file <name> <octal mode> <size>\\n" + <size> bytes, then "end\\n".
 """
-import hashlib, os, re, socket, sys
+import hashlib, os, re, socket, sys, time
 
 P = 2**255 - 19
 L = 2**252 + 27742317777372353535851937790883648493
@@ -96,9 +97,24 @@ def sign(sk, msg):
     return rb + ((r + h(rb, sk[32:], msg) % L * a) % L).to_bytes(32, "little")
 
 
+IDENTITY = (0, 1, 1, 0)
+
+
+def weak(pk):
+    """no key to take: a public key under which any signature holds (src/include/edkey.h), one of small order, [8]A
+    the identity.  crypto_eddsa_check is cofactored, so under such a key the null signature (R the identity, s = 0)
+    verifies for every text.  keygen never makes one ([a]B for a secret scalar); a placeholder or a file of zeros is
+    one.  And any key decode() refuses: six such encodings (y = p and p + 1, the order-2 point and the identity with
+    the sign bit set, each sign) Monocypher reads as points of small order, and the Echo refuses them (ed_key_weak)
+    while the Makefile, the index's tool and an author's check took them (a review of 3c5d7ff, R4); the rest are no
+    point at all, under which nothing verifies.  A key to take is a point this reads, of large order"""
+    a = decode(pk) if len(pk) == 32 else None
+    return a is None or encode(mul(8, a)) == encode(IDENTITY)
+
+
 def check(sig, pk, msg):
     a = decode(pk)
-    if a is None or len(sig) != 64:
+    if a is None or len(sig) != 64 or weak(pk):
         return False
     s = int.from_bytes(sig[32:], "little")
     if s >= L:
@@ -147,6 +163,8 @@ def secret(path):
 
 def keygen(sec, pub):
     sk, pk = key_pair(os.urandom(32))
+    if weak(pk):                                # (never: [a]B has the order of B; said, not assumed)
+        die("keygen made a key of small order")
     spit(sec, sk, 0o600)
     spit(pub, pk, 0o644)
 
@@ -178,6 +196,8 @@ def verify_install(pub, bundle, sigpath, dest=None):
     pk, b, sig = slurp(pub), slurp(bundle), slurp(sigpath)
     if len(pk) != 32 or len(sig) != 64:
         die("bad key, bundle or signature file")
+    if weak(pk):
+        die(f"{pub}: a key under which any signature holds (small order) or no point at all: no key, nothing installed")
     if not check(sig, pk, b):
         die("SIGNATURE DOES NOT VERIFY, nothing installed")
     if not b.startswith(b"HMOTA1\n"):
@@ -224,7 +244,10 @@ def read_line(s):
 
 
 def answer(s):
-    line = read_line(s)
+    try:
+        line = read_line(s)
+    except OSError:
+        line = ""
     s.close()
     print(line or "FAILED no answer")
     return 0 if line.startswith("OK") else 1
@@ -235,7 +258,10 @@ def push(host, port, bundle, sigpath):
     if len(sig) != 64:
         return 1
     s = connect(host, port)
-    s.sendall(b"HMOTA-PUSH1 %d\n" % len(b) + sig + b)
+    try:
+        s.sendall(b"HMOTA-PUSH1 %d\n" % len(b) + sig + b)
+    except OSError:
+        pass  # the Echo closed while we sent: its reason ("FAILED busy ...") is the line it left, read below
     return answer(s)
 
 
@@ -252,6 +278,38 @@ def challenge(host, port, sec, req):
     return answer(s)
 
 
+def plugin(host, port, sec, package, wait="0"):
+    """An official plugin's package to an installed Echo (src/hassmic/ota.c "HMOTA-PLUG1"): the update key answers
+    the port's challenge over the package's digest, the package's own listing by the release key is what the Echo
+    installs it for.  WAIT: seconds to keep trying to connect (a hassmic just pushed is starting)."""
+    sk, b = secret(sec), slurp(package)
+    req = b"HMOTA-PLUG1 %d %s\n" % (len(b), hashlib.blake2b(b, digest_size=32).hexdigest().encode())
+    end = time.monotonic() + float(wait)
+    while True:
+        try:
+            s = socket.create_connection((host, int(port)), timeout=60)
+            break
+        except OSError as e:
+            if time.monotonic() >= end:
+                die(f"cannot connect to {host}:{port}: {e.strerror or e}")
+            time.sleep(1)
+    s.sendall(req)
+    line = read_line(s)
+    if not re.fullmatch(r"NONCE [0-9a-fA-F]{64}", line):
+        print(line or "FAILED no challenge (an older hassmic?)")
+        return 1
+    s.sendall(sign(sk, req + bytes.fromhex(line[6:])))
+    line = read_line(s)
+    if line != "SEND":
+        print(line or "FAILED no answer")
+        return 1
+    try:
+        s.sendall(b)
+    except OSError:
+        pass  # as in push()
+    return answer(s)
+
+
 def main(a):
     if len(a) == 3 and a[0] == "keygen":
         return keygen(a[1], a[2])
@@ -265,7 +323,9 @@ def main(a):
         return push(*a[1:])
     if len(a) == 4 and a[0] == "adb":
         return challenge(a[1], a[2], a[3], b"HMOTA-ADB1\n")
-    print("usage: otatool.py keygen SECRET PUBLIC | push HOST PORT BUNDLE SIG | adb HOST PORT SECRET | "
+    if len(a) in (5, 6) and a[0] == "plugin":
+        return plugin(*a[1:])
+    print("usage: otatool.py keygen SECRET PUBLIC | push HOST PORT BUNDLE SIG | adb HOST PORT SECRET | plugin HOST PORT SECRET PACKAGE [WAIT] | "
           "pack SECRET VERSION OUT FILE[:MODE]... | verify PUBLIC BUNDLE SIG | install PUBLIC BUNDLE SIG DESTDIR",
           file=sys.stderr)
     return 2

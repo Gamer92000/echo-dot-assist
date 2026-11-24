@@ -41,6 +41,11 @@ XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo
 `firmware/biscuit/` (not in git); the unlock's and the root's own files (`boot-root.zip`) are the thread's: it says
 which, kept current with its procedure, and nothing here downloads or reads them.
 
+> **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in Amazon's software,
+> and updates close such holes. Which versions still unlock is not tracked here (the XDA thread may know), and an
+> unlock that does not take can leave the Echo unusable. Never let the Echo update: do not set it up with the Alexa
+> app, and keep it off Wi-Fi until the install puts it there.
+
 | File | Source | sha256 |
 |---|---|---|
 | `magiskpolicy32` | `lib/armeabi-v7a/libmagiskpolicy.so` of `Magisk-v30.7.apk`, [Magisk v30.7](https://github.com/topjohnwu/Magisk/releases/tag/v30.7) (APK `e0d32d2123532860f97123d927b1bb86c4e08e6fd8a48bfc6b5bee0afae9ebd5`); `scripts/setup.sh` fetches it itself | `e5fafc1fa9486950ce9ba476f5723754d260014515ced72b4560238e6c560f3a` |
@@ -67,8 +72,7 @@ words, and the tool's output or log as it is.
 Then flash the pinned firmware into both slots, as on donut (`scripts/setup.sh biscuit`, or
 [donut's README](../donut/README.md#1-unlock-flash-stock-firmware-root) by hand), and after it root by hand:
 `boot-root.zip` installed from TWRP as the thread says, after every stock firmware flash, until Fire OS has started with
-root adb (`adb shell id -u` says 0); the setup waits for Enter and checks. Unlock before the Echo can update itself
-further.
+root adb (`adb shell id -u` says 0); the setup waits for Enter and checks.
 
 - From Windows (issue #60; for beginners step by step: [docs/WINDOWS.md](../../docs/WINDOWS.md)): an Echo unlocked
   already, with the unlock and boot-root done as the thread says, on adb over USB; `scripts/setup.sh` in Git Bash does

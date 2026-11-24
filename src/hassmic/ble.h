@@ -65,11 +65,14 @@ struct ble_server {
     /* controller thread.  read: the value of characteristic chr (-1: the Generic Access device name), at most cap bytes */
     size_t (*read)(int chr, uint8_t *out, size_t cap);
     void (*write)(int chr, const uint8_t *data, size_t len);   /* a whole value: long writes arrive once executed */
-    void (*connection)(int up);
+    void (*connection)(int up, uint64_t addr);                 /* addr: the central's, as it gave it (up only) */
+    void (*heard)(void);                                       /* may be NULL: the central sent something, whatever it was (before read/write are called for it) */
 };
 void ble_serve(const struct ble_server *s);              /* once, before advertising */
 /* Any thread.  Legacy connectable advertising with this data (n = 0: none) and scan response; it pauses while the
- * phone is connected and resumes after */
+ * phone is connected and resumes after, the moment its link ends and before the server hears of anything else: a
+ * server that wants no further link takes the data away (n = 0) before it ends one (ble_server_drop), and ends
+ * any that comes all the same (the controller may have been told "on" just before): improv.c on_connection */
 void ble_advertise(const void *adv, size_t n, const void *rsp, size_t m);
 void ble_server_notify(int chr);                         /* any thread: the value changed, notify it if subscribed */
 void ble_server_drop(void);                              /* any thread: end the peripheral link */

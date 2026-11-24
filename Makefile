@@ -31,12 +31,89 @@ BUILD_TIME := $(shell LC_ALL=C git log -1 --format=%cd --date=format:'%b %e %Y %
 # Assistant compares it as numbers.  A build CI publishes (RELEASE=1) reports just that; any other reports
 # VERSION+BUILD (git describe), which online updates take for that version.
 VERSION := $(shell TZ=UTC0 git log -1 --format=%cd --date=format-local:%Y.%m.%d.%H%M%S 2>/dev/null || echo 0)
+# The same time in seconds: the build's own idea of "now" before an Echo's clock is set (plugin_index.c pi_floor)
+BUILD_EPOCH := $(shell git log -1 --format=%ct 2>/dev/null || echo 0)
 # Where online updates look (UPDATE_REPO): this project's releases, or a fork's own (scripts/fork-release.sh)
 include keys/release.conf
+# Where the plugin index is and the key it signs with (keys/plugins.conf): both built into hassmic (plugin_index.c)
+include keys/plugins.conf
+# (PLUGINS_PUB as this tree names it, before a fork's fork.conf: the second key's rule below tells a typo here from a
+# fork's own first key)
+PLUGINS_PUB_CONF := $(if $(filter file,$(origin PLUGINS_PUB)),$(PLUGINS_PUB))
 -include secrets/fork.conf
 UPDATE_REPO := $(strip $(UPDATE_REPO))
 ifneq ($(words $(UPDATE_REPO))$(findstring ",$(UPDATE_REPO))$(findstring ',$(UPDATE_REPO)),1)
 $(error UPDATE_REPO "$(UPDATE_REPO)": owner/name, no quotes or spaces (keys/release.conf, secrets/fork.conf))
+endif
+PLUGIN_INDEX := $(strip $(PLUGIN_INDEX))
+ifneq ($(words $(PLUGIN_INDEX))$(filter https://%/,$(PLUGIN_INDEX))$(findstring ",$(PLUGIN_INDEX))$(findstring ',$(PLUGIN_INDEX)),1$(PLUGIN_INDEX))
+$(error PLUGIN_INDEX "$(PLUGIN_INDEX)": an https:// address ending in /, no quotes or spaces (keys/plugins.conf, secrets/fork.conf))
+endif
+PLUGINS_LEAST_INDEX := $(strip $(PLUGINS_LEAST_INDEX))
+PLUGINS_LEAST_REVOKED := $(strip $(PLUGINS_LEAST_REVOKED))
+ifneq ($(shell printf %s '$(PLUGINS_LEAST_INDEX) $(PLUGINS_LEAST_REVOKED)' | grep -Ex '[0-9]{1,12} [0-9]{1,12}'),$(PLUGINS_LEAST_INDEX) $(PLUGINS_LEAST_REVOKED))
+$(error PLUGINS_LEAST_INDEX, PLUGINS_LEAST_REVOKED: whole numbers, the serials this build takes at least (keys/plugins.conf, scripts/plugins-least.sh))
+endif
+PLUGINS_PUB_HEX := $(shell od -An -tx1 -v $(PLUGINS_PUB) 2>/dev/null | tr -d ' \n')
+ifneq ($(words $(PLUGINS_PUB_HEX))$(shell printf %s '$(PLUGINS_PUB_HEX)' | wc -c),164)
+$(error PLUGINS_PUB "$(PLUGINS_PUB)": not a public key of 32 bytes (keys/plugins.conf, secrets/fork.conf))
+endif
+# A key under which any signature holds (src/include/edkey.h: small order; the null signature verifies under it for
+# every text) is no key: refused for each the build carries (the index's, both, and the release key bundles pack),
+# by scripts/otatool.py weak(), the rule plugin_index.c and ota.c apply again on the Echo (a review of a30d6ed, K3).
+# weak() also refuses what it cannot read as a point: six such encodings Monocypher reads as points of small order
+# (y = p, p + 1 and the order-2 point with the sign bit set), which the Echo then refused at run time while the build
+# took them.  "ok" or why not; fails closed: without python3 (or an error in it) no key passes (a review of 3c5d7ff, R4)
+key_bad = $(filter-out ok,$(or $(shell python3 -c 'import sys; sys.path.insert(0, "scripts"); import otatool; print("weak" if otatool.weak(bytes.fromhex(sys.argv[1])) else "ok")' $(1) 2>/dev/null),nopython))
+key_why = $(if $(filter nopython,$(1)),cannot be checked: the build asks scripts/otatool.py weak() and needs python3 for it,a key under which any signature holds (small order) or no point at all: no key)
+PLUGINS_PUB_BAD := $(call key_bad,$(PLUGINS_PUB_HEX))
+ifneq ($(PLUGINS_PUB_BAD),)
+$(error PLUGINS_PUB "$(PLUGINS_PUB)": $(call key_why,$(PLUGINS_PUB_BAD)) (keys/plugins.conf, secrets/fork.conf))
+endif
+RELEASE_PUB_HEX := $(shell od -An -tx1 -v $(RELEASE_PUB) 2>/dev/null | tr -d ' \n')
+RELEASE_PUB_BAD := $(if $(RELEASE_PUB_HEX),$(call key_bad,$(RELEASE_PUB_HEX)))
+ifneq ($(RELEASE_PUB_BAD),)
+$(error RELEASE_PUB "$(RELEASE_PUB)": $(call key_why,$(RELEASE_PUB_BAD)) (keys/release.conf, secrets/fork.conf))
+endif
+# The second index key (5.2's first step of a new key): none, or one of 32 bytes other than the first.  It belongs
+# with one first key, by content: PLUGINS_PUB2_WITH is that key's hex, and a build whose PLUGINS_PUB is another key
+# (a fork's own, by its fork.conf, on make's command line, or keys/plugins.pub replaced in place) does not carry it.
+# Paths were compared before, and each of those three cases came out wrong (a review of a30d6ed, K5)
+# PLUGINS_PUB2_WITH as od prints it, whatever case it was typed in, and 64 hex digits or the build stops.  A
+# mismatch is a fork's own first key only where PLUGINS_PUB is not this tree's own: where it is, it is a typo in
+# keys/plugins.conf, and a silent drop shipped 5.2's step-(1) release without the new key, which its step (3) then
+# needs on every Echo (a review of 3c5d7ff, R5).  So is keys/plugins.pub replaced in place by a fork: its key goes
+# into secrets/fork.conf (scripts/fork-release.sh), or keys/plugins.conf's PLUGINS_PUB2 is emptied with it
+PLUGINS_PUB2 := $(strip $(PLUGINS_PUB2))
+# (override: a value given on make's command line is lowercased too; a plain assignment left it as typed, and capitals
+# there stopped the build or, against a fork's key, compared as another key: a review of 3fcd319, S6)
+override PLUGINS_PUB2_WITH := $(shell printf %s '$(strip $(PLUGINS_PUB2_WITH))' | tr A-F a-f)
+ifneq ($(PLUGINS_PUB2),)
+ifeq ($(PLUGINS_PUB2_WITH),)
+$(error PLUGINS_PUB2 "$(PLUGINS_PUB2)" without PLUGINS_PUB2_WITH, the hex of the first key it belongs with (keys/plugins.conf, secrets/fork.conf))
+endif
+ifneq ($(shell printf %s '$(PLUGINS_PUB2_WITH)' | grep -Ex '[0-9a-f]{64}'),$(PLUGINS_PUB2_WITH))
+$(error PLUGINS_PUB2_WITH "$(PLUGINS_PUB2_WITH)": not the 64 hex digits of a key (od -An -tx1 -v keys/plugins.pub | tr -d ' \n'; keys/plugins.conf, secrets/fork.conf))
+endif
+ifneq ($(PLUGINS_PUB2_WITH),$(PLUGINS_PUB_HEX))
+ifneq ($(and $(PLUGINS_PUB_CONF),$(filter $(PLUGINS_PUB_CONF),$(PLUGINS_PUB))),)
+$(error PLUGINS_PUB2 "$(PLUGINS_PUB2)" belongs with $(PLUGINS_PUB2_WITH), and PLUGINS_PUB "$(PLUGINS_PUB)" as keys/plugins.conf names it is $(PLUGINS_PUB_HEX): a typo in PLUGINS_PUB2_WITH, or keys/plugins.pub replaced (a fork's key goes into secrets/fork.conf, or PLUGINS_PUB2 is emptied with it))
+endif
+override PLUGINS_PUB2 :=
+endif
+endif
+PLUGINS_PUB2_HEX := $(if $(PLUGINS_PUB2),$(shell od -An -tx1 -v $(PLUGINS_PUB2) 2>/dev/null | tr -d ' \n'))
+ifneq ($(PLUGINS_PUB2),)
+ifneq ($(words $(PLUGINS_PUB2_HEX))$(shell printf %s '$(PLUGINS_PUB2_HEX)' | wc -c),164)
+$(error PLUGINS_PUB2 "$(PLUGINS_PUB2)": not a public key of 32 bytes (keys/plugins.conf, secrets/fork.conf))
+endif
+ifeq ($(PLUGINS_PUB2_HEX),$(PLUGINS_PUB_HEX))
+$(error PLUGINS_PUB2 "$(PLUGINS_PUB2)": the same key as PLUGINS_PUB (keys/plugins.conf, secrets/fork.conf))
+endif
+PLUGINS_PUB2_BAD := $(call key_bad,$(PLUGINS_PUB2_HEX))
+ifneq ($(PLUGINS_PUB2_BAD),)
+$(error PLUGINS_PUB2 "$(PLUGINS_PUB2)": $(call key_why,$(PLUGINS_PUB2_BAD)) (keys/plugins.conf, secrets/fork.conf))
+endif
 endif
 ifeq ($(DEVICE),cannoli)
 # BUILD from the sources themselves (version.py), not git describe: two builds of one dirty tree must differ, since
@@ -50,10 +127,18 @@ endif
 ifeq ($(VERSION),0)
 VERSION := 2026.11.13.000000
 BUILD_TIME := Nov 13 2026 00:00:00
+BUILD_EPOCH := 1794528000
 endif
 endif
-DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' $(if $(RELEASE),-DRELEASE)
-CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include $(DEFS)
+# How the model's system install writes its SELinux policy (device.conf INSTALL): the Plugins page's warning names the
+# way to run it again (web.c /api/plugins "install_method", docs/plugins.md 2.7)
+INSTALL_METHOD := $(shell sed -n 's/^INSTALL=\([a-z0-9-]*\).*/\1/p' devices/$(DEVICE)/device.conf 2>/dev/null)
+DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' \
+           -DPLUGIN_INDEX='"$(PLUGIN_INDEX)"' -DPLUGINS_PUB='"$(PLUGINS_PUB_HEX)"' -DPLUGINS_PUB2='"$(PLUGINS_PUB2_HEX)"' -DPLUGINS_LEAST_INDEX=$(PLUGINS_LEAST_INDEX)LL \
+           -DPLUGINS_LEAST_REVOKED=$(PLUGINS_LEAST_REVOKED)LL -DBUILD_EPOCH=$(BUILD_EPOCH)LL $(if $(RELEASE),-DRELEASE) \
+           -DINSTALL_METHOD='"$(INSTALL_METHOD)"'
+# sdk/: the plugins' wire format (plugmsg.h), the same file their client library has
+CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include -Isdk $(DEFS)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
 STOCK_LIBS = $(addprefix $(STOCK)/,$(filter $(LIBS),$(1)))
 
@@ -66,7 +151,7 @@ build/.device: FORCE
 FORCE:
 
 # A model without the Amazon mixer or Pryon has no use for the tools built on them: they drop out with the library.
-BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) $(if $(LEDSHIM),$(OUT)/libhmled.so) \
+BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/plugrun $(OUT)/otatool $(if $(filter %screen.c,$(SCREEN)),$(OUT)/libhmui.so) $(if $(LEDSHIM),$(OUT)/libhmled.so) \
        $(if $(filter libmixerAPI.so,$(LIBS)),$(OUT)/mixcap $(OUT)/mixplay $(OUT)/latency) \
        $(if $(filter -lOpenSLES,$(SYSLIBS)),$(OUT)/slplay) \
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
@@ -171,6 +256,33 @@ $(OUT)/runas: src/tools/runas.c
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
 
+# The plugins' launcher (docs/plugins.md 2): root's, static, nothing of Amazon's; its system call filter is made
+# from the table the SDK also reads.  The PC's (hassmic's own tests) changes no user and has the x86_64 filter.
+build/plugfilter.h: sdk/filter.def tools/mkfilter.py
+	@mkdir -p build
+	python3 tools/mkfilter.py sdk/filter.def $@
+
+$(OUT)/plugrun: src/tools/plugrun.c src/include/plugrun.h build/plugfilter.h
+	@mkdir -p $(OUT)
+	$(CC) -Os -Wall -Wextra -ffunction-sections -fdata-sections -Isrc/include -Ibuild $< -o $@ -static -s -fuse-ld=lld -Wl,--gc-sections
+
+build/plugrun-host: src/tools/plugrun.c src/include/plugrun.h build/plugfilter.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -DPLUGRUN_HOST -Isrc/include -Ibuild $< -o $@
+
+# The sandbox asked from inside (docs/plugins.md 6): for the PC against the filter's x86_64 translation (make
+# unit-plugrun); for an Echo it is built as a plugin is, never with the NDK (a static bionic program does not start in
+# the sandbox) but with a musl toolchain, and run by scripts/plugin-probe.sh.  PLUGIN_CC names one: zig where it is
+# installed, or a musl cross gcc.  Plugins themselves are not built here: each has a repository of its own
+PLUGIN_CC ?= $(if $(shell command -v zig 2>/dev/null),zig cc -target arm-linux-musleabihf -mcpu=cortex_a7,)
+build/plugprobe-host: src/tools/plugprobe.c
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -static $< -lpthread -o $@
+build/plugins/plugprobe: src/tools/plugprobe.c
+	@mkdir -p build/plugins
+	$(if $(PLUGIN_CC),,$(error no musl toolchain for plugins: install zig, or set PLUGIN_CC (docs/plugins.md 5.8)))
+	$(PLUGIN_CC) -O2 -Wall -Wextra -static -Wl,-z,noexecstack $< -o $@
+
 # The screen UI (src/ui/, scene.h): a JNI library for app_process, against the NDK's libandroid (ANativeWindow) and
 # libjnigraphics (AndroidBitmap); nothing of the firmware's.  The scene alone is make unit's ui_test on the PC.
 UI_SCENE := src/ui/scene.c src/ui/widgets.c src/ui/face.c src/ui/drawer.c src/ui/music.c src/ui/words.c src/ui/lang.c src/ui/gfx.c
@@ -229,13 +341,14 @@ WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/sources.c src/hassmic/fwcurl.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
+           src/hassmic/plugin.c src/hassmic/plugin_store.c src/hassmic/plugin_fetch.c src/hassmic/plugin_index.c src/hassmic/plugin_net.c src/hassmic/logread.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
-HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) build/.build-id
+HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) sdk/plugmsg.h build/.build-id
 
 # The settings page (web.c), gzip'd into the binary
-WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/loudness.js:/loudness.js web/matrix.js:/matrix.js web/ring.js:/ring.js
+WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/loudness.js:/loudness.js web/matrix.js:/matrix.js web/ring.js:/ring.js web/plugins.js:/plugins.js
 # The countries' borders (geo.c; geo/README.md), built in as they are
 build/geo_data.c: tools/geo/embed.py geo/borders.bin
 	@mkdir -p build
@@ -254,27 +367,151 @@ $(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(HASSM
 # PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers), fake sound and whisper detection, identity of $(DEVICE).
 build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
 	@mkdir -p build
-	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
+	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isdk -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
 
 # The same with a screen whatever $(DEVICE) has (screen.c, the band): tests/fake_screen.py, with a stand-in UI.
 build/hassmic-host-screen: $(filter-out $(RING) $(SCREEN),$(HASSMIC)) src/hassmic/ring_band.c src/hassmic/screen.c $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
 	@mkdir -p build
-	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
+	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isdk -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
 
 # ARM build with file audio but the device's wake word engine, for running under qemu-arm (tools/qrun.sh).
 $(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 
-host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/otatool-host
+# A stand-in wake word plugin for tests/fake_plugins.py, built for the PC as a plugin is built for an Echo: static,
+# against the SDK's client (sdk/hmplugin.c)
+build/testwake: tests/plugins/testwake.c sdk/hmplugin.c sdk/hassmic_plugin.h sdk/plugmsg.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -static -Isdk tests/plugins/testwake.c sdk/hmplugin.c -o $@
+
+# A stand-in forwarder for tests/fake_plugins_net.py: storage, the log, a socket to the owner's server
+build/testnet: tests/plugins/testnet.c sdk/hmplugin.c sdk/hassmic_plugin.h sdk/plugmsg.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -static -Isdk tests/plugins/testnet.c sdk/hmplugin.c -o $@
+
+# A stand-in music player for tests/fake_plugins_music.py: a tone as the newest music source, the volume, the Echo's
+# state, a UDP port of its own, a search, Home Assistant's entities and actions
+build/testmusic: tests/plugins/testmusic.c sdk/hmplugin.c sdk/hassmic_plugin.h sdk/plugmsg.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -static -Isdk tests/plugins/testmusic.c sdk/hmplugin.c -lm -o $@
+
+# a stand-in phone (tests/fake_plugins_call.py): a call out and in, the room's audio and its own both ways
+build/testcall: tests/plugins/testcall.c sdk/hmplugin.c sdk/hassmic_plugin.h sdk/plugmsg.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -static -Isdk tests/plugins/testcall.c sdk/hmplugin.c -lm -o $@
+# a stand-in listener (tests/fake_plugins_request.py): a copy of every request, what it got said in its log
+build/testreq: tests/plugins/testreq.c sdk/hmplugin.c sdk/hassmic_plugin.h sdk/plugmsg.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -static -Isdk tests/plugins/testreq.c sdk/hmplugin.c -o $@
+
+# a stand-in that hears the buttons and shows rows of its own on its card (tests/fake_plugins_button.py)
+build/testbutton: tests/plugins/testbutton.c sdk/hmplugin.c sdk/hassmic_plugin.h sdk/plugmsg.h
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -static -Isdk tests/plugins/testbutton.c sdk/hmplugin.c -o $@
+
+# What tests/run.py needs built (CI's test job builds exactly this: a stand-in plugin left out of a list of its own
+# there failed five tests on the runner only, where a PC had it from an earlier make host)
+HOST_TESTS := build/hassmic-host build/hassmic-host-screen build/otatool-host build/plugrun-host build/testwake build/testnet build/testmusic build/testcall build/testreq build/testbutton
+host-tests: $(HOST_TESTS)
+host: $(HOST_TESTS) $(OUT)/hassmic-qemu
 
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
-UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/third_party/monocypher.c
+UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/logread.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight alexaoff \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff \
+	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall
 unit: $(addprefix unit-,$(UNIT_TESTS))
+# the plugins' launcher on the PC: the protocol, the sandbox as far as x86_64 shows it (a static test program)
+# and both seccomp programs, ARM's too, run in an interpreter against the table they were made from
+# A musl program beside the glibc one: plugins are musl (5.8), whose raise(), abort() and pthread_kill() send with
+# tkill where glibc's use tgkill (tests/unit/plugrun_musl.c).  Where there is no zig the test says it skipped that part
+MUSL_CC ?= $(if $(shell command -v zig 2>/dev/null),zig cc -target x86_64-linux-musl,$(if $(wildcard toolchain/zig/zig),toolchain/zig/zig cc -target x86_64-linux-musl,))
+unit-plugrun: build/plugrun-host build/plugprobe-host
+	python3 tests/unit/plugfilter_test.py
+	cc -O2 -Wall -static tests/unit/plugrun_child.c -lpthread -o build/plugrun_child
+	$(if $(MUSL_CC),$(MUSL_CC) -O2 -Wall -static tests/unit/plugrun_musl.c -o build/plugrun_musl,rm -f build/plugrun_musl)
+	PLUGRUN_MUSL=build/plugrun_musl python3 tests/unit/plugrun_test.py build/plugrun-host build/plugrun_child build/plugprobe-host
+# packages as the Echo checks them (plugin_store.c): wrong in one way each, then at random, under ASan
+# sdk/messages.def as a later hassmic's would be, and its header (tests/unit/scopes_demo.py: net.lan 2 widens,
+# ha.entities 2 and call 2 within, a key of each, a value of call 2 in each direction): the store, the broker and the
+# C client built against it a second time (-DSCOPES_DEMO), one header for all three under make -j
+build/scopes_demo/plugmsg.h: tests/unit/scopes_demo.py sdk/messages.def tools/mkplugmsg.py
+	@mkdir -p build/scopes_demo
+	python3 tests/unit/scopes_demo.py build/scopes_demo/messages.def
+	python3 tools/mkplugmsg.py --def build/scopes_demo/messages.def --header $@
+unit-plugin_store: build/scopes_demo/plugmsg.h
+	@mkdir -p build
+	printf 'int main(void){return 0;}' | cc -x c - -static -o build/ps_static
+	printf 'int main(void){return 0;}' | cc -x c - -o build/ps_dynamic
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isdk -Isrc/hassmic -Isrc/include tests/unit/plugin_store_test.c src/hassmic/plugin_store.c src/hassmic/plugin_index.c src/hassmic/hash.c src/hassmic/logread.c src/hassmic/json.c src/hassmic/statefile.c src/third_party/monocypher.c $(BOARD) src/hassmic/volcurve.c -lm -lpthread -o build/plugin_store_test
+	build/plugin_store_test build/ps_static build/ps_dynamic
+	@# the same code built as a later hassmic's would be (tests/unit/scopes_demo.py: net.lan 2 widens, ha.entities 2
+	@# within, a key of each): a key of a later version than required, a raised requires into a widening version
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -DSCOPES_DEMO -Ibuild/scopes_demo -Isdk -Isrc/hassmic -Isrc/include tests/unit/plugin_store_test.c src/hassmic/plugin_store.c src/hassmic/plugin_index.c src/hassmic/hash.c src/hassmic/logread.c src/hassmic/json.c src/hassmic/statefile.c src/third_party/monocypher.c $(BOARD) src/hassmic/volcurve.c -lm -lpthread -o build/plugin_store_demo_test
+	build/plugin_store_demo_test build/ps_static build/ps_dynamic
+# the plugin index as an Echo reads it (plugin_index.c): signatures, the list and the revocation list wrong in one way
+# each, then cut and changed at random, under ASan; then the keys again in a build with a second key built in (5.2)
+unit-plugin_index:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isdk -Isrc/hassmic -Isrc/include tests/unit/plugin_index_test.c src/hassmic/plugin_index.c src/hassmic/plugin_store.c src/hassmic/hash.c src/hassmic/logread.c src/hassmic/json.c src/hassmic/statefile.c src/third_party/monocypher.c $(BOARD) src/hassmic/volcurve.c -lm -lpthread -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free -o build/plugin_index_test
+	build/plugin_index_test
+	pk2=$$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import otatool; print(otatool.key_pair(bytes([42] + [0] * 31))[1].hex())') && \
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isdk -Isrc/hassmic -Isrc/include -DPLUGINS_PUB2="\"$$pk2\"" -DPI_TEST_BUILT_PUB2 tests/unit/plugin_index_test.c src/hassmic/plugin_index.c src/hassmic/plugin_store.c src/hassmic/hash.c src/hassmic/logread.c src/hassmic/json.c src/hassmic/statefile.c src/third_party/monocypher.c $(BOARD) src/hassmic/volcurve.c -lm -lpthread -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free -o build/plugin_index_test_pub2
+	build/plugin_index_test_pub2
+# the broker's watchdog and hassmic's crash marks (plugin.c, docs/plugins.md 2.6): plugin.c itself with a stand-in
+# plugin and a clock the test moves (tests/unit/plugin_harness.h), under ASan
+PLUGIN_HARNESS := src/hassmic/plugin_store.c src/hassmic/plugin_index.c src/hassmic/plugin_net.c src/hassmic/logread.c src/hassmic/net.c src/hassmic/hash.c src/hassmic/json.c src/hassmic/statefile.c src/third_party/monocypher.c $(BOARD) src/hassmic/volcurve.c src/hassmic/call.c src/hassmic/micgain.c -lopus
+unit-plugin_broker: build/scopes_demo/plugmsg.h
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isdk -Isrc/hassmic -Isrc/include tests/unit/plugin_broker_test.c $(PLUGIN_HARNESS) -lm -lpthread -o build/plugin_broker_test
+	build/plugin_broker_test
+	@# as a later hassmic's (the start and the versions only): a value of call 2 to a plugin of call 1 goes as its fallback
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -DSCOPES_DEMO -Ibuild/scopes_demo -Isdk -Isrc/hassmic -Isrc/include tests/unit/plugin_broker_test.c $(PLUGIN_HARNESS) -lm -lpthread -o build/plugin_broker_demo_test
+	build/plugin_broker_demo_test
+# The broker's message() fed whatever a plugin could send (docs/plugins.md 6), by libFuzzer under ASan and UBSan for
+# FUZZ_SECS: not one of `make unit` (a minute, and it wants clang with libFuzzer).  What it finds stays in
+# build/plugfuzz-corpus and is run again first the next time; a crash is left as build/plugfuzz-crash-*
+FUZZ_SECS ?= 60
+unit-plugfuzz:
+	@mkdir -p build/plugfuzz-corpus
+	clang -O1 -g -Wall -Wextra -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all -Isdk -Isrc/hassmic -Isrc/include tests/unit/plugfuzz.c $(PLUGIN_HARNESS) -lm -lpthread -o build/plugfuzz
+	PLUGFUZZ_SEEDS=build/plugfuzz-corpus build/plugfuzz -max_total_time=$(FUZZ_SECS) -max_len=8192 -close_fd_mask=3 -print_final_stats=1 -artifact_prefix=build/plugfuzz-crash- build/plugfuzz-corpus
+# the log as a plugin with log.read gets it (logread.c): what is left out and blanked, the cursor across rotations;
+# and the log's real writers (log_private, log_sealed, clock.c's reader) with sentinels that must not come through
+unit-logread: build/geo_data.c
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic tests/unit/logread_test.c src/hassmic/logread.c -o build/logread_test && build/logread_test
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic -Isrc/include tests/unit/logwriters_test.c src/hassmic/logread.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c -lz -lm -lpthread -o build/logwriters_test && build/logwriters_test
+# the SDK's C client against a stand-in broker: what it keeps while a request waits, storage it cannot keep, a slow
+# tick, a connect before READY, the log followed anew
+unit-hmplugin: build/scopes_demo/plugmsg.h
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isdk tests/unit/hmplugin_test.c sdk/hmplugin.c -o build/hmplugin_test && build/hmplugin_test
+	@# as a later SDK's (the demo's call 2): a value of call 2 from a plugin that speaks call 1 goes as its fallback.
+	@# (the client beside the demo's header: a file's own folder comes first for its quoted includes)
+	cp sdk/hmplugin.c sdk/hassmic_plugin.h build/scopes_demo/
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -DSCOPES_DEMO -Ibuild/scopes_demo tests/unit/hmplugin_test.c build/scopes_demo/hmplugin.c -o build/hmplugin_demo_test && build/hmplugin_demo_test
+	@# put() itself (static: the test includes the client): one buffer one send, a value of no fallback not sent
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -DSCOPES_DEMO -Ibuild/scopes_demo tests/unit/hmplugin_put_test.c -o build/hmplugin_put_test && build/hmplugin_put_test
+# the broker protocol's wire format (sdk/plugmsg.h) is what sdk/messages.def makes, and reads no byte past a packet
+# (the vectors' program at -O0: thousands of checks in a few functions, which -O1 took minutes over)
+unit-plugmsg:
+	@mkdir -p build
+	python3 tools/mkplugmsg.py --check
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isdk tests/unit/plugmsg_test.c -o build/plugmsg_test && build/plugmsg_test
+	python3 tools/mkplugmsg.py --c build/plugmsg_vectors.c
+	cc -O0 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isdk build/plugmsg_vectors.c -o build/plugmsg_vectors && build/plugmsg_vectors sdk/vectors
+	@# the versions' rules (sdk/PROTOCOL.md "Versions"), each broken once; and a message that grew, on a definition of
+	@# its own (tests/unit/plugmsg_scopes/demo.def): each version's layout, its vectors (a case per earlier version)
+	python3 tests/unit/plugmsg_scopes_test.py
+	@mkdir -p build/plugmsg_demo
+	python3 tools/mkplugmsg.py --def tests/unit/plugmsg_scopes/demo.def --header build/plugmsg_demo/plugmsg.h
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Ibuild/plugmsg_demo tests/unit/plugmsg_scopes_test.c -o build/plugmsg_scopes_test && build/plugmsg_scopes_test
+	python3 tools/mkplugmsg.py --def tests/unit/plugmsg_scopes/demo.def --vectors build/plugmsg_demo/vectors
+	python3 tools/mkplugmsg.py --def tests/unit/plugmsg_scopes/demo.def --c build/plugmsg_demo/vectors.c
+	cc -O0 -g -Wall -Wextra -Ibuild/plugmsg_demo build/plugmsg_demo/vectors.c -o build/plugmsg_demo/vectors_test && build/plugmsg_demo/vectors_test build/plugmsg_demo/vectors
 unit-hash:
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test
@@ -347,6 +584,9 @@ unit-web_crypto:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_crypto_test.py; elif [ -n "$$CI" ]; then echo "web crypto: node missing"; exit 1; else echo "web crypto: node missing, skipped"; fi
 unit-kiosk:
 	.venv/bin/python tests/unit/kiosk_test.py
+# no name or object id of hassmic's own entities is one a plugin's can have (plugin.c ha_name, ha_object_id)
+unit-ha_names:
+	python3 tests/unit/ha_names_test.py
 unit-backlight:
 	.venv/bin/python tests/unit/backlight_test.py
 unit-alexaoff:
@@ -358,11 +598,22 @@ unit-web_tar:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_tar_test.py; else echo "web tar: node missing, skipped"; fi
 unit-web_matrix:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_matrix_test.py; else echo "web matrix: node missing, skipped"; fi
+# the plugin index's list as the browse page shows it (web/plugins.js hmbrowse)
+unit-web_browse:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_browse_test.py; else echo "web browse: node missing, skipped"; fi
+unit-web_rows:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_rows_test.py; else echo "web rows: node missing, skipped"; fi
+# the warning in full in the install dialog of a plugin that is not official where the sandbox misses a wall (hmwall)
+unit-web_wall:
+	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_wall_test.py; else echo "web wall: node missing, skipped"; fi
 # the page's timer sound level (web/loudness.js) against BS.1770, and main.c's ring beep at Alexa's level
 unit-web_loudness:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_loudness_test.py; elif [ -n "$$CI" ]; then echo "web loudness: node missing"; exit 1; else echo "web loudness: node missing, skipped"; fi
 unit-setup_wipe:
 	bash tests/unit/setup_wipe_test.sh
+# the guided setup's fixed address (issue #191): its checks against the page's, and fixed_set against stand-ins
+unit-setup_fixed:
+	bash tests/unit/setup_fixed_test.sh
 # a fork's own releases (scripts/fork-release.sh, keys/release.conf, secrets/fork.conf), against a stand-in gh
 unit-fork_release:
 	bash tests/unit/fork_release_test.sh
@@ -420,9 +671,24 @@ unit-volcurve:
 	  cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/volcurve_test.c src/hassmic/volcurve.c devices/$$d/board.c -lm -o build/volcurve_$$d && build/volcurve_$$d || exit 1; done
 # Sendspin's rate (resample.c): the resampler against the true sine, chunk sizes, its lag; the servo against a model
 # of the Echo Show 5's queue with its clock off
+# a call's audio (call.c): the claim, and the media without a codec a plugin's call has (CALL_CODEC_PCM): frames out
+# gated and gain-corrected, in by number, a missing one faded, against a Voip stream that plays in real time
+unit-call:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic -Isrc/include tests/unit/call_test.c src/hassmic/call.c src/hassmic/micgain.c -lopus -lm -lpthread -o build/call_test && build/call_test
+# Drop In (dropin.c) with call.c's media, against a stand-in of the other Echo over loopback UDP: frames sent again by
+# a host on the LAN (taken once, the address and the call's life by the newest only), the events the core is told
+# while it is held up (its "idle" never lost, the claim let go after the last)
+unit-dropin:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -Wno-format-truncation -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic -Isrc/include tests/unit/dropin_test.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/micgain.c src/third_party/monocypher.c -lopus -lm -lpthread -o build/dropin_test && build/dropin_test
 unit-resample:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/resample_test.c src/hassmic/resample.c -lm -o build/resample_test && build/resample_test
+# the Dots' music queue model steered towards the mixer's count (issue #225)
+unit-mixsteer:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/mixsteer_test.c -lm -o build/mixsteer_test && build/mixsteer_test
 # the page's band (web/ring.js) against ring_band.c's, pixel for pixel
 unit-band_map:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/band_map_test.py; elif [ -n "$$CI" ]; then echo "band map: node missing"; exit 1; else echo "band map: node missing, skipped"; fi
@@ -471,4 +737,4 @@ version:
 clean:
 	rm -rf build
 
-.PHONY: all host unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE
+.PHONY: all host host-tests unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE

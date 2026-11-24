@@ -29,6 +29,7 @@ void settings_preset(void);             /* state/preset (scripts/setup.sh --pres
 /* one value as this start will have it, before settings_load (main.c: the wake word engine, the band's height): state/config's,
  * or a preset's not applied yet (settings_preset, after it).  No lock needed.  0, -1: none */
 int  settings_peek(const char *name, char *out, size_t cap);
+int  settings_peek_raw(const char *name, char *out, size_t cap);     /* the same, the value as written: not checked against the setting's choices */
 int  settings_mic_level(void);
 const char *settings_speech_language(void);    /* "de", "en", ...; "" for automatic (main.c speech_locale) */
 int  settings_on(const char *name);     /* a bool setting's value; 0 if this Echo has no such setting */

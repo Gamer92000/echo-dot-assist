@@ -668,7 +668,8 @@ wait_adb() {
 # unlock_thread TOOL UNTIL [LINE]...: the unlock by hand, TOOL as $XDA says, until UNTIL ("TWRP is running on the Echo
 # (white ring)"); Enter when done.  Then up to 3 min for the Echo on adb (TWRP, or Fire OS: stock has no adb): an Enter
 # pressed while TWRP still starts must not fail the step, whose retry shows all of this again; none there: where to go
-# on, the thread first, then the model's LINEs (what is known here, as issue #112).  Returns 0 with the Echo on adb.
+# on, the thread first, then the model's LINEs.  Returns 0 with the Echo on adb.  Which firmware versions still unlock
+# is not tracked here (the threads know, as far as anyone does): the person is told only that older is likelier.
 unlock_thread() {
     local tool=$1 until=$2; shift 2
     todo "Unlock the Echo by hand: $tool, as its XDA thread says" \
@@ -678,6 +679,9 @@ unlock_thread() {
         "Which Echos it is for, which files to download, how to get the Echo ready and every command: all of it" \
         "is there, and kept up to date. This setup does not run $tool and does not repeat its steps: R0rt1z2" \
         "asks (since kamakiri-donut v1.1.0) that his unlocks are only ever run by hand, as his threads say." \
+        "" \
+        "The older the Echo's firmware, the likelier the unlock works: updates close the holes it uses. Which" \
+        "versions still unlock is not tracked here, and an unlock that does not take can leave the Echo unusable." \
         "" \
         "${B}Stop once $until$N: this setup does the rest." \
         "Then come back to this window and press Enter: it checks the Echo and goes on from there." \
@@ -760,6 +764,18 @@ root_thread() {
 # ashell CMD: adb shell, output without the carriage returns
 ashell() { adb shell "$@" | tr -d '\r'; }
 
+# satellite_running: the satellite's own hassmic runs.  pidof alone does not say so: at the satellite's start main.sh
+# runs hassmic as root for other jobs, -G (the light ring's 2422 files, then sysinstall.sh copies them with no
+# hassmic running at all) and -S (the avahi service file), and an update's staging runs -T.  On a first boot the copy
+# takes long: radar was up at boot + 129 s, and the "stays up" check had seen -G, then nothing (issue #224).  The
+# daemon is the one started with -P (main.sh's loop, always) and without -S; its log reader is a fork of it.  Command
+# lines read on the PC: the Echo's shells differ in what they have, cat they all have.  A pid gone is an empty line.
+satellite_running() {
+    adb shell 'for p in $(pidof hassmic); do cat /proc/$p/cmdline; echo; done' 2>/dev/null | tr '\0\r' '  ' |
+        grep ' -P ' | grep -v -q -E ' -S( |$)'
+}
+stays_up() { sleep 10; satellite_running; }
+
 # network_lock, network_wifi: every model's step_network after copying hassmic over, in two parts that can also be
 # called one by one (issue #49).  The lock: lockdown.sh closes adb over Wi-Fi, which stock opens at every boot, and
 # restarts adbd a second after it ends to do so (so not over adb over Wi-Fi: that connection would be gone for good).
@@ -781,7 +797,116 @@ network_wifi() {
     task "Joining Wi-Fi" scripts/wifi-join.sh || { [ -n "$WIFI_NEW" ] && rm -f secrets/wifi.conf; return 1; }
     # the Wi-Fi profile survives a reboot, the egress lock does not until the install
     warn "Do not restart the Echo until it is installed."
-    info "Tip: give it a fixed address in your router (DHCP reservation)."
+    info "A fixed address: reserve one in your router (DHCP reservation), or the Echo keeps one of its own (asked at the install)."
+}
+
+# ---- a fixed address (issue #191): asked with the settings to start with, set once the installed satellite runs, as
+# the settings page sets it (System, "Network address"): root's wifi.sh tries it and keeps it only once a connection
+# from elsewhere reaches the Echo there within two minutes.  This PC is that connection: it asks the new address for
+# the page's hello while root waits (on another network than the Echo, Home Assistant has to reach it instead).
+# The checks are the page's words for what wifi.c and wifi.sh refuse (web/app.js addrProblem).
+ipnum() {   # a.b.c.d -> its value; fails on anything else (no leading zeros)
+    [[ $1 =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]] || return 1
+    local a=${BASH_REMATCH[1]} b=${BASH_REMATCH[2]} c=${BASH_REMATCH[3]} d=${BASH_REMATCH[4]}
+    [ $a -le 255 ] && [ $b -le 255 ] && [ $c -le 255 ] && [ $d -le 255 ] || return 1
+    echo $(( (a << 24) | (b << 16) | (c << 8) | d ))
+}
+mask_bits() { echo $(( (0xffffffff << (32 - $1)) & 0xffffffff )); }
+mask_dotted() { local m; m=$(mask_bits $1); echo "$(( m >> 24 & 255 )).$(( m >> 16 & 255 )).$(( m >> 8 & 255 )).$(( m & 255 ))"; }
+prefix_of() {   # 255.255.255.0, /24 or 24 -> 24, for 8 to 30; fails on anything else
+    local t=${1#/} n p
+    # base 10 said: bash takes "08" for octal and fails on it
+    if [[ $t =~ ^[0-9]{1,2}$ ]]; then t=$((10#$t)); [ $t -ge 8 ] && [ $t -le 30 ] && echo $t; return; fi
+    n=$(ipnum "$t") || return 1
+    for ((p = 8; p <= 30; p++)); do [ $n = $(mask_bits $p) ] && { echo $p; return 0; }; done
+    return 1
+}
+unicast_num() { [ -n "$1" ] && [ $(( $1 >> 24 )) != 0 ] && [ $(( $1 >> 24 )) != 127 ] && [ $(( $1 >> 24 )) -lt 224 ]; }
+addr_problem() {   # ip mask gateway dns [dns2]: what is wrong with them, nothing when all is well
+    local ip gw d1 d2 pre m host hi hg
+    ip=$(ipnum "$1"); unicast_num "$ip" || { echo "The address is not one a device can have (four numbers 0 to 255, as 192.168.1.50)."; return; }
+    pre=$(prefix_of "$2") || { echo "The subnet mask is not one of a home network (255.0.0.0 to 255.255.255.252)."; return; }
+    gw=$(ipnum "$3"); unicast_num "$gw" || { echo "The router's address is not one a device can have."; return; }
+    d1=$(ipnum "$4"); d2=; [ -z "$5" ] || d2=$(ipnum "$5") || d2=x
+    unicast_num "$d1" && { [ -z "$5" ] || { [ "$d2" != x ] && unicast_num "$d2"; }; } || { echo "A DNS server's address is not one a device can have."; return; }
+    m=$(mask_bits $pre) host=$(( ~$(mask_bits $pre) & 0xffffffff ))
+    hi=$(( ip & host )) hg=$(( gw & host ))
+    [ $(( ip & m )) = $(( gw & m )) ] || { echo "The router is not in the Echo's network: with that subnet mask the two addresses must begin alike."; return; }
+    [ $ip != $gw ] || { echo "That is the router's own address."; return; }
+    [ $hi != 0 ] && [ $hi != $host ] || { echo "That address is the network's own (the first or the last of it): no device can have it."; return; }
+    [ $hg != 0 ] && [ $hg != $host ] || echo "The router's address is the network's own (the first or the last of it)."
+}
+# fixed_ask: FIXED="<ip> <prefix> <gateway> <dns> <dns2|->" or empty (the router's address, as before).  The mask, router
+# and DNS servers offered are what the Echo has from the router now (its dhcpcd's properties; Android: its route table
+# and net.dns*)
+fixed_ask() {
+    local cur mask gw d1 d2 ip m g n1 n2 why
+    FIXED=
+    if [ -z "$DRY" ]; then
+        cur=$(ashell ifconfig $WLAN | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
+        mask=$(ashell ifconfig $WLAN | sed -n 's/.*Mask:\([0-9.]*\).*/\1/p')
+        gw=$(ashell getprop dhcp.$WLAN.gateway)
+        [ -n "$gw" ] && [ "$gw" != 0.0.0.0 ] || gw=$(ashell "ip route show table all 2>/dev/null" | sed -n "s/^default via \([0-9.]*\) dev $WLAN .*/\1/p" | head -n 1)
+        d1=$(ashell getprop dhcp.$WLAN.dns1) d2=$(ashell getprop dhcp.$WLAN.dns2)
+        [ -n "$d1" ] || d1=$(ashell getprop net.dns1) d2=$(ashell getprop net.dns2)
+    fi
+    info "Its address now: ${cur:-none yet}, from your router. A reservation in the router keeps it the same; or the Echo keeps one of its own."
+    info "A fixed address of its own: pick one outside the range your router hands out (its DHCP pool), or two devices may get the same one."
+    while :; do
+        prompt ip "Fixed address (Enter: from the router, as now)" ""
+        [ -n "$ip" ] || return 0
+        prompt m "Subnet mask" "$mask"
+        prompt g "Router" "$gw"
+        prompt n1 "DNS server" "${d1:-$g}"
+        prompt n2 "Second DNS server (- for none)" "${d2:--}"
+        [ "$n2" = - ] && n2=
+        why=$(addr_problem "$ip" "$m" "$g" "$n1" "$n2")
+        [ -z "$why" ] && break
+        warn "$why"
+    done
+    FIXED="$ip $(prefix_of "$m") $g $n1 ${n2:--}"
+}
+# fixed_set: hands FIXED to root as the settings page's request would (state/wifi-request, hassmic's user's; main.sh's
+# watcher takes it within 2 s) and follows it: while root waits to be reached, this PC asks the new address.
+FIXED_R=                # FIXED_WAIT: how long fixed_set waits for root's word (s; tests shorten it)
+fixed_look() {
+    local id=$1 ip=$2 r
+    r=$(ashell cat /data/local/hassmic/wifi/address-result 2>/dev/null)
+    case "$r" in
+    "$id waiting "*) curl -s -m 2 -o /dev/null "http://$ip:28931/api/hello"; return 1;;
+    "$id ok "*|"$id failed "*) FIXED_R=$r; return 0;;
+    *) return 1;;
+    esac
+}
+fixed_set() {
+    local id=$(( RANDOM * 32768 + RANDOM + 1 )) ip=${FIXED%% *} why
+    [ -n "$FIXED" ] || return 0
+    FIXED_R=
+    # adb over Wi-Fi goes to the address the Echo leaves: the answer would never come back here
+    if [[ $ANDROID_SERIAL == *:* ]]; then
+        warn "Over adb on Wi-Fi the setup would lose the Echo as its address changes: set $ip on its settings page (System, Network address)."
+        return 0
+    fi
+    task "Asking the Echo for $ip" adb shell "echo 'address $id fixed $FIXED' > /data/local/hassmic/state/wifi-request &&
+        chown $DAEMON_USER /data/local/hassmic/state/wifi-request && chmod 600 /data/local/hassmic/state/wifi-request" || return 1
+    if ! waitfor "Setting $ip: the Echo keeps it once this PC reaches it there|The Echo answered" "fixed_look $id $ip" \
+        "No answer yet: is this PC on the Echo's network? Else Home Assistant has to reach it there" 60 ${FIXED_WAIT:-300}; then
+        warn "No word from the Echo on $ip: its settings page (System, Network address) says what it has."
+        return 0
+    fi
+    [ -n "$DRY" ] && return 0
+    case "$FIXED_R" in
+    *" ok "*) ok "Fixed address: $ip";;
+    *)
+        why=$(echo "$FIXED_R" | cut -d' ' -f3)
+        case $why in
+        inuse) warn "Another device answers at $ip already: the Echo keeps its address from the router.";;
+        nogateway) warn "On $ip the router did not answer (its address, the subnet mask?): the Echo went back to its address from the router.";;
+        unreached) warn "Nothing reached the Echo at $ip within two minutes: it went back to its address from the router.";;
+        *) warn "The Echo did not take $ip ($why): it keeps its address from the router.";;
+        esac
+        info "Later: its settings page, System, Network address.";;
+    esac
 }
 
 # preset_ok FILE: an export of the settings page (name=value lines, # comments), nothing else
@@ -836,25 +961,28 @@ install_satellite() {
         prompt PRESET "Settings file (Enter for none)" ""
     done
     wait_adb device || return 1
+    fixed_ask
     firmware_accept || return 1
     if [ "$INSTALL" = boot ]; then   # in the foreground: a new boot image may need the power replugged (install-boot.sh)
         live "Installing (the Echo reboots)" bash -o pipefail -c "scripts/install-system.sh 2>&1 | tee -a '$LOG'" || return 1
     else task "Installing (the Echo reboots)" scripts/install-system.sh || return 1; fi
     [ -n "$DRY" ] || sleep 10
     wait_adb device || return 1
-    # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop
-    waitfor "Waiting for the satellite to start|Satellite started" '[ -n "$(ashell pidof hassmic)" ]' "" 60 180 &&
-        task "Checking it stays up" sh -c 'sleep 10; adb shell pidof hassmic | grep -q .' ||
+    # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop.  A first
+    # boot installs the light ring's set before hassmic starts (radar: up at boot + 129 s), hence 240 s
+    waitfor "Waiting for the satellite to start|Satellite started" satellite_running "" 60 240 &&
+        task "Checking it stays up" stays_up ||
         { [ -n "$DRY" ] || { info "end of its log:"; ashell tail -8 /data/local/hassmic/boot.log | sed 's/^/    /'; }; return 1; }
     if [ -n "$PRESET" ]; then
         if task "Handing over the settings from $(basename "$PRESET")" push_preset "$PRESET" &&
            waitfor "Waiting for the satellite to take them|Settings taken" \
-               '[ -n "$(ashell pidof hassmic)" ] && [ -n "$(ashell ls $PRESET_ON_ECHO.applied 2>/dev/null)" ]' "" 30 90; then
+               'satellite_running && [ -n "$(ashell ls $PRESET_ON_ECHO.applied 2>/dev/null)" ]' "" 30 90; then
             [ -n "$DRY" ] || info "$(ashell "grep 'settings: preset applied' /data/local/hassmic/boot.log" | tail -1)"
         else
             warn "the settings were not taken; set them on the settings page"
         fi
     fi
+    fixed_set || warn "the fixed address was not set; set it on the settings page (System, Network address)"
     [ -n "$DRY" ] && return 0
     name=$(ashell "grep -o 'name: .* (node' /data/local/hassmic/boot.log" | tail -1 | sed 's/^name: //; s/ (node$//')
     ip=$(ashell ifconfig $WLAN | sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')     # toybox ifconfig; no ip on the Echo

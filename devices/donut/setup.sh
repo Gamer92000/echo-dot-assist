@@ -4,7 +4,6 @@
 # first whether its result is there already, so a rerun (or work done by hand) passes through quietly.
 
 XDA=https://xdaforums.com/t/unlock-root-twrp-unbrick-amazon-echo-dot-3rd-gen-2018-donut.4801400/
-LOCKED_ISSUE=https://github.com/Gamer92000/echo-dot-assist/issues/112
 FTVDB=https://ftvdb.com/echo/firmware/com.amazon.donut.android.os/f7cd5f3b6d6bfa59e5ba6a6779285c34-13222529668-fire-os-6574-1-ns65741-8138-2026-08-31/
 # a replug alone may start Fire OS, not TWRP (PR #142): Volume up held while the power goes in starts the recovery
 TWRP_HINT="Nothing yet? Unplug the Echo's power, then hold only Volume up (+) while plugging it back in: that starts TWRP."
@@ -81,24 +80,7 @@ step_usb() {
 step_unlock() {
     twrp_or_unlocked "$TWRP_HINT"; case $? in 0) return 0;; 2) return 1;; esac
     [ -n "$WINDOWS" ] && { unlock_elsewhere; [ -n "$DRY" ]; return; }       # Windows: on adb at the start (setup.sh), not now
-    # issue #112 (2026-11-04/05): on two Echos kamakiri ran through without an error, but kaeru never stayed in expdb
-    # (its write "did not read back", the partition zeros after) and the Echo came back in locked fastboot (green ring,
-    # "restricted on locked hw"), with no way on from there found yet.  One had worked until it was opened, so a dying
-    # eMMC does not explain it alone; Echos Amazon updated recently look at risk, how far it reaches is not known.
-    # Asked once a run, before the thread; a dry run goes on.
-    if [ -z "$UNLOCK_RISK_OK" ]; then
-        warn "${B}Warning: the unlock can leave this Echo unusable (issue #112).$N"
-        warn "${B}Echos that were updated recently may become unusable. The full extent is currently unknown.$N"
-        info "  On two Echos kamakiri ran through without an error, yet the Echo came back locked (a green ring, no"
-        info "  rainbow), and no way to finish the unlock or undo it has been found: neither has worked since."
-        info "  It is not known yet which Echos or firmware versions are affected, nor whether any unlock is safe now."
-        info "  Read $LOCKED_ISSUE first. While it is open, do not unlock an Echo you want to keep."
-        ask "Unlock this Echo anyway?" n || [ -n "$DRY" ] ||
-            { info "Nothing was written to the Echo. Quit (q) and run scripts/setup.sh $DEVICE later: progress is kept."; return 1; }
-        UNLOCK_RISK_OK=1
-    fi
-    unlock_thread kamakiri-donut "TWRP is running on the Echo (white ring)" \
-        "A green ring, and fastboot saying \"restricted on locked hw\"? That is issue #112: read $LOCKED_ISSUE first." || return 1
+    unlock_thread kamakiri-donut "TWRP is running on the Echo (white ring)" || return 1
     [ -n "$DRY" ] || twrp_or_unlocked "$TWRP_HINT"
 }
 

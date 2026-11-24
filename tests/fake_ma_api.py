@@ -38,8 +38,12 @@ if len(sys.argv) > 1 and sys.argv[1] == "--ui":           # the stand-in UI, as 
             with out: sys.stdout.buffer.write(b); sys.stdout.buffer.flush()
         hung = threading.Event()
         def answer():                                    # bytes as they come (the test sends some that are no UTF-8)
-            while True:
-                with open(fifo, "rb") as q:
+            # (read and write: a writer is always there, so the reader never sees the end of a writer's lines and
+            # never reopens.  Reopened at each end, a line a writer put in between the end and the close was lost
+            # with the close: screen-9's "repeat and shuffle" under tests/run.py -j, repeat_all never sent, a flake a
+            # review of a30d6ed found)
+            with os.fdopen(os.open(fifo, os.O_RDWR), "rb") as q:
+                while True:
                     for line in q:
                         if line == b"#hang\n": hung.set(); continue   # (for the test: alive, reading nothing)
                         tell(line)
@@ -121,7 +125,8 @@ def track(i, alb=None):
 class FakeMA:
     def __init__(self):
         self.cmds, self.ws, self.bad_set_members, self.img_auth, self.img_ids = [], None, False, [], []
-        self.self_id, self.merged, self.stall, self.extra = None, False, False, 0
+        self.self_id, self.merged, self.stall, self.extra, self.no_queue = None, False, False, 0, False
+        self.queue_delay, self.queue_stall = 0, False
         self.queue = {"queue_id": "", "active": True, "display_name": "Kitchen + 1", "available": True, "items": 12, "shuffle_enabled": False,
                       "repeat_mode": "off", "current_index": 3, "state": "playing", "elapsed_time": 42}
 
@@ -184,7 +189,9 @@ class FakeMA:
             if not authed:
                 await ws.send_str(json.dumps({"message_id": mid, "error_code": 20, "details": "Authentication required"})); continue
             if self.stall: continue                          # an answer that never comes
+            if cmd == "player_queues/get_active_queue" and self.queue_stall: continue
             r = await self.answer(cmd, a)
+            if cmd == "player_queues/get_active_queue" and self.queue_delay: await asyncio.sleep(self.queue_delay)   # (as it was asked)
             if isinstance(r, Exception): await ws.send_str(json.dumps({"message_id": mid, "error_code": 999, "details": str(r)}))
             elif cmd == "music/podcasts/podcast_episodes":            # an async generator: 500 a message, "partial", then the rest
                 while len(r) > 500: await ws.send_str(json.dumps({"message_id": mid, "result": r[:500], "partial": True})); r = r[500:]
@@ -194,7 +201,9 @@ class FakeMA:
 
     async def answer(self, cmd, a):
         if cmd == "players/all": return self.players()
-        if cmd == "player_queues/get_active_queue": self.queue["queue_id"] = a["player_id"]; return self.queue
+        if cmd == "player_queues/get_active_queue":
+            if self.no_queue: return None                # (its leader plays from a source: AirPlay into a sync group)
+            self.queue["queue_id"] = a["player_id"]; return self.queue
         if cmd == "music/albums/library_items":
             n = 75; return [album(i) for i in range(a["offset"], min(n, a["offset"] + a["limit"]))]
         if cmd == "music/albums/album_tracks": return [track(i) for i in range(5)] if a["item_id"] == "3" and a["provider_instance_id_or_domain"] == "library" else Exception("no such album")
@@ -235,7 +244,7 @@ async def main():
     open(runner, "w").write(f"#!/bin/sh\nexec {sys.executable} {me_ui}\n"); os.chmod(runner, 0o755)
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_MUSIC=os.path.join(state, "music.raw"), HASSMIC_SETTINGS=os.path.join(state, "settings"),
                HASSMIC_SCREEN=runner, FAKE_UI_LOG=log, FAKE_UI_FIFO=fifo, HASSMIC_MASS_QUIET_S="8",   # (no server heartbeat here)
-               HASSMIC_SCREEN_HUNG_MS="2000")
+               HASSMIC_SCREEN_HUNG_MS="2000", HASSMIC_MASS_QUEUE_MS="3000:5000")
     open(os.path.join(state, "adopted"), "w").close()       # set up: no setup spinner, the band dark (an idle Echo)
     open(os.path.join(state, "sendspin.unpaired"), "w").write("1")   # unpaired access on: a Sendspin server below
     ma = FakeMA()
@@ -347,6 +356,97 @@ async def main():
         await ma.send({"event": "queue_items_updated", "object_id": ma.self_id, "data": q})
         await until(lambda: "qc" in text(log), 5)
         check("pq playing\t1\tall\t4\t12\tKitchen + 1" in text(log) and "qc" in text(log), "the queue's shuffle, repeat and place; its items changed")
+
+        # issue #222: AirPlay into a sync group this Echo plays in.  While it plays Music Assistant has no queue for this
+        # Echo; as it ends it moves the players a few ms before it clears the source, so the answer to the move is
+        # still "none": the source's change asks again.  A tap on Play with no queue asks too and plays once there is one
+        open(log, "ab").write(b"#airplay\n"); ma.no_queue = True
+        nq = lambda: len(cmds("player_queues/get_active_queue"))
+        sg = {"player_id": "syncgroup_dn", "provider": "sync_group", "type": "group", "name": "Downstairs", "available": True, "enabled": True,
+              "hide_in_ui": False, "playback_state": "playing", "volume_level": 40, "group_members": [ma.self_id, "dot2"], "can_group_with": [],
+              "active_source": "airplay_receiver://audio_source/syncgroup_dn", "current_media": {"title": "From a phone"}}
+        await ma.send({"event": "player_added", "object_id": "syncgroup_dn", "data": sg})
+        q0 = nq(); p = dict(ma.players()[0], active_group="syncgroup_dn", active_source="syncgroup_dn")
+        await ma.send({"event": "player_updated", "object_id": ma.self_id, "data": p})
+        await until(lambda: "pq-" in text(log)[text(log).index("#airplay"):], 5)
+        check("pq-" in text(log)[text(log).index("#airplay"):] and nq() == q0 + 1, "AirPlay plays into its group: asked, no queue")
+        for k in range(3):                               # every second of it: not asked again
+            await ma.send({"event": "player_updated", "object_id": "syncgroup_dn", "data": dict(sg, elapsed_time=k)})
+            await ma.send({"event": "player_updated", "object_id": ma.self_id, "data": dict(p, elapsed_time=k)})
+        await asyncio.sleep(0.5)
+        check(nq() == q0 + 1, f"the seconds of AirPlay: no question each ({nq() - q0})")
+        say("mplay play library://album/3")
+        await until(lambda: "merr This Echo has no queue in Music Assistant yet" in text(log)[text(log).index("#airplay"):], 5)
+        check(nq() == q0 + 2 and not cmds("player_queues/play_media"), "Play without a queue: asked again, still none, said so")
+        # AirPlay stops: the group's source cleared after this Echo's own change was answered
+        ma.no_queue = False; open(log, "ab").write(b"#airplay-end\n")
+        await ma.send({"event": "player_updated", "object_id": "syncgroup_dn", "data": dict(sg, playback_state="idle", active_source=None)})
+        await until(lambda: any(l.startswith("pq ") for l in text(log)[text(log).index("#airplay-end"):]), 5)
+        check(any(l.startswith("pq ") for l in text(log)[text(log).index("#airplay-end"):]) and nq() == q0 + 3,
+              "the group's source gone: asked again, the queue there")
+        check(any("mass: this Echo's queue: none" in l for l in errlog) and any(f"mass: this Echo's queue: {ma.self_id}" in l for l in errlog),
+              "the queue's comings and goings logged")
+        # a tap while there is no queue but Music Assistant has one by now (the change that made it never came): played
+        def after(mark):                                 # the log from a mark's last place on
+            t = text(log); return t[len(t) - 1 - t[::-1].index(mark):]
+        async def no_queue_now(ag):                      # this Echo moved while Music Assistant has no queue for it
+            ma.no_queue = True; n = nq(); open(log, "ab").write(b"#noq\n")
+            await ma.send({"event": "player_updated", "object_id": ma.self_id, "data": dict(p, active_group=ag)})
+            await until(lambda: nq() == n + 1 and "pq-" in after("#noq"), 5)
+            check(nq() == n + 1 and "pq-" in after("#noq"), f"moved ({ag}): asked, no queue")
+        await no_queue_now(None)
+        ma.no_queue = False; open(log, "ab").write(b"#tap\n"); n = nq()
+        say("mplay play library://album/3")
+        await until(lambda: cmds("player_queues/play_media"), 5)
+        check(cmds("player_queues/play_media") == [{"queue_id": ma.self_id, "media": "library://album/3", "option": "play", "radio_mode": False}]
+              and nq() == n + 1 and not any(l.startswith("merr") for l in after("#tap")),
+              "Play with no queue known: asked, then played there")
+        await no_queue_now("syncgroup_dn")               # "play here" alike
+        ma.no_queue = False; open(log, "ab").write(b"#here\n")
+        say("mhere sonos-1")
+        await until(lambda: cmds("player_queues/transfer"), 5)
+        check(cmds("player_queues/transfer") == [{"source_queue_id": "sonos-1", "target_queue_id": ma.self_id, "auto_play": True}],
+              "Play here with no queue known: asked, then moved here")
+        # changes while the question is out: one more question after its answer, not one each; the held tap waits for it
+        await no_queue_now(None); await no_queue_now("syncgroup_dn")
+        ma.queue_delay = 2.0; n = nq(); open(log, "ab").write(b"#burst\n")
+        for k in range(3):
+            await ma.send({"event": "player_updated", "object_id": "syncgroup_dn", "data": dict(sg, active_source=f"src{k}")})
+        await until(lambda: nq() == n + 1, 5)
+        ma.no_queue = False                              # (the first answer says none: decided as it was asked)
+        say("mplay add library://track/102", "mplay add library://track/103")
+        await until(lambda: nq() >= n + 2 and len(cmds("player_queues/play_media")) == 3, 8)
+        await asyncio.sleep(1.5)
+        check(nq() == n + 2, f"three changes and two taps while it was out: two questions ({nq() - n})")
+        order = [c for c, a in ma.cmds if c in ("player_queues/get_active_queue", "player_queues/play_media")]
+        check([a["media"] for a in cmds("player_queues/play_media")[1:]] == ["library://track/102", "library://track/103"]
+              and order[-3:] == ["player_queues/get_active_queue", "player_queues/play_media", "player_queues/play_media"]
+              and not any(l.startswith("merr") for l in after("#burst")),
+              f"both taps held past the first answer's none, played in order by the second, never told there was none: {order[-4:]}")
+        ma.queue_delay = 0
+        # a question never answered: given up after its time, the held tap told, the next change asks anew
+        await no_queue_now(None)
+        ma.queue_stall = True; n = nq(); open(log, "ab").write(b"#lost\n")
+        say("mplay play library://album/3")
+        await until(lambda: "merr This Echo has no queue in Music Assistant yet" in after("#lost"), 8)
+        check("merr This Echo has no queue in Music Assistant yet" in after("#lost") and nq() == n + 1
+              and len(cmds("player_queues/play_media")) == 3, "a tap whose question was never answered: told after its time, nothing played")
+        ma.queue_stall = ma.no_queue = False
+        await ma.send({"event": "player_updated", "object_id": ma.self_id, "data": dict(p, active_group="syncgroup_dn")})
+        await until(lambda: nq() == n + 2 and any(l.startswith("pq ") for l in after("#lost")), 5)
+        check(nq() == n + 2 and any(l.startswith("pq ") for l in after("#lost")), "the lost question no longer holds the next back")
+        n = nq(); open(log, "ab").write(b"#out\n")
+        await ma.send({"event": "player_removed", "object_id": "syncgroup_dn", "data": None})
+        await ma.send({"event": "player_updated", "object_id": ma.self_id, "data": ma.players()[0]})
+        await until(lambda: "pl- syncgroup_dn" in after("#out") and nq() == n + 1, 5)
+        await asyncio.sleep(0.3)                         # (its answer: the queue it had, so no new "pq" line)
+        check(nq() == n + 1 and "pq-" not in after("#out"), "out of the group: asked, its own queue")
+        ma.cmds = [c for c in ma.cmds if c[0] not in ("player_queues/play_media", "player_queues/transfer")]
+        open(log, "ab").write(b"#q-back\n")              # (the queue as the events above left it)
+        await ma.send({"event": "queue_updated", "object_id": ma.self_id, "data": q})
+        await until(lambda: "pq playing\t1\tall\t4\t12\tKitchen + 1" in text(log)[text(log).index("#q-back"):], 5)
+        check("pq playing\t1\tall\t4\t12\tKitchen + 1" in text(log)[text(log).index("#q-back"):], "the queue back as it was")
+
         await ma.send({"event": "player_removed", "object_id": "sonos-1", "data": None})
         await until(lambda: "pl- sonos-1" in text(log), 5)
         check("pl- sonos-1" in text(log), "a player removed")

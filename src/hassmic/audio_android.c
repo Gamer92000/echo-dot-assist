@@ -209,7 +209,8 @@ static struct pstream voice = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHRE
                       music = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 },
                       earcon = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER },
                       voip = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &call_q16 },
-                      bt = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 };
+                      bt = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 },
+                      plug = { .lock = PTHREAD_MUTEX_INITIALIZER, .cond = PTHREAD_COND_INITIALIZER, .gain = &music_q16 };
 
 /* --- volume: Android's own, the music stream's index (0..its maximum, 30 on the Show), set through IAudioService with
  * the firmware's service tool as the front end is reached (afe_parcel.c): setStreamVolume(stream, index, flags,
@@ -568,6 +569,7 @@ void      music_close(void) { s_close(&music, 0); }
  * steady latency.  Timed before that, a stream's first chunk was off by it.  150 ms: more than that, and within the
  * slots (PLAY_NBUF x 20 ms), so writing it never waits. */
 long long music_prime_us(void) { return 150000; }
+long long music_steered_us(void) { return MUSIC_UNSTEERED; }   /* the queue is the output's own: nothing to steer */
 
 /* The Bluetooth speaker stream: what a phone plays to the Echo (a2dp.c), the mixer's Bluetooth stream on the Dots.
  * Here a player of its own beside music, on the music stream like everything of ours.  Until it was there (-1) the
@@ -576,6 +578,11 @@ int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, c
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 void      bt_close(void) { s_close(&bt, 0); }
+/* a music plugin's (plugin.c): a player of its own on the music stream, as the phone's.  Untried on a Show */
+int       plug_open(unsigned rate, unsigned channels) { return s_open(&plug, rate, channels, SL_ANDROID_STREAM_MEDIA); }
+int       plug_write(const void *data, size_t len) { return s_write(&plug, data, len); }
+long long plug_queued_us(void) { return s_queued_us(&plug); }
+void      plug_close(void) { s_close(&plug, 0); }
 
 /* Drop In's call audio: the voice stream, its own volume and routing in Android */
 int       voip_open(unsigned rate, unsigned channels) { return s_open(&voip, rate, channels, SL_ANDROID_STREAM_MEDIA); }

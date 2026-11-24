@@ -1,6 +1,9 @@
-/* Wake-word backend.  The callback runs on a detector thread (Pryon's), or in wake_feed (microWakeWord's).
- * Two engines behind it, picked by the model wake_open() is given (wake.c): a microWakeWord manifest (.json, wake_mww.c,
- * on every build) or a model set of the model's own engine (wake_pryon.c on the Echos, wake_none.c on the PC).
+/* Wake-word backend.  The callback runs on a detector thread (Pryon's), in wake_feed (microWakeWord's) or on the
+ * plugins' broker thread (a plugin's).
+ * Three engines behind it, picked by the model wake_open() is given (wake.c): a microWakeWord manifest (.json,
+ * wake_mww.c, on every build), a plugin's word ("plugin:<plugin id>/<word id>", plugin.c: the engine is a program of
+ * its own, docs/plugins.md 4.13) or a model set of the model's own engine (wake_pryon.c on the Echos, wake_none.c on
+ * the PC).
  * Up to WAKE_SLOTS models listen at once (Home Assistant's "Wake word" and "Wake word 2"), each in a slot of its own
  * that is fed the same audio: a Pryon decoder each, or a microWakeWord interpreter each.
  * wake_feed and wake_open/close: one thread (the capture thread, main() before it runs); the others: any thread. */
@@ -41,7 +44,9 @@ struct wake_engine {
     void (*close)(int slot);
     int  (*afe_times)(int slot, long *start, long *end);
 };
-extern const struct wake_engine wake_vendor, wake_mww;
+extern const struct wake_engine wake_vendor, wake_mww, wake_plugin;
 int wake_is_mww(const char *model);    /* a microWakeWord manifest rather than one of the vendor engine's */
+int wake_is_plugin(const char *model); /* a plugin's word: wake_open only asks for it, the answer comes later (plugin.h) */
+int wake_is_vendor(const char *model); /* neither: a model set of the Echo's own engine, named by keyword and locale */
 uint64_t wake_fed(void);                /* samples fed so far: an engine opened later counts on from there */
 #endif

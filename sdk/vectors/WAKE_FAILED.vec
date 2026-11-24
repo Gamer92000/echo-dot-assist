@@ -1,0 +1,25 @@
+# WAKE_FAILED: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message WAKE_FAILED 33
+id 65569
+slot u8 136
+why u16 1
+packet 2100000021000100880100
+case empty
+id 65569
+slot u8 0
+why u16 1
+packet 2100000021000100000100
+case long
+id 65569
+slot u8 255
+why u16 5
+packet 2100000021000100ff0500
+case full
+id 65569
+slot u8 1
+why u16 1
+packet 2100000021000100010100
+refuse short 21000000210001
+refuse truncated 21000000210001008801
+refuse trailing 210000002100010088010000
+refuse enum:why 2100000021000100880000

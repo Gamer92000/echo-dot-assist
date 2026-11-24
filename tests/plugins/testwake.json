@@ -1,0 +1,14 @@
+{ "id": "testwake", "name": "Test wake word", "version": 1, "version_name": "0.1", "requires": {"core": 1, "wake": 1, "files": 1},
+  "author": "hassmic's tests", "description": "Hears a burst of sound as its wake word.", "license": "MIT",
+  "memory_mb": 16, "threads": 2,
+  "capabilities": { "wake": true, "files": 1 },
+  "settings": [
+    { "name": "models", "label": "Wake word models", "type": "files", "help": "A .model file per wake word.",
+      "item": { "by": "stem", "files": [ { "suffix": ".model", "max_kb": 16 }, { "suffix": ".json", "max_kb": 4, "optional": true } ] },
+      "max_items": 3,
+      "fields": [ { "name": "label", "label": "Name", "type": "text" },
+                  { "name": "level", "label": "Level", "type": "int", "min": 100, "max": 30000 } ],
+      "catalog": { "label": "Stand-in models", "base": "http://127.0.0.1:1/", "items": [ { "id": "burst", "title": "Burst" } ] } },
+    { "name": "mode", "label": "Mode", "type": "select", "options": [ "listen", "late", "future", "burst", "deaf", "closed", "relist", "stuck", "spin" ], "default": "listen" },
+    { "name": "note", "label": "A note", "type": "text" },
+    { "name": "pin", "label": "A secret", "type": "secret" } ] }

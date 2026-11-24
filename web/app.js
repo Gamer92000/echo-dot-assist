@@ -4,7 +4,7 @@
 // X-HM-Mac too, over "RESP\nCTR\nBODY": what the page carries from one Echo to another (settings, models) is what it sent.
 'use strict';
 
-const { x25519, x25519Public, blake2b, seal, hex, unhex } = hmcrypto;
+const { x25519, x25519Public, blake2b, seal, seal2, hex, unhex } = hmcrypto;
 const enc = new TextEncoder(), dec = new TextDecoder();
 // v cut to max bytes of UTF-8, whole characters: the Echo counts bytes where maxlength counts UTF-16 units (an umlaut
 // is one there, two here)
@@ -35,9 +35,13 @@ class Echo {
     msg.set(enc.encode('hassmic web 1')); msg.set(unhex(hello.pub), 13); msg.set(me.pub, 45);
     this.k = blake2b(32, shared, msg);
   }
+  // A counter is new with every request (the Echo takes each once) and what the page seals for an Echo is sealed under
+  // it (web.c unseal, seal2): two requests under one counter would seal under one key stream.  Its last three digits at
+  // random: two of this browser's tabs that ask in the same millisecond, past the shared last one, do not pick the same
   nextCtr() {
-    const key = 'hm.ctr.' + this.hello.pub, last = store(key) || 0;
-    const c = Math.max(Date.now() * 1000, last + 1);
+    const key = 'hm.ctr.' + this.hello.pub, last = store(key) || 0, r = new Uint16Array(1);
+    crypto.getRandomValues(r);
+    const c = Math.max(Date.now() * 1000 + (r[0] % 1000), last + 1);
     store(key, c);
     return c;
   }
@@ -56,11 +60,13 @@ class Echo {
     if (!r.ok) { let m = `${r.status}`; try { m = JSON.parse(dec.decode(bytes)).error || m; } catch (e) { /* not JSON */ } throw new Error(m); }
     if (!got) throw new Error('old');
     if (got !== hex(blake2b(16, this.k, cat(enc.encode(`RESP\n${ctr}\n`), bytes)))) throw new Error('forged');
-    return { bytes, text: () => dec.decode(bytes), json: () => JSON.parse(dec.decode(bytes)) };
+    return { bytes, ctr, text: () => dec.decode(bytes), json: () => JSON.parse(dec.decode(bytes)) };      // ctr: what an answer is sealed under (seal2)
   }
+  // 'approved' | 'waiting' | 'refused'; this.asked has the answer whole (why a login was refused: web.c login_ask)
   async login() {
     const r = await fetch(this.base + '/api/login', { method: 'POST', body: `${hex(me.pub)} ${browserLabel()}` });
-    return (await r.json()).login;
+    this.asked = await r.json();
+    return this.asked.login;
   }
   // Echos of one network trust each other: let in here because `via` (an Echo this browser is approved on) vouches
   async nonce() { return (await (await fetch(this.base + '/api/vouch/nonce', { method: 'POST', body: hex(me.pub) })).json()).nonce; }
@@ -190,6 +196,8 @@ const errText = (e) => e.message === 'login' ? 'Not logged in any more: reload t
 // The pages, in this order; nav: the heading they stand under.  Settings come from the Echo (settings.c) with their
 // group, which says their page (groups); the words are here.  Those MOVED live where people look for them, whatever
 // group the Echo has them in, and a parent's children go with it.  always: a page with no settings of its own.
+// sub: a page of another one's (its id "<parent>/<name>", its address #/<parent>/<name>): not in the list on the
+// left, which marks the parent while it shows
 const PAGES = [
   { id: 'overview', title: 'Overview', icon: 'home', always: true, intro: 'How this Echo is doing, and what you reach for most.' },
   { id: 'voice', title: 'Voice', icon: 'mic', nav: 'This Echo', groups: ['Voice'], intro: 'How the Echo hears you, and how it sounds when it does.' },
@@ -199,6 +207,8 @@ const PAGES = [
   { id: 'screen', title: 'Screen', icon: 'screen', nav: 'This Echo', when: () => !!state.screen, intro: 'The Echo Show\'s screen: what it shows when nothing else does, and the band of light along its bottom. Pull down from the top edge of the screen for the drawer: home, the face, music, Do not disturb, screen off and the volume.' },
   { id: 'media', title: 'Music & Bluetooth', icon: 'music', nav: 'This Echo', groups: ['Music', 'Bluetooth'], intro: 'Music Assistant plays on the Echo as a Sendspin player, phones play on it over Bluetooth, and it can play on a Bluetooth speaker itself.' },
   { id: 'features', title: 'Features', icon: 'sparkle', nav: 'This Echo', groups: ['Features'], intro: 'Optional extras. While a feature is on, its entities are in Home Assistant; switched off, they are removed there. Home Assistant reconnects for a moment when you switch one.' },
+  { id: 'plugins', title: 'Plugins', icon: 'box', nav: 'This Echo', always: true, intro: 'Programs by others that run beside hassmic on this Echo, each in a sandbox: another wake word engine, for instance. A plugin gets only what you accept when you install it, with the action button on the Echo.' },
+  { id: 'plugins/browse', sub: 'plugins', title: 'Browse plugins', icon: 'box', nav: 'This Echo', always: true, intro: 'What the plugin index lists: this project\'s own plugins, reviewed, and others\' as they come. The Echo reads the list itself and checks its signature, and installs nothing you have not accepted with its action button.' },
   { id: 'echos', title: 'Echos', icon: 'net', nav: 'All your Echos', always: true, intro: 'Your Echos find each other on the local network and share a key, so nothing else on the network can join them or silence them. This runs with arbitration off too: it is also how this page finds your other Echos.' },
   { id: 'compare', title: 'Compare & copy', icon: 'table', nav: 'All your Echos', always: true, intro: 'Your Echos side by side. Click the value you want and it goes to the other Echos in that row, from whichever Echo has it; click another one to turn it around. Nothing changes until you press Apply.' },
   { id: 'models', title: 'Models', icon: 'box', nav: 'All your Echos', always: true, intro: 'Amazon\'s extra wake words and models, microWakeWord\'s models and your light ring designs: fetched, copied between Echos, kept on file.' },
@@ -207,7 +217,7 @@ const PAGES = [
 const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust', 'screen_adaptive_colour'];      // the Show's backlight, and its colour where Fire OS has that
 const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
 const IDLE = ['screen_sleep_minutes', 'screen_clock'];                             // the screen's timeout, the clock in place of dark
-const MOVED = { light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
+const MOVED = { plugins: 'plugins', plugins_community: 'plugins', light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
   screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen',
   arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice',
   ring_live: 'lights' };
@@ -273,14 +283,15 @@ const HELP = {
   kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
   kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
   kiosk_dlna: { help: 'Lets phones and media servers on your network find the Kiosk Satellite app\'s DLNA renderer and play on this Echo, Home Assistant\'s DLNA Digital Media Renderer integration included. Switch the renderer on in the app as well: it is off there by default. The Echo\'s firewall then admits, from private addresses only, the port the app names under Settings > DLNA Renderer > Server port (2326 or so; one you type in works too) while the app listens there, and the network\'s searches for renderers (UDP port 1900, multicast only) while the app alone listens there. The ports close again when the renderer stops, the app goes or this is off. DLNA has no password: while this is on, anyone on your network can play on the Echo. Off by default. Takes effect within seconds.' },
-  online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.',
-    status: () => updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, 'Checking that this Echo can reach GitHub…'))
+  online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up. Another server (a mirror on your network, a fork\'s releases on Forgejo or Gitea): Where software comes from, below.',
+    status: () => { const own = ((state.sources || {}).updates || {}).url; return updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, own ? 'Checking that this Echo can reach the update server…' : 'Checking that this Echo can reach GitHub…'))
       : updCheck.why ? h('div', { class: 'callout bad big' }, icon('warn'), h('div', { class: 'grow' },
-        h('p', {}, h('b', {}, 'Online updates were not switched on: this Echo cannot reach GitHub.')),
-        h('p', {}, 'It downloads updates itself, so it needs to get out to the internet. Check that its network, firewall, VLAN or DNS filter lets it reach github.com, api.github.com and GitHub\'s download servers (*.githubusercontent.com) over HTTPS, then pick a channel again.'),
+        h('p', {}, h('b', {}, own ? 'Online updates were not switched on: this Echo cannot reach the update server.' : 'Online updates were not switched on: this Echo cannot reach GitHub.')),
+        h('p', {}, own ? `It downloads updates itself from ${own} (Where software comes from). Check that the server answers from the Echo's network, then pick a channel again.`
+          : 'It downloads updates itself, so it needs to get out to the internet. Check that its network, firewall, VLAN or DNS filter lets it reach github.com, api.github.com and GitHub\'s download servers (*.githubusercontent.com) over HTTPS, then pick a channel again.'),
         h('p', { class: 'why' }, 'What failed: ', h('code', {}, updCheck.why)),
         h('button', { class: 'link', onclick: () => { updCheck.why = ''; paintStatus('online_updates'); } }, 'Dismiss')))
-      : null },
+      : null; } },
 
   arbitration: { icon: 'net', ha: ['Arbitration peers'], help: 'When several Echos hear the wake word, only the one that heard you best answers; the others stay silent and dark. Only devices listening for the same wake word compete. Off: this Echo answers every wake word it hears.',
     status: () => {
@@ -307,14 +318,14 @@ const HELP = {
       const other = z.wifi && z.country && z.wifi !== z.country ? ` Your Wi-Fi router says ${z.wifi}; if that is right, pick the language above.` : '';
       return h('p', { class: 'f-model' }, what + why + other);
     } },
-  wake_engine: { help: 'Amazon\'s engine is the one the Echo was built around. With microWakeWord, the engine of ESPHome\'s voice satellites, you get wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance.',
+  wake_engine: { help: 'Amazon\'s engine is the one the Echo was built around. With microWakeWord, the engine of ESPHome\'s voice satellites, you get wake words anyone can train, at the cost of hearing them much less reliably. Home Assistant: the Echo streams its microphone and your Home Assistant listens, with openWakeWord for instance. The microWakeWord built into hassmic is deprecated: the microWakeWord plugin is the same engine in a sandbox of its own (a model file it reads can break the wake word and nothing else), and a later release takes the built-in one out. "Move to the plugin" on this page copies your models to it and, where the built-in engine listens, makes the plugin listen for the same wake words; the built-in engine keeps its own models, and switching back is one click while it is still here.',
     // the warning, a first model, or Home Assistant's side of it, before the switch; from or to Home Assistant the satellite restarts
     before: (c) => c === 'microwakeword' ? mwwSwitchDialog() : c === 'homeassistant' ? haSwitchDialog() : true,
     after: async (c, was) => { if (c === 'homeassistant' || was === 'homeassistant') await restarted(); },
     modes: {
       amazon: { title: 'Amazon\'s engine', tag: 'Default', sub: 'Pryon, with Amazon\'s models: what a stock Echo runs' },
       homeassistant: { title: 'Home Assistant', sub: 'The Echo streams its microphone, your Home Assistant listens (openWakeWord, for instance)' },
-      microwakeword: { title: 'microWakeWord', tag: 'Experimental', sub: 'The open engine of ESPHome\'s voice satellites, with models you add here' },
+      microwakeword: { title: 'microWakeWord, built in', tag: 'Deprecated', sub: 'The open engine of ESPHome\'s voice satellites, built into hassmic. The microWakeWord plugin replaces it: the Wake word page moves your models there' },
     },
     // one row per question, one cell per choice: '+' gives, '-' costs, '' neither
     compare: [
@@ -407,6 +418,8 @@ const HELP = {
       return h('p', { class: 'f-model' }, s.model === 'newer' ? 'Model: Amazon\'s newer one, from Amazon.'
         : 'Model: the one in the Echo\'s firmware. Download from Amazon (Models page) gets Amazon\'s newer one (retrained, same sounds).');
     } },
+  plugins_community: { help: 'Official plugins are made by this project, reviewed, and listed as official by the plugin index. Everything else is a community plugin: listed by the index without a review, or installed from a file. Off (the default), the Echo installs none of them and stops those it has, which stay installed. Switching on here asks first. On an Echo whose sandbox lacks its SELinux wall, the page says in full what is missing and how to close the gap in that question and again in the install dialog of every community plugin, which is the step an import, a preset or a copy from another Echo does not skip. Exported and copied to other Echos like any setting: there too, each plugin is installed only with that Echo\'s action button.' },
+  plugins: { help: 'A plugin is a program of its own that its author keeps working: another wake word engine, for instance. It runs as a user of its own, under a filter that leaves it no files and no sockets of its own making, and gets only what you accept when you install it. Off: no plugin runs. While on, Home Assistant has an event entity "Plugin" that fires when a plugin is installed, updated or removed on this Echo. While on and a plugin is installed, the Echo asks the plugin index once a day by itself, at a random time, for its list of withdrawn plugins (a request to GitHub Pages that names no plugin and no version), and passes that list to and from the other Echos of its network. Off, it asks nothing. Exported and copied to other Echos like any setting: there it runs only the plugins installed on that Echo, and each install still takes that Echo\'s action button.' },
   wake_events: { icon: 'ear', ha: ['Wake word (event)'], help: 'Home Assistant gets a "Wake word" event each time this Echo hears its wake word. Its type says what came of it: detected (it took it), near_miss (almost: Amazon\'s engine heard something close but did not wake), answered_elsewhere (another Echo or satellite answered it) and no_speech (it woke, then nothing was said). Count them per room in an automation; a detected followed by no_speech is a false wake. Near misses can come often while the TV or music plays, each an entry in Home Assistant\'s history. microWakeWord has no near misses.' },
   request_text: { icon: 'whisper', ha: ['Last heard', 'Last reply'], help: 'Two text sensors in Home Assistant: what speech-to-text understood of your last request, and what the assistant answered. For a dashboard beside the Echo, or an automation on a word it keeps mishearing. Both are cleared when a new request starts, so saying the same thing twice still counts as a change. Home Assistant takes at most 255 characters per state: a longer reply ends in "…".',
     note: 'Home Assistant keeps every request and reply in its history while this is on.' },
@@ -493,6 +506,8 @@ const SUB = {
   arbitration_window: 'How long the Echo waits for other devices',
   sound_detection: 'Events for smoke alarms, breaking glass, barking and more',
   wake_events: 'An event each time this Echo hears its wake word',
+  plugins: 'Programs by others, beside hassmic, each in a sandbox',
+  plugins_community: 'Plugins nobody at this project reviewed: installed and run, or not',
   request_text: 'What was heard and answered, as two text sensors',
   whisper_detection: 'Tells Home Assistant when a request was whispered',
   wifi_motion: 'A motion sensor from changes in the Wi-Fi signal',
@@ -510,7 +525,7 @@ const SUB = {
   call_mic: 'What the other Echo hears',
 };
 const CHOICE_NAMES = {
-  wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord', homeassistant: 'Home Assistant' },
+  wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord (built in, deprecated)', homeassistant: 'Home Assistant' },
   speech_language: { auto: 'Automatic', de: 'German', en: 'English', fr: 'French', es: 'Spanish', ja: 'Japanese', it: 'Italian',
     pt: 'Portuguese', nl: 'Dutch', sv: 'Swedish', da: 'Danish', nb: 'Norwegian', fi: 'Finnish', pl: 'Polish', ro: 'Romanian' },
   arbitration_mode: { hassmic: 'Echo network', kiosk: 'Kiosk Satellite' },
@@ -650,16 +665,48 @@ async function answerVouch() {
   };
 }
 
+// Why the Echo did not take, or did not approve, a login (web.c "what waits for the action button"): one thing waits
+// for the button at a time, and a press is not turned from the wait it was armed for to another.  What the page adds
+// to that: nobody is sent to press unless the Echo's last word was "waiting" for this browser
+const WAIT_KIND = { login: 'a login', adb: 'adb over Wi-Fi', plugin: 'a plugin\'s install', note: 'the note of a copied plugin', anyway: 'a withdrawn plugin to run anyway', sources: 'a signing key of Sources' };
+const synWaits = new Map();            // "<Echo's key> <note's number>" -> until when the page looks for the hold that dismisses it (renderAttention)
+// A browser's key as the Echo shows it beside a label, which whoever logs in chooses freely: the first eight bytes.
+// The same in the list of browsers (System) and on the note of a copied plugin, to hold one against the other
+const keyMark = (hex) => (hex || '').slice(0, 16).replace(/(.{4})(?=.)/g, '$1 ');
+// ... while the page goes on asking by itself (KEPT: the ask's loop does): the Echo takes this login when its time comes
+function loginRefused(a, kept) {
+  const t = a && a.retry_s ? (a.retry_s >= 90 ? `${Math.ceil(a.retry_s / 60)} min` : `${a.retry_s} s`) : '';
+  const s = kept ? ` This page asks again by itself${t ? ` (about ${t})` : ''}: leave it open.` : t ? ` Try again in ${t}.` : ' Try again.';
+  if (a && a.why === 'contested') return 'Not approved: another browser asked to log in at the same time, so the Echo lets neither in and the button does nothing for a login just now. Do not press. If the other one is not yours, somebody else on your network is asking.' + s;
+  if (a && a.why === 'busy') return 'Not asked yet: something else waits for the action button of this Echo, or did a moment ago. Do not press for this login.' + s;
+  if (a && a.why === 'rate') return 'Not asked: too many requests to log in came to this Echo.' + s;
+  return 'Not approved: the button was not pressed within a minute. Try again.';
+}
+
 $('ask').onclick = async () => {
   const msg = $('loginmsg'), art = $('art'), b = $('ask');
-  msg.className = 'login-msg'; msg.textContent = act('Waiting… press the action button on the Echo now.');
+  msg.className = 'login-msg'; msg.textContent = act('Asking the Echo…');
   art.classList.add('wait'); b.disabled = true;
   const done = (text, bad) => { art.classList.remove('wait'); b.disabled = false; msg.textContent = text; if (bad) msg.classList.add('bad'); };
-  for (let i = 0; i < 70; i++) {
+  // Told "contested" or "busy" (or over the count of asks), the page keeps asking, every two seconds (once a second
+  // while it is told "waiting", below), for up to five minutes: stopping at the first such word left whoever else was asking the only one, and the Echo armed for that one
+  // when the hold was over (web.c: an open page of the owner's stays a competitor; alone, its own asks make no hold
+  // longer).  The words on the page say not to press meanwhile, and "waiting" comes back only as the Echo's own word
+  const until = Date.now() + 300000;
+  while (Date.now() < until) {
     let s;
     try { s = await echo.login(); } catch (e) { done('The Echo did not answer. Is it still on the network?', true); return; }
     if (s === 'approved') { art.classList.remove('wait'); $('login').classList.add('hidden'); await load(); toast('Logged in'); return; }
-    if (s === 'refused') { done('Not approved: the button was not pressed within a minute, or another browser asked at the same time. Try again.', true); return; }
+    if (s === 'refused') {
+      const why = (echo.asked || {}).why;
+      if (why !== 'contested' && why !== 'busy' && why !== 'rate') { done(loginRefused(echo.asked), true); return; }
+      art.classList.remove('wait'); msg.classList.add('bad'); msg.textContent = loginRefused(echo.asked, true);
+      await new Promise((r) => setTimeout(r, why === 'rate' ? Math.min(10, echo.asked.retry_s || 2) * 1000 : 2000));
+      continue;
+    }
+    // 'waiting' is the Echo's word that the press is this login's: only then is anyone sent to press
+    art.classList.add('wait'); msg.classList.remove('bad');
+    msg.textContent = act('Waiting… press the action button on the Echo now. Its ring shows that a login waits: the press lets this browser in.');
     await new Promise((r) => setTimeout(r, 1000));
   }
   done('No button press came. Try again.', true);
@@ -685,6 +732,7 @@ async function load() {
   $('app').classList.remove('hidden');            // before render(): a hidden page has no widths to place cards by, nothing to scroll to
   render();
   if (mwwBox) getMww().catch(() => {});                                  // the engine and its models, as Home Assistant may have picked
+  if (plgBox && plgShown()) getPlugins().catch(() => {});      // plugins.js
   if (load.started && unseen()) refreshDevices().catch(() => {});        // a new Echo in the beacons: show it now, not next round
   else if (load.started && !devRun && othersShown()) refreshMine().catch(() => {});   // a setting changed here or from HA: copy offers the new value
   if (!load.started) {
@@ -1032,6 +1080,12 @@ const controls = new Map();             // setting name -> { update(s), saved, r
 const compareOpen = new Set();          // settings whose pros and cons are open
 let built = '';
 
+// a choice's card.  The wake word engine's choices also name the wake plugins installed ("plugin:<id>", main.c
+// core_wake_engines): no card of the page's own for those, the plugin says what it is on its card
+const modeOf = (modes, c) => modes[c] || (c.startsWith('plugin:')
+  ? { title: `Plugin: ${c.slice(7)}`, tag: 'Plugin', sub: 'A wake word engine that runs as a plugin, with the wake words you add on its card (Plugins page). While it is not installed, Amazon\'s wake word listens; installed and not running, none does' }
+  : { title: c, sub: '' });
+
 function control(s, prefix = 's-') {
   const id = prefix + s.name;
   if (s.type === 'bool') {
@@ -1052,7 +1106,7 @@ function control(s, prefix = 's-') {
   const names = CHOICE_NAMES[s.name] || {}, modes = (HELP[s.name] || {}).modes;
   if (modes) {                          // choices worth weighing: a small card each, what each gives and costs one click away
     const cards = s.choices.map((c) => {
-      const { before, after } = HELP[s.name] || {}, m = modes[c];          // a dialog of the page's own before a choice counts
+      const { before, after } = HELP[s.name] || {}, m = modeOf(modes, c);  // a dialog of the page's own before a choice counts
       const pick = async () => {
         const was = s.choices[settingValueIndex(s.name)];
         if (was === c || (before && !(await before(c)))) return;
@@ -1069,10 +1123,10 @@ function control(s, prefix = 's-') {
     // what each gives and costs, question by question: a table, one column per choice (on a phone, one block per
     // question); open stays open over rebuilds
     const mark = { '+': ['pro', 'plus', 'Gives: '], '-': ['con', 'minus', 'Costs: '], '': ['mid', 'dot', ''] };
-    const cols = s.choices.map((c) => h('th', { scope: 'col' }, modes[c].title));
+    const cols = s.choices.map((c) => h('th', { scope: 'col' }, modeOf(modes, c).title));
     const rows = (HELP[s.name].compare || []).map(([q, by]) => h('tr', {}, h('th', { scope: 'row' }, q), s.choices.map((c, i) => {
       const [k, t] = by[c] || ['', '—'], [cls, ic, sr] = mark[k];
-      return h('td', { class: cls, 'data-col': i, 'data-mode': modes[c].title }, h('div', { class: 'cell' }, icon(ic), h('span', {}, h('span', { class: 'sr' }, sr), act(t))));
+      return h('td', { class: cls, 'data-col': i, 'data-mode': modeOf(modes, c).title }, h('div', { class: 'cell' }, icon(ic), h('span', {}, h('span', { class: 'sr' }, sr), act(t))));
     })));
     const table = h('table', { class: 'cmp-table' }, h('thead', {}, h('tr', {}, h('td'), cols)), h('tbody', {}, rows));
     const more = h('details', { class: 'more compare', open: compareOpen.has(s.name),
@@ -1255,6 +1309,8 @@ const PAGE_BUILD = {
   echos: (el, list) => buildEchos(el, list.find((s) => s.name === 'arbitration'), list.filter((s) => s.name !== 'arbitration' && (HELP[s.name] || {}).parent === 'arbitration')),
   compare: (el) => buildCompare(el),
   models: (el) => buildModels(el),
+  plugins: (el, list) => buildPlugins(el, list),          // plugins.js
+  'plugins/browse': (el) => buildBrowse(el),
   system: (el, list) => buildSystem(el, list),
 };
 
@@ -1274,6 +1330,7 @@ function build() {
     if (PAGE_BUILD[pg.id]) PAGE_BUILD[pg.id](el, list);
     else el.append(flow(settingCards(list, pg.id)));
     root.append(el);
+    if (pg.sub) continue;
     if (pg.nav && pg.nav !== head) nav.append(h('div', { class: 'nav-h' }, head = pg.nav));
     nav.append(h('a', { href: '#/' + pg.id, 'data-page': pg.id }, icon(pg.icon), h('span', { class: 'nav-t' }, pg.title), h('span', { class: 'nav-n hidden' })));
   }
@@ -1283,7 +1340,7 @@ function build() {
 
 // Asking the other Echos is six requests each, a whole design library among them: with 15 of them not for nothing, only
 // while a page shows them, and once more on arriving there.  This Echo's own values too: nothing else reads them
-const othersShown = () => ['overview', 'echos', 'compare', 'models'].includes(curPage);
+const othersShown = () => ['overview', 'echos', 'compare', 'models', 'plugins'].includes(curPage);   // plugins: "Copy plugins" (plugins.js)
 let lastRound = 0;
 
 const pageBuilt = (id) => [...document.querySelectorAll('.page')].some((el) => el.dataset.page === id);   // pages keeps them all: settings of other models go by it
@@ -1293,11 +1350,13 @@ const pageBuilt = (id) => [...document.querySelectorAll('.page')].some((el) => e
 // page half way through a copy or a sign-in goes on behind another one
 function route() {
   const m = /^#\/([^/]+)(?:\/(.+))?$/.exec(location.hash), part = (s) => { try { return decodeURIComponent(s); } catch (e) { return s; } };
-  const here = !!m && pageBuilt(part(m[1])), id = here ? part(m[1]) : 'overview';   // a bookmark or a link from another model may name a page this Echo has not got
-  const changed = id !== curPage;
+  // #/plugins/browse is a page of its own (a sub page); #/voice/mic_level a setting on a page
+  const sub = !!m && !!m[2] && pageBuilt(`${part(m[1])}/${part(m[2])}`) ? `${part(m[1])}/${part(m[2])}` : '';
+  const here = !!m && (!!sub || pageBuilt(part(m[1]))), id = sub || (here ? part(m[1]) : 'overview');   // a bookmark or a link from another model may name a page this Echo has not got
+  const changed = id !== curPage, inNav = (pages.find((p) => p.id === id) || {}).sub || id;
   curPage = id;
   document.querySelectorAll('.page').forEach((el) => el.classList.toggle('hidden', el.dataset.page !== id));
-  $('nav').querySelectorAll('a').forEach((a) => { const on = a.dataset.page === id; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  $('nav').querySelectorAll('a').forEach((a) => { const on = a.dataset.page === inNav; a.classList.toggle('cur', on); if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   setTitle();
   menu(false); switcher(false);
   reflowPage();
@@ -1306,7 +1365,9 @@ function route() {
     if (Date.now() - lastRound > 30000) refreshDevices().catch(() => {});
     else if (!devRun) refreshMine().catch(() => {});       // what was changed on the page just left
   }
-  if (here && m[2]) reveal(part(m[2]));
+  if (here && m[2] && !sub) reveal(part(m[2]));
+  // the plugins' pages read the Echo's lists now, and ask the index once per page shown (plugins.js)
+  if (changed && plgBox && plgShown()) { plgIxAsked = false; getPlugins().catch(() => {}); }
   renderAttention();
 }
 window.addEventListener('hashchange', route);
@@ -1415,20 +1476,25 @@ const FINDABLE = [
   ['Your Echos', 'echos', '', 'network arbitration key pairing'],
   ['Download from Amazon', 'models', 'davs', 'wake words whisper sound detection model'],
   ['Copy models', 'models', 'model-copy', 'wake word design theme pack'],
+  ['Move to the microWakeWord plugin', 'wake', 'mww-move', 'microwakeword built in deprecated plugin migrate switch back',
+    () => !!((mww || {}).models || []).length || settingValue('wake_engine') === 'microwakeword'],
   ['Models on file', 'models', 'model-file', 'backup tar save load'],
   ['Light ring animations', 'lights', 'ring-acts', 'designs led theme pack'],
   ['Sounds', 'voice', 'sounds', 'wake sound chime earcon ringtone your own upload replace'],
   ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
   ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
+  ['Network address', 'system', 'address', 'static fixed ip address dhcp subnet mask gateway router dns'],
   ['Music Assistant on the screen', 'media', 'mass', 'token library browse queue speakers groups api', () => !!state.mass],
   ['Home app', 'screen', 'home-app', 'kiosk satellite face launcher start screen'],
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
   ['Debug access', 'system', 'debug', 'adb root shell'],
+  ['Where software comes from', 'system', 'sources', 'sources update server forgejo gitea github mirror fork plugin index url signing key signature check'],
   ['Note', 'system', 'note', 'description location room label where which echo'],
   ['Restart', 'system', 'restart', 'reboot'],
   ['Factory reset', 'system', 'factory-reset', 'erase forget'],
   ['Approved browsers', 'system', 'browsers', 'login revoke log out'],
+  ['Browse plugins', 'plugins/browse', '', 'plugin index install official community find add'],
 ];
 
 function searchHits(q) {
@@ -1555,7 +1621,8 @@ function buildVolumes(el) {
 }
 
 function render() {
-  const sig = state.settings.map((s) => s.name).join() + '|' + !!state.arbitration + '|' + !!state.kiosk_app + '|' + !!state.screen, fresh = sig !== built;
+  // (the wake word engine's choices too: a wake plugin installed or removed is another card in its list)
+  const sig = state.settings.map((s) => s.name + (s.name === 'wake_engine' ? ':' + s.choices.join(',') : '')).join() + '|' + !!state.arbitration + '|' + !!state.kiosk_app + '|' + !!state.screen, fresh = sig !== built;
   if (fresh) { built = sig; build(); }
   for (const s of state.settings) { const c = controls.get(s.name); if (c) c.update(s); }
   for (const q of quick) { const s = state.settings.find((x) => x.name === q.name); if (s) q.update(s); }
@@ -1591,10 +1658,52 @@ function renderAttention() {
       h('p', {}, ha ? 'Home Assistant is not connected. The Echo cannot answer requests until it is; check that the ESPHome integration has this device and that both are on the same network.'
         : MODEL_WARN.test(text) ? linkModels(text) : text));
   };
+  // Sources (issue #175): where updates and plugins come from, while not the project's: on every page, yellow for a
+  // server of the owner's, red for a key of the owner's or no signature check
+  if (state && state.sources && state.sources.level) box.append(sourcesCallout(state.sources));
   for (const text of all) {
     const ha = /Home Assistant is not connected/.test(text);
-    if (ha || curPage === 'overview' || (curPage === 'models' && MODEL_WARN.test(text))) box.append(says(text));
+    // (a wake word engine that does not listen: on every page, as Home Assistant missing is)
+    if (ha || /^The wake word engine is the plugin/.test(text) || curPage === 'overview' || (curPage === 'models' && MODEL_WARN.test(text))) box.append(says(text));
   }
+  // A plugin that came to an Echo on a voucher of the network, without that Echo's button (web.c "sync"): on every
+  // page until it is dismissed, since nobody stood at that Echo for it.  This Echo's own, and those of the other
+  // Echos while a page polls them: what was copied to the kitchen's Echo is said on the bedroom's page too, where
+  // the owner may come by first.  The plugin's name is its manifest's word, the label the browser's own: text.  The
+  // Echo the voucher named is what the voucher said: any Echo of the network can make one in any member's name
+  const notes = ((state && state.plugins_synced) || []).map((s) => ({ s, e: echo, on: null }));
+  if (othersShown()) for (const d of others.values()) if (d.echo && d.logged && d.state) for (const s of d.state.plugins_synced || []) notes.push({ s, e: d.echo, on: d.echo.hello.name });
+  for (const { s, e, on } of notes) {
+    const named = e === echo && s.node === echo.hello.node ? echo : ([...others.values()].find((d) => d.echo && d.echo.hello.node === s.node) || {}).echo;
+    const key = `${e.hello.pub} ${s.n}`, waits = synWaits.has(key);
+    const when = s.at ? ` on ${new Date(s.at * 1000).toLocaleString()}` : ', at a time that Echo could not tell (its clock was not set yet)';
+    const again = () => (e === echo ? load() : refreshDevices()).catch(() => {});
+    const dismiss = async () => {
+      try {
+        const r = (await e.call('POST', '/api/plugins/synced', `dismiss ${s.n}`)).json();
+        // (its own wait, armed for the notes of that moment: the hold takes those, not this one)
+        if (r.dismiss === 'busy' && r.holds === 'note' && [...synWaits.keys()].some((k) => k.startsWith(`${e.hello.pub} `))) toast(act(`${e.hello.name} already waits for its action button to be held for the notes it showed before this one. Hold it for those, or say "Keep it" there, then ask for this one`, e.hello));
+        else if (r.dismiss === 'busy') toast(act(`Not asked: ${WAIT_KIND[r.holds] || 'something else'} waits for the action button of ${e.hello.name} first. A press now serves that: try again when it is done`, e.hello));
+        // (the wait for the hold is armed three times an hour on an Echo, whoever asks: web.c "not there for the asking")
+        else if (r.dismiss === 'later') toast(act(`${e.hello.name} was asked to wait for its action button for such notes three times within the hour, and waits again in ${r.retry_s >= 90 ? `${Math.ceil(r.retry_s / 60)} min` : `${r.retry_s || 1} s`}. A browser let in with that Echo's own button, which did not bring the plugin, can dismiss it at once`, e.hello));
+        else if (r.dismiss === 'waiting') {
+          // the Echo's own wait is a minute; the page looks until the note is gone or that time is up
+          synWaits.set(key, Date.now() + 65000);
+          const t = setInterval(() => { if (!synWaits.has(key) || Date.now() > synWaits.get(key)) { synWaits.delete(key); clearInterval(t); renderAttention(); } else again(); }, 2000);
+        }
+      } catch (err) { toast(errText(err)); }
+      again(); renderAttention();
+    };
+    const keep = async () => { synWaits.delete(key); try { await e.call('POST', '/api/plugins/synced', 'keep'); } catch (err) { toast(errText(err)); } again(); renderAttention(); };
+    box.append(h('div', { class: 'callout info', 'data-k': `synced ${key}` }, icon('info'), h('div', { class: 'grow' },
+      h('p', {}, h('b', {}, s.name), ` (version ${s.version}) was installed on `, on ? h('b', {}, on) : 'this Echo', act(' without its action button', e.hello), `${when}. The voucher that stood in for the press named `,
+        h('b', {}, named ? named.hello.name : s.node), `; the browser ${s.by}${s.key ? ` (key ${keyMark(s.key)})` : ''} brought the package. `,
+        act('Any Echo of your network can make such a voucher, so that name is what the voucher said, not proof of where the plugin came from. The Echo checked the package itself: it is one the plugin index listed as official. If this was not you, remove the plugin on that Echo\'s Plugins page and look at who is logged in (System): a browser\'s name is its own word, its key\'s first digits, shown there too, are not.', e.hello)),
+      waits ? h('p', {}, act(`Hold the action button on ${on || 'this Echo'} for a second, then let go, to dismiss this. A short press does not: it does what it always does. `, e.hello), h('button', { class: 'link', onclick: keep }, 'Keep it'))
+        : h('button', { class: 'link', title: s.dismiss === 'now' ? '' : act('The browser that brought the plugin, and one that was not let in with this very Echo\'s action button, cannot take this off by itself: the Echo asks for its action button, held for a second', e.hello), onclick: dismiss },
+          s.dismiss === 'now' ? 'Dismiss' : act('Dismiss with the action button', e.hello)))));
+  }
+  for (const k of [...synWaits.keys()]) if (!notes.some(({ s, e }) => `${e.hello.pub} ${s.n}` === k)) synWaits.delete(k);
   const rest = all.filter((t) => !/Home Assistant is not connected/.test(t)).length, n = $('nav').querySelector('[data-page=overview] .nav-n');
   if (n) { n.textContent = String(rest); n.classList.toggle('hidden', !rest); n.title = plural(rest, 'thing') + ' to look at'; }
 }
@@ -1677,9 +1786,162 @@ async function getMww() { mww = (await echo.call('GET', '/api/mww')).json(); ren
 
 function buildWake(el) {
   mwwWarn = h('div');
+  mwwMoveBox = h('div', { class: 'card hidden', id: 'mww-move' });
   mwwBox = h('div', { class: 'card' });
   mwwBox.id = 'mww';
-  el.append(mwwWarn, mwwBox);
+  el.append(mwwWarn, mwwMoveBox, mwwBox);
+}
+
+// ---- the built-in microWakeWord is deprecated: the plugin replaces it (docs/plugins.md 5.9, web.c mww_migrate).
+// The move is the owner's: this card, one button.  Plugins switched on if they are off (and off again if nothing was
+// installed), the official plugin installed from the plugin index with the dialog and the action button as any
+// install, then the Echo copies every model into the plugin's own list (each checked by it, threshold and window as
+// tuned here) and, where the built-in engine is the one listening, switches the engine with the same wake words.
+// Where another engine listens (Amazon's, another plugin) the models are copied and nothing else changes: the
+// switch is a separate step, offered with what it means.  The built-in engine's models stay as they are: switching
+// back is the engine setting alone.  A plugin installed as microwakeword that is not the official one is named (its
+// author, its tier) and the owner asked before his models go to it.
+let mwwMoveBox = null;
+const mwwMove = { busy: false, steps: [], offer: null };    // what the move did, step by step; the switch it offers
+const mwwDeprecated = () => callout('warn', h('p', {}, h('b', {}, 'The built-in microWakeWord is deprecated. '),
+  'The microWakeWord plugin replaces it: the same engine, in a sandbox of its own. A later release takes the built-in one out; ',
+  h('a', { href: '#/wake/mww-move' }, 'Move to the plugin'), ' on the Wake word page copies your models there.'));
+const mwwPlugs = async () => (((await echo.call('GET', '/api/plugins')).json().plugins) || []);
+const mwwPlug = async () => (await mwwPlugs()).find((p) => p.id === 'microwakeword');
+const mwwTier = (t) => (t === 'official' ? 'official' : t === 'community' ? 'community, not reviewed' : 'a file, not listed by the plugin index');
+const mwwEngName = (e) => (e && e.startsWith('plugin:') ? `the ${e.slice(7)} plugin` : { amazon: 'Amazon\'s engine', microwakeword: 'the built-in microWakeWord', homeassistant: 'Home Assistant' }[e] || e || 'none');
+
+// MODE 'move': the built-in engine listens, and the engine follows the models; 'copy': another engine listens, only
+// the models go
+async function mwwMigrate(mode) {
+  const ms = (mww || {}).models || [], off = !settingValue('plugins'), eng = settingValue('wake_engine');
+  let p0 = null, others = [];
+  try { const all = await mwwPlugs(); p0 = all.find((p) => p.id === 'microwakeword'); others = all.filter((p) => p.id !== 'microwakeword' && p.enabled && p.here !== false); } catch (e) { /* (asked again below) */ }
+  const have = p0 && p0.here !== false && p0.accepted;
+  if (have && p0.tier !== 'official' && !(await ask({ title: 'Copy your models to this plugin?', ok: 'Copy them', danger: true,
+    body: [h('p', {}, h('b', {}, `The plugin installed here as microwakeword is not the official microWakeWord. `),
+      `It is ${p0.name} version ${p0.version}, which says it is by ${p0.author}: ${mwwTier(p0.tier)}.`),
+      p0.key ? h('p', {}, 'Signed with the author key ', h('b', { class: 'plg-key' }, p0.key),
+        '. Its name is the plugin\'s own word; the key is who made it: compare it with what its author publishes.') : null,
+      h('p', {}, 'Anyone can make a plugin and call it microwakeword. Copy your wake word models to it only if you trust who made it; or remove it on the Plugins page, and the move installs the official one.')] }))) return;
+  const any = have && p0.tier !== 'official' ? ' any' : '';
+  if (!(await ask({ title: mode === 'move' ? 'Move to the microWakeWord plugin?' : 'Copy the models to the microWakeWord plugin?', ok: mode === 'move' ? 'Move' : 'Copy',
+    body: [h('p', {}, 'Step by step, each shown here as it is done:'),
+      h('ol', { class: 'plg-caps' },
+        off ? h('li', {}, 'Plugins are switched on (they are off now). Home Assistant reconnects once.'
+          + (others.length ? ` ${nameList(others.map((p) => p.name))} ${others.length === 1 ? 'is' : 'are'} switched on as well and start${others.length === 1 ? 's' : ''} with them.` : '')
+          + ' If nothing gets installed, plugins are switched off again.') : null,
+        have ? null : h('li', {}, 'The Echo fetches the official microWakeWord plugin from the plugin index. You see what it may do, and accept it with the Echo\'s action button.'),
+        h('li', {}, `The Echo copies ${plural(ms.length, 'model')} into the plugin's own list, each checked by the plugin, with the threshold and window you set here (brought into the plugin's range where they are outside it).`
+          + (have ? ' A model the plugin has already gets these files in place of its own and keeps the threshold and window it has on the plugin.' : '')),
+        mode === 'move' ? h('li', {}, 'The wake word engine becomes the plugin, listening for the same wake words.')
+          : eng === 'plugin:microwakeword' ? h('li', {}, 'The plugin stays the wake word engine, with the wake words it has now.')
+            : h('li', {}, `The wake word engine stays ${mwwEngName(eng)}. Afterwards you can make the plugin the engine, as a separate step.`)),
+      h('p', {}, mode === 'move' ? 'If anything fails on the way, the built-in engine keeps listening as now. ' : '',
+        'The built-in engine keeps its own models as they are: what you change or delete on the plugin is the plugin\'s copy.')].filter(Boolean) }))) return;
+  mwwMove.busy = true; mwwMove.steps = []; mwwMove.offer = null;
+  const step = (text, kind = 'ok') => { mwwMove.steps = mwwMove.steps.filter((x) => x.kind !== 'busy'); mwwMove.steps.push({ text, kind }); renderWake(); };
+  let on = false, installed = false;
+  try {
+    if (off) {
+      step('Switching plugins on…', 'busy');
+      const r = (await echo.call('POST', '/api/set', 'plugins=on\n')).json();
+      if (r.errors) throw new Error(r.errors.trim());
+      on = true; step(others.length ? `Plugins switched on (${nameList(others.map((p) => p.name))} too)` : 'Plugins switched on'); await load().catch(() => {});
+    }
+    let p = await mwwPlug();
+    if (!p || p.here === false || !p.accepted) {
+      step('The Echo fetches the plugin from the plugin index…', 'busy');
+      await echo.call('POST', '/api/plugins/fetch', 'microwakeword');
+      let info = null;
+      for (let i = 0; !info && i < 900; i++) {
+        await new Promise((res) => setTimeout(res, i < 10 ? 300 : 1000));
+        const st = (await echo.call('GET', '/api/plugins/fetch')).json();
+        if (st.state === 'checked' && st.check) info = st.check;
+        else if (st.state !== 'fetching') throw new Error(st.error || 'The Echo did not fetch the plugin');
+      }
+      if (!info) { echo.call('POST', '/api/plugins/cancel').catch(() => {}); throw new Error('The Echo did not fetch the plugin in time'); }
+      if (info.tier !== 'official') { echo.call('POST', '/api/plugins/cancel').catch(() => {}); throw new Error(`The plugin index lists microwakeword as ${mwwTier(info.tier)}, not as the official microWakeWord: nothing installed`); }
+      step(`Fetched: ${info.name}, version ${info.version}, by ${info.author} (official)`);
+      if (!(await plgDialog(info, echo, []))) { echo.call('POST', '/api/plugins/cancel').catch(() => {}); throw new Error('Not installed: you did not accept it'); }
+      step(info.button ? 'Waiting for the action button on the Echo…' : 'Installing…', 'busy');
+      await plgFinish();
+      installed = true;
+      step(`${info.name} installed`);
+    } else step(`${p.name} version ${p.version} by ${p.author} (${mwwTier(p.tier)}) is installed already`);
+    step('Waiting for the plugin to run…', 'busy');
+    for (let i = 0; i < 60 && !(p && p.state === 'running'); i++) { await new Promise((res) => setTimeout(res, 500)); p = await mwwPlug(); }
+    if (!p || p.state !== 'running') throw new Error(`The plugin does not run${p && p.detail ? ': ' + p.detail : ''}`);
+    step(`Copying ${plural(ms.length, 'model')} to the plugin…`, 'busy');
+    const r = (await echo.call('POST', '/api/mww/migrate', 'go' + any)).json();
+    if (r.copied) step(`${r.copied} of ${plural(r.models, 'model')} copied, each checked by the plugin`);
+    for (const x of r.adjusted || []) step(`${x.id}: ${x.why}`, 'info');
+    if ((r.kept || []).length) step(`${nameList(r.kept)}: the plugin had ${r.kept.length === 1 ? 'it' : 'them'} already; the files replaced, the threshold and window as set on the plugin`, 'info');
+    for (const x of r.refused || []) step(`${x.id}: not copied (${x.why})`, 'warn');
+    if (r.error) throw new Error(r.error);
+    if (r.switched) {
+      step(`The engine is the plugin now, listening for ${nameList(r.words)}`);
+      toast('The microWakeWord plugin listens now');
+    } else {
+      step(`The wake word engine is still ${mwwEngName(r.engine)}: nothing else changed`, 'info');
+      if ((r.offer || []).length && r.engine !== 'plugin:microwakeword') mwwMove.offer = { words: r.offer, any };
+    }
+    setTimeout(() => load().catch(() => {}), 1500);     // (its words load a moment after the switch: the warning of a moment ago goes)
+  } catch (e) {
+    if (on && !installed) { await echo.call('POST', '/api/set', 'plugins=off\n').catch(() => {}); step('Plugins switched off again, as they were', 'info'); }
+    step(`${errText(e)}. ${mode === 'move' ? 'The built-in engine listens as before.' : 'The wake word engine is as it was.'}`, 'bad');
+  }
+  mwwMove.busy = false;
+  await getMww().catch(() => {}); await load().catch(() => {});
+}
+
+// the separate step after a copy beside another engine: the plugin becomes the engine, with those words
+async function mwwSwitch() {
+  const o = mwwMove.offer || { words: [], any: '' }, eng = settingValue('wake_engine');
+  if (!(await ask({ title: 'Make the microWakeWord plugin the wake word engine?', ok: 'Switch the engine',
+    body: [h('p', {}, h('b', {}, `The Echo then answers to ${nameList(o.words)}, `), `and no longer to the wake words of ${mwwEngName(eng)}.`),
+      h('p', {}, 'Switching back is the engine setting on this page.')] }))) return;
+  mwwMove.busy = true; renderWake();
+  try {
+    const r = (await echo.call('POST', '/api/mww/migrate', 'switch' + (o.any || ''))).json();
+    if (r.error) throw new Error(r.error);
+    mwwMove.steps.push({ text: `The engine is the plugin now, listening for ${nameList(r.words)}`, kind: 'ok' }); mwwMove.offer = null;
+    toast('The microWakeWord plugin listens now');
+    setTimeout(() => load().catch(() => {}), 1500);     // (its words load a moment after the switch, as after the move)
+  } catch (e) { mwwMove.steps.push({ text: `${errText(e)}. The wake word engine is as it was.`, kind: 'bad' }); }
+  mwwMove.busy = false;
+  await getMww().catch(() => {}); await load().catch(() => {});
+}
+
+function renderMove(eng, ms) {
+  // where the built-in engine has models or is the engine; not while Home Assistant listens (switching there restarts)
+  const plug = eng === 'plugin:microwakeword', builtin = eng === 'microwakeword', show = (ms.length > 0 || builtin) && eng !== 'homeassistant';
+  mwwMoveBox.classList.toggle('hidden', !show);
+  if (!show) return;
+  const steps = mwwMove.steps.length ? h('ul', { class: 'mww-steps' }, mwwMove.steps.map((x) => h('li', { class: 'mww-step ' + x.kind },
+    x.kind === 'busy' ? h('span', { class: 'spin' }) : icon(x.kind === 'ok' ? 'check' : x.kind === 'info' ? 'info' : 'warn'), h('span', {}, x.text)))) : null;
+  const back = async () => {
+    if (!(await ask({ title: 'Back to the built-in microWakeWord?', ok: 'Switch back',
+      body: [mwwDeprecated(), h('p', {}, 'It listens for the wake words it listened for before the move, with its own models as they were. The plugin stays installed, with its copies.')] }))) return;
+    await set('wake_engine', 'microwakeword'); await getMww().catch(() => {});
+  };
+  const off = settingValue('plugins') ? '' : ' Plugins are off: this switches them on first.';
+  mwwMoveBox.replaceChildren(
+    cardHead(plug ? 'The microWakeWord plugin listens' : builtin ? 'Move to the microWakeWord plugin' : 'The built-in microWakeWord\'s models',
+      plug ? 'The built-in engine\'s models are still on this Echo, as they were: the plugin has its own copies. Switching back to it is one click; a later release takes the built-in engine out.'
+        : builtin ? 'The built-in microWakeWord engine is deprecated. Its plugin is the same engine, kept up on its own, in a sandbox: a model file it reads can break the wake word and nothing else. A later release takes the built-in engine out.'
+          : `The built-in microWakeWord engine is deprecated, and does not listen now: the wake word engine is ${mwwEngName(eng)}. Its models can go to the microWakeWord plugin all the same.`, 'box'),
+    h('div', { class: 'card-body' }, steps,
+      plug ? h('p', { class: 'help' }, `Models added to the built-in engine since can be copied again: the plugin's copies of the same name get the built-in engine's files and keep the threshold and window set on the plugin.${off}`)
+        : h('p', { class: 'help' }, builtin ? `Installs the official plugin from the plugin index (with the Echo's action button), copies your ${plural(ms.length, 'model')} into its own list with their thresholds, and switches the engine with the same wake words.${off}`
+          : mwwMove.offer ? `The models are copied. ${mwwEngName(eng)[0].toUpperCase() + mwwEngName(eng).slice(1)} still listens; the button below makes the plugin the wake word engine instead.`
+            : `Installs the official plugin from the plugin index (with the Echo's action button) and copies your ${plural(ms.length, 'model')} into its own list with their thresholds. The engine stays ${mwwEngName(eng)}; making the plugin the engine is a separate step.${off}`)),
+    h('div', { class: 'card-foot' }, mwwMove.busy ? h('div', { class: 'busy grow' }, h('span', { class: 'spin' }), 'Working…') : h('span', { class: 'grow' }),
+      plug ? h('button', { disabled: mwwMove.busy || !ms.length, onclick: () => mwwMigrate('copy') }, 'Copy the models again') : null,
+      plug ? h('button', { disabled: mwwMove.busy, onclick: back }, 'Switch back to the built-in engine')
+        : builtin ? h('button', { class: 'primary', disabled: mwwMove.busy || !ms.length, onclick: () => mwwMigrate('move') }, icon('box'), 'Move to the plugin')
+          : mwwMove.offer ? h('button', { class: 'primary', disabled: mwwMove.busy, onclick: () => mwwSwitch() }, `Listen with the plugin for ${nameList(mwwMove.offer.words)}`)
+            : h('button', { class: 'primary', disabled: mwwMove.busy || !ms.length, onclick: () => mwwMigrate('copy') }, icon('box'), 'Copy the models to the plugin')));
 }
 
 // Fetched, copied, kept on file: every model in one place
@@ -1841,7 +2103,7 @@ async function mwwSwitchDialog() {
     const pickBox = need ? [h('p', { class: 'ask-sub' }, 'This Echo has no microWakeWord model yet. Pick the wake word to start with:'),
       h('div', { class: 'mww-picks', role: 'radiogroup' }, rows), file,
       h('p', { class: 'help' }, 'ESPHome\'s models come from GitHub through this browser. More, and settings per model, under \u201cmicroWakeWord models\u201d once it is on.')] : [];
-    const form = h('form', { method: 'dialog', class: 'ask-form' }, h('div', { class: 'modal-body' }, ...mwwLosses(), ...pickBox, msg), h('div', { class: 'modal-foot' }, cancel, go));
+    const form = h('form', { method: 'dialog', class: 'ask-form' }, h('div', { class: 'modal-body' }, mwwDeprecated(), ...mwwLosses(), ...pickBox, msg), h('div', { class: 'modal-foot' }, cancel, go));
     const dlg = h('dialog', { class: 'modal ask', 'aria-labelledby': 'mww-sw-title' }, h('div', { class: 'modal-head' }, h('h2', { id: 'mww-sw-title' }, 'Switch to microWakeWord?'), close), form);
     form.onsubmit = async (e) => {
       e.preventDefault();
@@ -1898,7 +2160,9 @@ function mwwTune(m) {
 function renderWake() {
   if (!mwwBox) return;
   const eng = settingValue('wake_engine'), on = eng === 'microwakeword', ms = (mww || {}).models || [];
-  mwwWarn.replaceChildren(...(on ? [callout('warn', h('p', {}, h('b', {}, 'microWakeWord is listening for the wake word. '),
+  renderMove(eng, ms);
+  mwwWarn.replaceChildren(...(on ? [callout('warn', h('p', {}, h('b', {}, 'The built-in microWakeWord is listening for the wake word, and it is deprecated: '),
+    'the microWakeWord plugin replaces it (below), and a later release takes the built-in engine out. ',
     'It detects significantly worse than Amazon\'s engine, and \u201c<wake word>, stop\u201d, the extra sensitivity while the Echo plays and the front end\'s arbitration scores are off. Switch back above at any time.'))]
     : eng === 'homeassistant' ? [h('div', { class: 'card' }, cardHead('Home Assistant listens', 'The Echo streams its microphone to Home Assistant, which listens for the wake word. What it needs there:', 'ha'),
       h('div', { class: 'card-body' }, haSteps()))] : []));
@@ -2058,7 +2322,7 @@ async function scanDevices() {
     const base = baseOf(ip);
     if (base === location.origin || selfAt.has(base)) continue;
     if (!others.has(base)) others.set(base, { ip });
-    jobs.push(probe(base).finally(renderDevices));
+    jobs.push(probe(base).finally(() => { renderDevices(); renderAttention(); }));     // (the other Echos' notes of copied plugins: on every page that polls them)
   }
   renderDevices();
   await Promise.all(jobs);
@@ -2211,7 +2475,7 @@ async function loginOther(d) {
       let s;
       try { s = await d.echo.login(); } catch (e) { break; }
       if (s === 'approved') { d.asking = false; await refreshDevices(); toast(`Logged in to ${d.echo.hello.name}`); return; }
-      if (s === 'refused') break;
+      if (s === 'refused') { toast(`${d.echo.hello.name}: ${loginRefused(d.echo.asked)}`); return; }
       await new Promise((r) => setTimeout(r, 1000));
     }
     toast(`${d.echo.hello.name}: not approved`);
@@ -2960,7 +3224,7 @@ async function loadModels(arts) {
 
 // ---------------------------------------------------------------- System: settings file, debug access, browsers
 
-let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl;
+let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl, sourcesBox;
 
 // The name: the model and the end of its MAC address (main.c name_make), never set here.  What people call it is the name
 // given in Home Assistant when the Echo was added.
@@ -3324,6 +3588,183 @@ function wifiDialog() {
   echo.call('GET', '/api/wifi').then((r) => { d.w = r.json(); paintList(); }).catch(() => {}).finally(() => scan());
 }
 
+// ---------------------------------------------------------------- the address (wifi.c; root's wifi.sh tries it: issue #191)
+
+// what wifi.c and root take: four numbers 0 to 255, no leading zeros
+const ipNum = (s) => {
+  const p = String(s).trim().split('.');
+  if (p.length !== 4 || p.some((x) => !/^(0|[1-9]\d{0,2})$/.test(x) || +x > 255)) return null;
+  return ((+p[0] << 24) | (+p[1] << 16) | (+p[2] << 8) | +p[3]) >>> 0;
+};
+const unicastIp = (n) => n !== null && (n >>> 24) !== 0 && (n >>> 24) !== 127 && (n >>> 24) < 224;
+// a subnet mask as its prefix (255.255.255.0 is 24; "/24" and "24" are taken too); null where it is no home network's
+const prefixOf = (s) => {
+  const t = String(s).trim().replace(/^\//, '');
+  if (/^\d{1,2}$/.test(t)) return +t >= 8 && +t <= 30 ? +t : null;
+  const n = ipNum(t); if (n === null) return null;
+  const p = 32 - Math.log2(((~n) >>> 0) + 1);
+  return Number.isInteger(p) && p >= 8 && p <= 30 ? p : null;
+};
+const maskOf = (p) => { const m = (0xffffffff << (32 - p)) >>> 0; return [24, 16, 8, 0].map((x) => (m >>> x) & 255).join('.'); };
+// what is wrong with a fixed address, in wifi.c's words (it checks again, and root after it); null when nothing is
+function addrProblem(f) {
+  const ip = ipNum(f.ip), pre = prefixOf(f.mask), gw = ipNum(f.gw), d1 = ipNum(f.dns1), d2 = f.dns2 ? ipNum(f.dns2) : undefined;
+  if (!unicastIp(ip)) return 'The address is not one a device can have (four numbers 0 to 255, as 192.168.1.50).';
+  if (pre === null) return 'The subnet mask is not one of a home network (255.0.0.0 to 255.255.255.252).';
+  if (!unicastIp(gw)) return 'The router\'s address is not one a device can have.';
+  if (!unicastIp(d1) || (d2 !== undefined && !unicastIp(d2))) return 'A DNS server\'s address is not one a device can have.';
+  const m = (0xffffffff << (32 - pre)) >>> 0, host = (~m) >>> 0, hi = (ip & host) >>> 0, hg = (gw & host) >>> 0;
+  if (((ip & m) >>> 0) !== ((gw & m) >>> 0)) return 'The router is not in the Echo\'s network: with that subnet mask the two addresses must begin alike.';
+  if (ip === gw) return 'That is the router\'s own address.';
+  if (!hi || hi === host) return 'That address is the network\'s own (the first or the last of it): no device can have it.';
+  if (!hg || hg === host) return 'The router\'s address is the network\'s own (the first or the last of it).';
+  return null;
+}
+// why root went back (wifi.sh address()), for a fixed address and for DHCP
+const ADDR_WHY = {
+  offline: () => 'The Echo is on no Wi-Fi network right now.',
+  inuse: (f) => `Another device answers at ${f.ip} already. Pick an address nobody has: one outside the range your router hands out.`,
+  noaddress: (f) => f ? `The Echo could not take ${f.ip}.` : 'No address came from the router (DHCP).',
+  nogateway: (f) => f ? `On ${f.ip}, the router at ${f.gw} did not answer: is that its address, and is the subnet mask right?` : 'The Echo got an address, but the router did not answer.',
+  unreached: (f) => `Nothing reached the Echo at ${f.ip} within two minutes: neither this page nor Home Assistant.`,
+  bad: () => 'The Echo did not take the settings.',
+};
+
+let addrCtl;
+function addressRow() {
+  const now = h('div', { class: 'row-val' }), btn = h('button', { onclick: addressDialog }, icon('pen'), 'Change…');
+  addrCtl = { paint: () => {
+    const w = state.wifi;
+    btn.disabled = !w;
+    now.replaceChildren(...(w ? [w.fixed ? 'Fixed' : 'Automatic (DHCP)', h('span', { class: 'row-val-sub' }, w.ip || location.hostname)]
+      : [h('span', { class: 'row-val-sub' }, 'Shows once the Echo has looked for networks')]));
+  } };
+  return infoRow('Network address', 'From your router, or one you fix', 'Automatic: your router hands the Echo its address (DHCP), as it does for most devices; a reservation in the router keeps it the same. Fixed: the Echo takes the address you give it on this Wi-Fi network, without asking the router. Pick one outside the range the router hands out, or two devices may end up with the same address. A new address is tried first: the Echo keeps it only once this page or Home Assistant reaches it there within two minutes, and goes back to what it had otherwise. A fixed address belongs to its network: a switch to another one goes back to automatic.',
+    btn, null, now);
+}
+
+// The dialog: automatic or fixed (filled in with what the Echo has now), then the change, followed from here: at the
+// old address while it answers, at the new one once it does there (the same browser key, so signed calls work there;
+// asking there is also what tells the Echo it was reached).
+function addressDialog() {
+  const m = modal('Network address', 'address');
+  const d = { w: null, fixed: false, busy: false, closed: false };
+  m.dlg.oncancel = (e) => { if (d.busy) e.preventDefault(); };
+  m.onclose = () => { d.closed = true; load().catch(() => {}); };
+  const field = (id, label, ph) => {
+    const i = h('input', { type: 'text', id, inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false', maxlength: '15', placeholder: ph || '' });
+    i.oninput = () => paint();
+    return { i, el: h('div', { class: 'field' }, h('label', { for: id }, label), i) };
+  };
+  const F = { ip: field('addr-ip', 'Address', '192.168.1.50'), mask: field('addr-mask', 'Subnet mask', '255.255.255.0'),
+    gw: field('addr-gw', 'Router (gateway)', '192.168.1.1'), dns1: field('addr-dns1', 'DNS server', '192.168.1.1'), dns2: field('addr-dns2', 'Second DNS server', 'Optional') };
+  const vals = () => Object.fromEntries(Object.entries(F).map(([k, f]) => [k, f.i.value.trim()]));
+  const msg = h('p', { class: 'help ask-msg' });
+  const seg = ['Automatic (DHCP)', 'Fixed'].map((t, i) => h('button', { type: 'button', onclick: () => { d.fixed = !!i; paint(); if (i) F.ip.i.focus(); } }, t));
+  const save = h('button', { type: 'button', class: 'primary', onclick: () => run() }, 'Save');
+  const pool = (
+    callout('info', h('p', {}, 'Pick an address outside the range your router hands out (its DHCP pool, in the router\'s settings), or two devices may end up with the same one. The other fields are what the Echo has now: they rarely need a change.')));
+  const segBox = h('div', { class: 'seg', role: 'group', 'aria-label': 'Network address' }, seg);
+  const toAuto = h('p', { class: 'help', style: 'margin:0' }, 'The router hands the Echo its address again: it may be another one than now.');
+  const intro = h('p', { class: 'help', style: 'margin:0' }, 'The Echo tries a new address first and keeps it only once this page or Home Assistant reaches it there; if nothing does within two minutes, it goes back to what it has now by itself.');
+  function paint() {
+    const a = (d.w && d.w.address) || { mode: 'auto' }, here = a.mode === 'fixed' && a.here;
+    seg.forEach((b, i) => { const on = i === +d.fixed; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    const v = vals(), bad = d.fixed ? addrProblem(v) : null;
+    const same = d.fixed ? here && v.ip === a.ip && prefixOf(v.mask) === a.prefix && v.gw === a.gateway && v.dns1 === a.dns[0] && (v.dns2 || undefined) === a.dns[1] : !here;
+    msg.textContent = d.fixed && Object.values(v).slice(0, 4).every(Boolean) ? bad || '' : '';
+    msg.classList.toggle('f-bad', !!bad);
+    save.disabled = !d.w || !!bad || same || (d.fixed && !Object.values(v).slice(0, 4).every(Boolean));
+    form.replaceChildren(...[intro, segBox, ...(d.fixed ? [...Object.values(F).map((f) => f.el), msg, pool] : [here ? toAuto : null, msg])].filter(Boolean));
+  }
+  const form = h('div', { style: 'display:grid;gap:14px' });
+  m.body.append(form);
+  m.foot.append(h('button', { type: 'button', onclick: () => m.dlg.close() }, 'Cancel'), save);
+  echo.call('GET', '/api/wifi').then((r) => {
+    d.w = r.json();
+    const a = d.w.address || {}, c = d.w.current || {}, fx = a.mode === 'fixed' && a.here;
+    d.fixed = fx;
+    F.ip.i.value = fx ? a.ip : c.ip || ''; F.mask.i.value = fx ? maskOf(a.prefix) : c.netmask || '';
+    F.gw.i.value = fx ? a.gateway : c.gateway || ''; F.dns1.i.value = (fx ? a.dns[0] : (c.dns || [])[0]) || c.gateway || '';
+    F.dns2.i.value = (fx ? a.dns[1] : (c.dns || [])[1]) || '';
+    paint();
+  }).catch((e) => { msg.textContent = errText(e); });
+  paint();
+  m.show();
+
+  const step = h('div', { class: 'wifi-step' }), setStep = (t) => step.replaceChildren(h('span', { class: 'spin' }), h('span', {}, t));
+  function done(kind, r, f) {
+    d.busy = false; m.head.querySelector('.icon-btn').classList.remove('hidden');
+    const close = h('button', { type: 'button', class: 'primary', onclick: () => m.dlg.close() }, 'Close');
+    const link = (ip) => ip && ip !== location.hostname ? h('p', {}, h('a', { href: `http://${ip}:${echoPort()}/` }, 'Open its settings page there'), act(' (the action button approves this browser there once more).')) : null;
+    if (kind === 'ok') {
+      m.body.replaceChildren(callout('ok', h('p', {}, f ? `The Echo keeps ${f.ip} on this network now.` : `The Echo takes its address from the router again${r.ip ? `: ${r.ip} now` : ''}.`), link(f ? f.ip : r.ip)),
+        h('p', { class: 'help' }, 'Home Assistant finds it at a new address by itself: the Echo announces it on the network.'));
+    } else if (kind === 'failed') {
+      const why = (ADDR_WHY[r.reason] || (() => r.state === 'interrupted' ? 'It was cut short (did the Echo restart?).' : 'It did not work.'))(f);
+      m.body.replaceChildren(...[callout('bad', h('p', {}, why), h('p', {}, r.ip ? `The Echo is back on ${r.ip}, as before.` : 'The Echo went back to what it had before.')), link(r.ip)].filter(Boolean));
+    } else if (kind === 'lost') {
+      m.body.replaceChildren(callout('info', h('p', {}, f ? `The Echo has not answered here nor at ${f.ip} for a while. `
+        : 'The Echo has most likely taken another address from your router, and this page cannot follow it there. ',
+        'Find its address in Home Assistant: on the Echo\'s device page, under ', h('b', {}, 'Web UI address'), '.')));
+    } else m.body.replaceChildren(callout('bad', h('p', {}, r)));
+    m.foot.replaceChildren(close);
+  }
+  // the Echo at ip, if it is this one there: the answer to GET /api/wifi, else null
+  async function at(ip) {
+    try {
+      const base = baseOf(ip), hello = await (await fetch(base + '/api/hello', { cache: 'no-store', signal: within(3000) })).json();
+      if (hello.pub !== echo.hello.pub) return null;                // another device there: not this Echo
+      return (await new Echo(base, hello).call('GET', '/api/wifi', '', within(3000))).json();
+    } catch (e) { return null; }
+  }
+  // Where DHCP put it: the other Echos of its network hear its beacons (every 20 to 40 s) from the new address and
+  // list it in their hello
+  async function found() {
+    for (const ip of knownIps()) {
+      if (ip === location.hostname) continue;
+      try {
+        const hello = await (await fetch(baseOf(ip) + '/api/hello', { cache: 'no-store', signal: within(3000) })).json();
+        const me = (hello.members || []).find((x) => x.node === echo.hello.node);
+        if (me && me.ip && me.ip !== location.hostname) return me.ip;
+      } catch (e) { /* that one is away */ }
+    }
+    return null;
+  }
+  // the Echo, here or at its new address: the answer to GET /api/wifi, or null where it answers nowhere
+  async function look(f) {
+    try { return (await echo.call('GET', '/api/wifi', '', within(3000))).json(); } catch (e) { if (e.message === 'forged') throw e; }
+    if (f) return f.ip === location.hostname ? null : at(f.ip);
+    d.moved = d.moved || await found();
+    return d.moved ? at(d.moved) : null;
+  }
+  async function run() {
+    const v = vals(), f = d.fixed ? { ...v, prefix: prefixOf(v.mask) } : null;
+    d.busy = true; m.head.querySelector('.icon-btn').classList.add('hidden');
+    m.body.replaceChildren(step);
+    m.foot.replaceChildren(h('span', { class: 'help' }, 'Keep this open: the Echo keeps a new address only once something reaches it there, and this page asks there.'));
+    setStep('Asking the Echo…');
+    let id;
+    try { id = (await echo.call('POST', '/api/wifi/address', f ? `fixed ${f.ip} ${f.prefix} ${f.gw} ${f.dns1} ${f.dns2 || '-'}` : 'auto')).json().id; }
+    catch (e) { done('error', errText(e).replace(/^Error: /, '')); return; }
+    // wifi.sh: 30 s for the address and the router, 2 min to be reached, 45 s back
+    const t0 = Date.now();
+    let quiet = 0;
+    while (Date.now() - t0 < 240000 && !d.closed) {
+      await sleep(2000);
+      let w;
+      try { w = await look(f); } catch (e) { done('error', errText(e)); return; }
+      const r = w && w.address_result && w.address_result.id === id ? w.address_result : null;
+      if (!w) { if (++quiet > 3) setStep('The Echo does not answer right now: it is changing its address.'); continue; }
+      quiet = 0;
+      if (!r || r.state === 'applying') setStep(f ? `Setting ${f.ip}…` : 'Asking the router for an address…');
+      else if (r.state === 'waiting') setStep(`On ${f.ip} now: waiting for this page or Home Assistant to reach it there…`);
+      else { done(r.state === 'ok' ? 'ok' : 'failed', r, f); return; }
+    }
+    if (!d.closed) done('lost', null, f);
+  }
+}
+
 function buildSystem(el, list) {
   const file = h('input', { type: 'file', accept: '.conf,.txt,text/plain', class: 'hidden' });
   importMsg = h('pre', { class: 'help import-msg' });
@@ -3338,10 +3779,13 @@ function buildSystem(el, list) {
   };
   adbBox = h('div', { class: 'btns' });
   clientsBox = h('div');
+  sourcesBox = h('div');
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
     titled('This Echo', nameRow(), named('note', noteRow()), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
+      state.wifi !== undefined ? named('address', addressRow()) : null,
       list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
+    titled('Where software comes from', named('sources', sourcesBox)),
     titled('When something is wrong', named('log', logRow()),
       named('debug', infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
       named('restart', infoRow('Restart', 'Back in about a minute, nothing is forgotten', HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…'))),
@@ -3352,6 +3796,121 @@ function buildSystem(el, list) {
     h('div', { class: 'card', id: 'browsers' },
       infoRow('Approved browsers', 'Browsers that may change settings on this Echo', null, null),
       h('div', { class: 'clients' }, clientsBox))]));
+}
+
+// ---------------------------------------------------------------- Sources (sources.c, issue #175)
+
+// Where online updates and plugins come from: the project's (the default) or a server of the owner's, with a key of
+// the owner's beside the project's or no signature check (each of those two only with the action button: web.c W_SOURCE)
+const SRC_NAME = { updates: 'Updates', plugins: 'Plugin index' };
+const SRC_SUB = { updates: 'Where online updates come from', plugins: 'Where plugins are browsed and installed from' };
+const SRC_HELP = {
+  updates: 'The server online updates look at: the project\'s releases on GitHub (the default), or a repository of your own on GitHub, Forgejo or Gitea, given as https://<server>/<owner>/<repository>. For example a mirror on your network for an Echo kept off the internet, or a fork\'s own releases. Its bundles are still checked against the project\'s release key and your update key, so a server alone changes nothing of what may be installed. Many Echos cannot check certificates of newer authorities (Let\'s Encrypt among them), so a server on your own network may have to be plain http://: the signature is what counts. For a server of your own you can also name a signing key of yours, trusted beside the project\'s, or switch the signature check off. Either needs the action button, and the page warns in red on every page while it stands: whoever holds that key (with no check: whoever controls the server, or the network on the way to it) can install anything on this Echo, as root.',
+  plugins: 'The site plugins are browsed and installed from: the project\'s plugin index (the default), or one of your own, laid out as the index\'s own tool builds it (index.json, revoked.json, packages/). Its lists still count only under the project\'s index key, so a mirror changes nothing of what is trusted. For a site of your own you can also name a signing key of yours, trusted beside the project\'s, or switch the signature check off. Either needs the action button, and the page warns in red while it stands: what that site lists as official is taken as official here, and what it withdraws (or does not) is what is withdrawn. Plugins still run in their sandbox, and every install still takes the action button. A change restarts the satellite (a few seconds) and forgets what was kept of the index before.',
+};
+// the dialog's own short words (the row's ⓘ has SRC_HELP)
+const SRC_INTRO = {
+  updates: 'A repository on GitHub, Forgejo or Gitea: https://<server>/<owner>/<repository>. Its releases are still checked against the project\'s release key and your update key. On your own network it may have to be plain http://: many Echos do not know newer certificate authorities.',
+  plugins: 'A site laid out as the plugin index\'s own tool builds it. Its lists still count only under the project\'s index key. A change restarts the satellite.',
+};
+const srcKeyMark = (k) => k ? `${k.slice(0, 8)} ${k.slice(8, 16)}…` : '';
+
+function sourcesCallout(src) {
+  const red = src.level >= 2, lines = [];
+  for (const w of ['updates', 'plugins']) {
+    const o = src[w]; if (!o || !o.url) continue;
+    const what = w === 'updates' ? 'Updates come from' : 'Plugins come from';
+    lines.push(h('p', {}, `${what} `, h('code', {}, o.url),
+      o.unchecked ? h('b', {}, ' with NO signature check') : o.key ? [' with your own signing key ', h('code', {}, srcKeyMark(o.key)), ' trusted beside the project\'s'] : ', checked against the project\'s keys', '.'));
+  }
+  lines.push(h('p', {}, red
+    ? (src.updates && src.updates.unchecked ? 'Whoever controls that update server, or the network on the way to it, can install anything on this Echo, as root. '
+      : src.updates && src.updates.key ? 'Whoever holds that update key can install anything on this Echo, as root. ' : '')
+      + (src.plugins && (src.plugins.unchecked || src.plugins.key) ? 'The plugin index of your own decides which plugins count as official and which are withdrawn. ' : '')
+      + 'Only if you meant this: '
+    : 'Not the project\'s own server. ', h('a', { href: '#/system/sources' }, 'Where software comes from')));
+  return h('div', { class: 'callout' + (red ? ' bad' : '') }, icon('warn'), h('div', { class: 'grow' }, ...lines));
+}
+
+function sourceRows() {
+  const s = state.sources;
+  return ['updates', 'plugins'].map((w) => {
+    const o = s[w] || {}, badges = [];
+    if (o.unchecked) badges.push(h('span', { class: 'badge bad' }, 'No signature check'));
+    else if (o.key) badges.push(h('span', { class: 'badge bad', title: o.key }, `Your key ${srcKeyMark(o.key)}`));
+    else if (o.url) badges.push(h('span', { class: 'badge warn' }, 'Your server'));
+    // root holds the key the page named (main.sh takes it within seconds; an older main.sh never: update first)
+    if (w === 'updates' && (o.key || o.unchecked) && o.root !== 'held') badges.push(h('span', { class: 'badge', title: 'Root takes it within seconds. If this stays, the installed copy\'s root script is older than hassmic: an update pushed from the PC brings it' }, 'Root has not taken the key yet'));
+    const val = h('div', { class: 'row-val' }, h('span', {}, o.url || `The project's (${o.default || 'default'})`), ...badges);
+    return infoRow(SRC_NAME[w], SRC_SUB[w], SRC_HELP[w], h('button', { onclick: () => sourceDialog(w) }, 'Change…'), null, val);
+  });
+}
+
+// The dialog for one source: the server, a key of the owner's, no check.  A choice that trusts more asks first, then
+// waits for the action button (as adb does: the page polls until the Echo no longer holds it)
+function sourceDialog(w) {
+  const o = (state.sources || {})[w] || {};
+  const m = modal(`${SRC_NAME[w]}: where from`, 'sources');
+  const url = h('input', { type: 'text', id: 'src-url', value: o.url || '', placeholder: o.default || '', autocomplete: 'off', spellcheck: 'false' });
+  const key = h('input', { type: 'text', id: 'src-key', value: o.key || '', placeholder: '64 hex digits; empty: the project\'s key only', autocomplete: 'off', spellcheck: 'false', maxlength: '64' });
+  const off = h('input', { type: 'checkbox', id: 'src-off', role: 'switch' }); off.checked = !!o.unchecked;
+  const msg = h('p', { class: 'help ask-msg' });
+  const risk = h('div');
+  const paint = () => {
+    const custom = !!url.value.trim();
+    key.disabled = off.disabled = !custom; if (!custom) { key.value = ''; off.checked = false; }
+    key.disabled = key.disabled || off.checked;
+    const red = custom && (off.checked || key.value.trim());
+    risk.replaceChildren(...!red ? [] : [h('div', { class: 'callout bad' }, icon('warn'), h('p', {}, off.checked
+      ? (w === 'updates' ? 'No signature check: whatever that server (or anyone on the network on the way to it) hands out is installed on this Echo, as root.' : 'No signature check: whatever that site (or anyone on the way to it) lists is taken, official plugins and withdrawals included.')
+      : (w === 'updates' ? 'Whoever holds that key can install anything on this Echo, as root.' : 'Plugins that key lists as official are official here.')))]);
+  };
+  url.oninput = key.oninput = off.onchange = () => { msg.textContent = ''; paint(); };
+  paint();
+  const send = async (body) => {
+    msg.textContent = '';
+    try {
+      const r = (await echo.call('POST', '/api/sources', body)).json();
+      if (r.sources === 'refused') { msg.textContent = r.why || 'Refused'; return; }
+      if (r.sources === 'busy') { msg.textContent = `Not asked: ${WAIT_KIND[r.holds] || 'something else'} waits for the action button first. Try again when it is done.`; return; }
+      m.dlg.close();
+      if (r.sources === 'applied') {
+        toast(r.why ? `Saved: ${r.why}` : w === 'plugins' ? 'Saved. The satellite restarts to read the new plugin index' : 'Saved');
+        await load(); return;
+      }
+      toast(act('Press the action button on the Echo'));
+      for (let i = 0; i < 65; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        await load();
+        const b = state.button || {};
+        if (!(b.holds === 'sources' && b.mine)) break;
+      }
+      // in force only where the Echo now says what this dialog asked for (a key it had before is not this one)
+      const now = (state.sources || {})[w] || {}, k = body.match(new RegExp(`^${w}_key=(.*)$`, 'm'))[1], x = /_unchecked=1/.test(body);
+      toast(now.url === body.match(new RegExp(`^${w}_url=(.*)$`, 'm'))[1].replace(/\/*$/, w === 'updates' ? '' : '/') && !!now.unchecked === x && (x || now.key === k)
+        ? 'In force: the Echo trusts it now' : 'Not in force: the action button was not pressed in time, or something else changed it');
+    } catch (e) { toast(errText(e)); }
+  };
+  const save = h('button', { type: 'button', class: 'primary' }, 'Save');
+  save.onclick = async () => {
+    const u = url.value.trim(), k = key.disabled ? '' : key.value.trim().toLowerCase(), x = !off.disabled && off.checked;
+    if ((k || x) && !await ask({ title: x ? 'Switch the signature check off?' : 'Trust your own key?', ok: x ? 'Switch it off' : 'Trust it', danger: true, body: [
+      x ? (w === 'updates' ? 'Whatever that server hands out is installed as root, unchecked: the server, and anyone who can change what reaches the Echo on the way (on plain http:// anyone on the network), can take the Echo over.' : 'Whatever that site lists is taken unchecked: which plugins count as official, and what is withdrawn.')
+        : (w === 'updates' ? 'Bundles signed with that key are installed as root, beside the project\'s. Whoever holds the key can take the Echo over.' : 'Lists signed with that key count beside the project\'s index: what it lists as official is official here.'),
+      act('It also takes a press of the action button, and every page of this Echo warns in red for as long as it stands.')] })) return;
+    send(`${w}_url=${u}\n${w}_key=${k}\n${w}_unchecked=${x ? 1 : 0}\n`);
+  };
+  const back = h('button', { type: 'button', onclick: () => send(`${w}_url=\n${w}_key=\n${w}_unchecked=0\n`) }, 'The project\'s');
+  if (!o.url) back.disabled = true;
+  m.body.append(h('div', { style: 'display:grid;gap:14px' },
+    h('p', { class: 'help', style: 'margin:0' }, SRC_INTRO[w]),
+    h('div', { class: 'field' }, h('label', { for: 'src-url' }, w === 'updates' ? 'Repository (empty: the project\'s)' : 'Site (empty: the project\'s)'), url),
+    h('p', { class: 'help', style: 'margin:0' }, act('Only for a server of your own, and only with a press of the action button:')),
+    h('div', { class: 'field' }, h('label', { for: 'src-key' }, 'Your signing key (public, 64 hex digits)'), key),
+    h('div', { class: 'field' }, h('label', { for: 'src-off' }, 'No signature check'), h('label', { class: 'switch' }, off, h('span'))),
+    risk, msg));
+  m.foot.append(back, h('button', { type: 'button', onclick: () => m.dlg.close() }, 'Cancel'), save);
+  m.show();
 }
 
 // Restart (main.c core_reboot): root reboots the Echo, as a power cycle does; this page is back once it is up again
@@ -3373,11 +3932,16 @@ async function factoryReset() {
 
 function renderSystem() {
   if (!adbBox) return;
+  if (sourcesBox && state.sources) sourcesBox.replaceChildren(...sourceRows());
   if (nameCtl) nameCtl.paint();
   if (noteCtl) noteCtl.paint();
   if (wifiCtl) wifiCtl.paint();
+  if (addrCtl) addrCtl.paint();
   const s = state.adb;
-  const status = s.waiting ? h('span', { class: 'badge acc' }, act('Waiting for the action button…'))
+  // what the Echo says a press would serve now (state.button): this page's adb, or it is not said to wait
+  const b = state.button || { holds: s.waiting ? 'adb' : 'none', mine: s.waiting, left_s: 0 }, own = s.waiting && b.holds === 'adb' && b.mine;
+  const status = own ? h('span', { class: 'badge acc' }, act(`Waiting for the action button: a press opens adb${b.left_s ? ` (${b.left_s} s)` : ''}…`))
+    : s.waiting ? h('span', { class: 'badge acc' }, 'Another browser asked to open adb: a press of the action button opens it')
     : s.open ? h('span', { class: 'badge bad' }, 'Open: closes by itself after 30 min') : h('span', { class: 'badge' }, 'Closed');
   adbBox.replaceChildren(status,
     s.open ? h('button', { onclick: adbClose }, 'Close now') : h('button', { class: 'danger', disabled: s.waiting, onclick: adbOpen }, icon('term'), 'Open'));
@@ -3391,7 +3955,7 @@ function renderSystem() {
       try { await echo.call('POST', '/api/revoke', k.pub); } catch (e) { toast(errText(e)); return; }
       if (k.me) showLogin(); else load();
     };
-    clientsBox.append(h('div', { class: 'row client' }, h('div', { class: 'row-label' }, icon('key'), k.label, k.me ? h('span', { class: 'badge acc' }, 'This browser') : null), h('div', { class: 'ctl' }, b)));
+    clientsBox.append(h('div', { class: 'row client' }, h('div', { class: 'row-label' }, icon('key'), k.label, h('span', { class: 'f-model', style: 'margin-left:8px', title: 'The first digits of this browser\'s key. The name is what the browser called itself; the key is what the Echo knows it by' }, keyMark(k.pub)), k.me ? h('span', { class: 'badge acc' }, 'This browser') : null), h('div', { class: 'ctl' }, b)));
   }
 }
 
@@ -3470,10 +4034,27 @@ function logDialog() {
   load();
 }
 
+// Until e's button no longer holds a login (true), for a wait of this page's that was told "busy" for one: a login's
+// minute at the most, and a little.  Every two seconds: the Echo keeps strangers back for 30 s after that login
+async function waitNoLogin(e) {
+  for (let i = 0; i < 40; i++) {
+    await new Promise((res) => setTimeout(res, 2000));
+    const b = (await e.call('GET', '/api/state')).json().button;
+    if (!b || b.holds !== 'login') return true;
+  }
+  return false;
+}
+
 async function adbOpen() {
   try {
-    const r = await (await echo.call('POST', '/api/adb', 'on')).json();
-    if (r.adb === 'busy') { toast('A login is waiting for the button first'); return; }
+    let r = await (await echo.call('POST', '/api/adb', 'on')).json();
+    // a login waits for the button first: asked again by itself once the Echo no longer holds it (web.c keeps
+    // browsers that are not let in back for half a minute then, for this ask to come first)
+    if (r.adb === 'busy' && r.holds === 'login') {
+      toast(act('Not asked yet: a login waits for the action button first. Do not press for adb now. This page asks again by itself when that is over'));
+      if (await waitNoLogin(echo)) r = await (await echo.call('POST', '/api/adb', 'on')).json();
+    }
+    if (r.adb === 'busy') { toast(`Not asked: ${WAIT_KIND[r.holds] || 'something else'} waits for the action button first. A press now serves that, not adb: try again when it is done`); return; }
     toast(act('Press the action button on the Echo'));
     for (let i = 0; i < 65; i++) {
       await new Promise((res) => setTimeout(res, 1000));

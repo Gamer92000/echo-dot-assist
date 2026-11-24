@@ -1,0 +1,11 @@
+{ "id": "testcall", "name": "Test phone", "version": 1, "version_name": "0.1", "requires": {"core": 1, "call": 1, "ha.entities": 1, "ha.actions": 1},
+  "author": "hassmic's tests", "description": "Calls and is called, as a phone line would.", "license": "MIT",
+  "memory_mb": 16, "threads": 2,
+  "capabilities": { "call": true,
+                    "ha.entities": [ { "name": "line", "kind": "text_sensor", "label": "Line", "icon": "mdi:phone" },
+                                     { "name": "result", "kind": "event", "label": "Result", "types": [ "connected", "ended", "refused" ] } ],
+                    "ha.actions": [ { "name": "call", "label": "Call", "calls": true, "args": [ { "name": "who", "type": "string" } ] },
+                                    { "name": "answer", "label": "Answer", "calls": true, "page": true },
+                                    { "name": "ring", "label": "Ring", "args": [ { "name": "who", "type": "string" } ] },
+                                    { "name": "hang_up", "label": "Hang up", "page": true },
+                                    { "name": "try", "label": "Try", "args": [ { "name": "what", "type": "string" } ] } ] } }

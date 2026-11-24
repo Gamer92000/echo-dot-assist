@@ -102,7 +102,11 @@ by side to copy settings and wake words between them, the log. A press of the ac
 
 ## Requirements
 
-- A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires).
+- A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires). **The older
+  its firmware, the likelier the unlock works**: every unlock uses a hole in Amazon's software, and updates close such
+  holes. Which versions still unlock is not tracked here, and an unlock that does not take can leave the Echo
+  unusable. Never let the Echo update: do not set it up with the Alexa app, and keep it off Wi-Fi until the install
+  puts it there.
 - A **Linux PC**, running Linux on the machine itself (not macOS, not a VM or WSL: the unlock needs direct USB; a live
   USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
   about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
@@ -161,7 +165,8 @@ names itself after its model and MAC address ("Echo Dot 3 5695c4"); give it your
 - **Online, installed from Home Assistant**: pick a channel under "Online updates" on the Echo's settings page. `release` gets releases (the
   `release` branch), `beta` also every build of `main` that changes the Echo's software, `off` (the default) nothing.
   The Echo's firmware entity then shows new versions and installs them. ESPHome mode only. The Echo downloads them
-  itself, so it needs internet access to GitHub; the page checks that before it takes a channel.
+  itself, so it needs internet access to GitHub; the page checks that before it takes a channel. A mirror on your
+  network, or a fork's releases on Forgejo or Gitea: [where software comes from](docs/GUIDE.md#where-software-comes-from).
 - **From your PC**: `git pull`, then `scripts/ota-push.sh <echo-ip>` (it remembers the address). It builds, or takes
   that commit's build from GitHub as the setup does, signs with your `secrets/update.key` and pushes over Wi-Fi
   (TCP 28929).

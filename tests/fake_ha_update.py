@@ -60,7 +60,8 @@ def release(tag, pre, body):
 
 
 def installer(state, pub, stop):
-    """main.sh's ota_watch, once per request: verify against the release key, unpack, answer"""
+    """main.sh's ota_watch, once per request: verify against the release key, unpack, answer (as an older main.sh:
+    no "nonce" line under it, which hassmic takes as before; tests/fake_plugins_update.py's echoes it)"""
     ota = os.path.join(state, "ota"); n = 0
     while not stop.is_set():
         if os.path.exists(os.path.join(ota, "request")):

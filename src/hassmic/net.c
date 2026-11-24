@@ -16,7 +16,24 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include "logread.h"
 #include "net.h"
+
+/* An IPv4 address on an interface with a link (IFF_RUNNING: carrier), other than loopback.  The address alone says
+ * nothing: dhcpcd runs with -K and keeps it on wlan0 when the network is gone (Dot 2 after a reset, 2026-10-07: no
+ * network in wpa_supplicant, INACTIVE, carrier 0, flags 0x1003, the old address still there).  HASSMIC_FAKE_ONLINE
+ * (tests): a file, online while it exists */
+int net_online(void)
+{
+    const char *f = getenv("HASSMIC_FAKE_ONLINE");
+    if (f) return access(f, F_OK) == 0;
+    struct ifaddrs *ifs, *i; int on = 0;
+    if (getifaddrs(&ifs)) return 1;                     /* cannot tell: assume it is fine (improv.c: never advertise for nothing) */
+    for (i = ifs; i && !on; i = i->ifa_next)
+        on = i->ifa_addr && i->ifa_addr->sa_family == AF_INET && (i->ifa_flags & IFF_UP) && (i->ifa_flags & IFF_RUNNING) && !(i->ifa_flags & IFF_LOOPBACK);
+    freeifaddrs(ifs);
+    return on;
+}
 
 /* ---------------------------------------------------------------- mDNS */
 
@@ -151,7 +168,8 @@ int net_connect(const char *host, const char *port, int timeout_s)
     }
     hints.ai_socktype = SOCK_STREAM;
     if (!list) {                                        /* also for ".local" that nobody answered: some DNS servers serve it */
-        if (getaddrinfo(host, port, &hints, &ai)) { fprintf(stderr, "net: cannot resolve %s\n", host); return -1; }
+        /* private: the host of a media or server address may be the household's own name (a DDNS name) */
+        if (getaddrinfo(host, port, &hints, &ai)) { log_private("net: cannot resolve %s", host); return -1; }
         list = ai;
     }
     int fd = -1;
@@ -162,6 +180,6 @@ int net_connect(const char *host, const char *port, int timeout_s)
         if (connect(fd, p->ai_addr, p->ai_addrlen)) { close(fd); fd = -1; }
     }
     if (ai) freeaddrinfo(ai);
-    if (fd < 0) fprintf(stderr, "net: cannot connect to %s:%s (not a local address? see lockdown.sh)\n", host, port);
+    if (fd < 0) log_private("net: cannot connect to %s:%s (not a local address? see lockdown.sh)", host, port);
     return fd;
 }

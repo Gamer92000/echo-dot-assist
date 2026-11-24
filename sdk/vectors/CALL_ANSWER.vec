@@ -1,0 +1,6 @@
+# CALL_ANSWER: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message CALL_ANSWER 101
+id 65637
+packet 6500000065000100
+refuse short 65000000650001
+refuse trailing 650000006500010000

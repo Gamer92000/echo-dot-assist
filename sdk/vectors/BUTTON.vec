@@ -1,0 +1,26 @@
+# BUTTON: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message BUTTON 120
+id 65656
+key u8 2
+how u8 1
+packet 78000000780001000201
+case empty
+id 65656
+key u8 1
+how u8 1
+packet 78000000780001000101
+case long
+id 65656
+key u8 3
+how u8 2
+packet 78000000780001000302
+case full
+id 65656
+key u8 1
+how u8 1
+packet 78000000780001000101
+refuse short 78000000780001
+refuse truncated 780000007800010002
+refuse trailing 7800000078000100020100
+refuse enum:key 78000000780001000001
+refuse enum:how 78000000780001000200

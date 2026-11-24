@@ -381,6 +381,24 @@ input[type=range]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 
              border-radius: 0 0 var(--radius) var(--radius); }
 .card-foot .grow { flex: 1; }
 .card-foot .help { margin: 0; max-width: none; }
+/* a plugin's card (plugins.js): framed, so that its author's words are not taken for this page's own */
+.card.plugin { border-left: 4px solid var(--line); }
+.plg-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 14px 18px 6px; }
+.plg-name { font-size: 16px; font-weight: 660; }
+.plg-help { padding: 0 18px; margin: 4px 0 8px; }
+.plg-caps { margin: 2px 0 10px; padding: 0 18px 0 38px; }
+.plg-caps li { margin: 2px 0; }
+.plg-key { font-family: ui-monospace, monospace; white-space: nowrap; }
+.plg-fields { display: flex; flex-wrap: wrap; gap: 12px; }
+.plg-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+/* the browse page (#/plugins/browse): one list of rows, each a plugin; and the way back */
+.plg-back { margin: 0 0 12px; }
+.plg-back a { color: var(--accent); text-decoration: none; }
+.plg-find .row-label { flex-wrap: wrap; }
+.plg-find .plg-desc { color: var(--fg); margin-top: 2px; }
+.plg-find .plg-why { color: var(--warn); }
+#plugins-find input[type=search] { width: min(320px, 100%); }
+.sub-head.plg-installed { margin: 6px 2px 8px; }
 .card-foot .count { min-width: 90px; }
 .card-foot input[type=text] { flex: 1; min-width: 160px; max-width: 300px; }
 .empty { display: flex; gap: 14px; align-items: center; margin: 0 18px 18px; padding: 16px; border-radius: 12px; border: 1px dashed var(--line-2);
@@ -651,6 +669,11 @@ details.more li { margin: 4px 0; }
 .mww-tune .row-label { font-size: 13.5px; }
 .mww-add { padding-top: 14px; border-top: 1px solid var(--line); }
 .mww-add .help { margin: 0 0 8px; }
+.mww-steps { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 6px; }
+.mww-step { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.mww-step svg, .mww-step .spin { flex: none; margin-top: 2px; }
+.mww-step.ok svg { color: var(--ok); }
+.mww-step.warn svg { color: var(--warn); } .mww-step.bad svg { color: var(--bad); }
 @media (max-width: 600px) { .mww-row { grid-template-columns: 1fr; } .mww-row .ctl { justify-content: flex-start; } }
 
 /* ---------------------------------------------------------------- dialogs (Wi-Fi) */
@@ -1146,5 +1169,6 @@ footer { color: var(--faint); font-size: 12.5px; padding-top: 8px; border-top: 1
 <script src="/matrix.js"></script>
 <script src="/app.js"></script>
 <script src="/ring.js"></script>
+<script src="/plugins.js"></script>
 </body>
 </html>

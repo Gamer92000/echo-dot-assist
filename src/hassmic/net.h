@@ -12,4 +12,9 @@ int net_socket(int family, int type, int protocol);
 
 /* IPv4 address of a ".local" name by one-shot mDNS query (RFC 6762 5.1), in network byte order; 0 if nobody answered. */
 unsigned mdns_resolve4(const char *name);
+
+/* 1 while an interface other than loopback has an IPv4 address and a carrier (the address alone says nothing: dhcpcd
+ * keeps it with the network gone); getifaddrs failing counts as online.  HASSMIC_FAKE_ONLINE (tests): a file, online
+ * while it exists.  improv.c's look at the network, and plugin_fetch.c's before it asks the plugin index */
+int net_online(void);
 #endif

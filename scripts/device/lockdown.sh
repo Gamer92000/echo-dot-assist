@@ -17,6 +17,10 @@
 # Besides its own chain the script keeps what the satellite needs of stock's firewall (see keep below): stock's rules can
 # be missing after a boot, and then the Echo is cut off with everything on it running.
 # It also closes adb over Wi-Fi (see adb_gate below): in every mode, and on every run except "services" and "check".
+# Plugins (docs/plugins.md 4.6) run as users of their own, PLUGIN_UID and the seven after it: whatever such a user owns
+# is dropped first thing (rules below).  The sockets a plugin uses are made by hassmic and handed over, and stay
+# hassmic's: to a private address as a plain socket (local only), to a server outside the network the owner entered
+# with NET_GID, as hassmic's own media fetches.
 # hassmic itself may connect anywhere: it creates its outgoing sockets with filesystem group NET_GID (runas -r in main.sh
 # and run.sh, setfsgid in net.c; the owner match checks that group) and only fetches what Home
 # Assistant (encrypted, paired connection) or Music Assistant send it.  That can be a public host name, a Tailscale address
@@ -34,6 +38,8 @@ LOCAL4="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4 255.2
 LOCAL6="fe80::/10 fc00::/7 ff02::/16"
 KSRC=; for d in $LOCAL4; do case $d in 224.*|255.*) ;; *) KSRC="$KSRC $d";; esac; done   # unicast: Kiosk Satellite's sources
 NET_GID=3990
+PLUGIN_UID=6900; PLUGIN_SLOTS=8         # plugins' users: src/include/plugrun.h PLUGRUN_UID, PLUGRUN_SLOTS
+PLUGIN_PORTS=28940:28999                # plugins' own UDP ports (net.udp, net.discover): plugin_store.h PS_PORT_FIRST/LAST
 # Service names and the updaters' user: device.conf of this model, next to this script.  Without it the egress lock
 # still goes up (it needs none of that); only stopping services and the stock-online guard have nothing to work with.
 case $0 in */*) HERE=${0%/*};; *) HERE=.;; esac          # run by a bare name: this folder
@@ -198,6 +204,13 @@ rules() {
     # the Echo but root's reaches the port, however it opens the socket (another user's service included): the owner
     # match on the user, first, before lo is let through.  The network's own connections are not this chain's.
     echo "-A hassmic_out -p tcp -m tcp --dport 5555 -m owner ! --uid-owner 0 -j DROP"
+    # Plugins' users (docs/plugins.md 4.6; src/include/plugrun.h: 6900 + the launcher's slot) own no socket: the
+    # system call filter refuses socket and accept, and the sockets hassmic hands a plugin are hassmic's (the owner
+    # match sees hassmic's user and group, and the rules after these hold them as any of hassmic's).  If a plugin's
+    # user ever comes to own one, the sandbox failed, and this is what is left: nothing it sends leaves, not even to
+    # loopback, where hassmic's ports and Amazon's daemons are.  One rule a user, as the 5555 rule's owner match is
+    # loaded on every model: a range in the match (6900-6907) is untried on Android's xt_qtaguid
+    u=$PLUGIN_UID; while [ $u -lt $((PLUGIN_UID + PLUGIN_SLOTS)) ]; do echo "-A hassmic_out -m owner --uid-owner $u -j DROP"; u=$((u + 1)); done
     echo "-A hassmic_out -o lo -j RETURN"
     if [ -n "$OTA_ONLY" ]; then u=$(update_uid); [ -n "$u" ] && echo "-A hassmic_out -m owner --uid-owner $u -j DROP"; return; fi
     for d in $loc; do echo "-A hassmic_out -d $d -j RETURN"; done
@@ -209,6 +222,42 @@ rules() {
     echo "-A hassmic_out -m owner --gid-owner $NET_GID -j RETURN"
     echo "-A hassmic_out -j DROP"
 }
+
+# Plugins' own UDP ports (docs/plugins.md 4.6: net.udp "reachable from your network", net.discover's answers): every
+# port of ours is admitted from anywhere by stock's rule for 16384-32767 (keep), so a chain of ours ahead of it, jumped
+# to first in INPUT for that range, lets through what comes from a private or link-local source and drops the rest.
+# The socket hassmic hands a plugin drops such senders itself as well (plugin.c private_only, a socket filter); this
+# is the wall that holds before a packet reaches the Echo's stack.  IPv4 only: a plugin's sockets are (3.7)
+IN_JUMP="INPUT -i $WLAN -p udp -m udp --dport $PLUGIN_PORTS -j hassmic_in"
+rules_in() {
+    for d in $KSRC; do echo "-A hassmic_in -s $d -j RETURN"; done
+    echo "-A hassmic_in -j DROP"
+}
+
+# A plugin's search (net.discover) goes out from its own port to the network's broadcast address, and the kernel hands
+# every broadcast it sends to the Echo's own sockets of that port as well, as if it had come in on wlan0 from the
+# Echo's own address: past stock's rules for 16384-32767, 5353 and the rest, to arbitration, Drop In, avahi, Kiosk
+# Satellite's 2330 (a forged claim a second kept the Echo's own wake word from answering) and other plugins' ports
+# (A1 of a review of efde36e).  hassmic sends no multicast of a plugin's back (IP_MULTICAST_LOOP 0), the manifest
+# names none of hassmic's ports, and this drops whatever comes from a plugin's port and an address of the Echo's own,
+# first in INPUT: nothing from the network has that source.  Every address of the Echo's own, not only the one
+# ifconfig shows: a second address on wlan0 (cannoli: wifi.sh's network switch left the old lease's beside the new
+# one) has a broadcast address of its own, the kernel hands what is sent to it back from that address, and that
+# copy got past a chain that named the first address alone (L2 of a review of 92ac2e1).  The kernel's own list of
+# them is /proc/net/fib_trie's "/32 host LOCAL" entries (every model's kernel has it; `ip` is not on the Dots and
+# xt_addrtype, which would say "LOCAL" in the rule itself, is in none of the models' kernels), loopback's left out.
+# Read at every look (the watcher's 5 s): a new lease is covered at the next.  No address: nothing to drop
+SELF_JUMP="INPUT -i $WLAN -p udp -m udp --sport $PLUGIN_PORTS -j hassmic_self"
+own4() {
+    a=
+    while read -r x y z; do
+        case "$x" in
+            "|--") a=$y;;
+            /32) [ "$y $z" = "host LOCAL" ] && case $a in 127.*|"") ;; *) echo "$a";; esac;;
+        esac
+    done < /proc/net/fib_trie 2>/dev/null | sort -u
+}
+rules_self() { for a in $(own4); do echo "-A hassmic_self -s $a/32 -j DROP"; done; }
 
 # Stock's rules that the satellite cannot do without, in the same wording.  firewall.sh loads them at sys.boot_completed
 # (INPUT and OUTPUT policy DROP, then these among a hundred others), but it calls iptables without -w, and a call that
@@ -325,9 +374,16 @@ load_once() {
     all=$($1 -w -S 2>/dev/null)
     in=$(
         echo "*filter"; echo ":INPUT DROP [0:0]"; echo ":hassmic_out - [0:0]"
+        [ $1 = iptables ] && echo ":hassmic_in - [0:0]" && echo ":hassmic_self - [0:0]"
         rules $1
         echo "$all" | while read -r r; do [ "$r" = "-A OUTPUT -j hassmic_out" ] && echo "-D OUTPUT -j hassmic_out"; done
         echo "-I OUTPUT 1 -j hassmic_out"
+        if [ $1 = iptables ]; then
+            rules_in; rules_self
+            echo "$all" | while read -r r; do [ "$r" = "-A $IN_JUMP" ] && echo "-D $IN_JUMP"; [ "$r" = "-A $SELF_JUMP" ] && echo "-D $SELF_JUMP"; done
+            echo "-I INPUT 1 ${IN_JUMP#INPUT }"
+            echo "-I INPUT 1 ${SELF_JUMP#INPUT }"         # (first of all: then the plugins' ports' chain)
+        fi
         missing $1 "$all"
         [ -n "$ADB" ] || echo "$all" | while read -r r; do [ "$r" = "-A $ADB_IN" ] && echo "-D $ADB_IN"; done
         [ -n "$KIOSK" ] || echo "$all" | while read -r r; do [ "$r" = "-A $KIOSK_IN" ] && echo "-D $KIOSK_IN"; done
@@ -344,6 +400,7 @@ load_each() {
     rules $1 | while read -r r; do
         $1 -w $r || case "$r" in
             "-A hassmic_out -m owner --uid-owner $KSUID -j RETURN") echo "!! Kiosk Satellite limited to local addresses ($1)";;
+            "-A hassmic_out -m owner --uid-owner "69??" -j DROP") echo "!! plugins' users not shut out ($1): the sandbox alone holds them";;
             *uid-owner*) echo "!! OTA GUARD NOT ACTIVE ($1): take the Echo offline";;
             *gid-owner*) echo "!! hassmic limited to local addresses ($1)";;
             *) echo "!! rule not loaded ($1): $r";;
@@ -351,6 +408,18 @@ load_each() {
     done
     while $1 -w -D OUTPUT -j hassmic_out 2>/dev/null; do :; done
     $1 -w -I OUTPUT 1 -j hassmic_out
+    if [ $1 = iptables ]; then
+        $1 -w -N hassmic_in 2>/dev/null
+        $1 -w -F hassmic_in
+        rules_in | while read -r r; do $1 -w $r || echo "!! plugins' ports admitted from anywhere ($1): the socket's own filter alone holds them"; done
+        while $1 -w -D $IN_JUMP 2>/dev/null; do :; done
+        $1 -w -I INPUT 1 ${IN_JUMP#INPUT } || echo "!! plugins' ports admitted from anywhere ($1): the socket's own filter alone holds them"
+        $1 -w -N hassmic_self 2>/dev/null
+        $1 -w -F hassmic_self
+        rules_self | while read -r r; do $1 -w $r || echo "!! a plugin's search reaches the Echo's own sockets ($1)"; done
+        while $1 -w -D $SELF_JUMP 2>/dev/null; do :; done
+        $1 -w -I INPUT 1 ${SELF_JUMP#INPUT } || echo "!! a plugin's search reaches the Echo's own sockets ($1)"
+    fi
     missing $1 "$($1 -w -S)" | while read -r r; do $1 -w $r || echo "!! rule not loaded ($1): $r"; done
     [ -n "$ADB" ] || while $1 -w -D $ADB_IN 2>/dev/null; do :; done
     [ -n "$KIOSK" ] || while $1 -w -D $KIOSK_IN 2>/dev/null; do :; done
@@ -372,8 +441,8 @@ apply() {
 }
 
 # What is wrong with the rules, in words, and false; nothing and true when all is as it has to be.  Three listings per
-# table and hardly another process (this runs every 5 s): every rule of the chain and their order, the jump to it
-# first in OUTPUT, INPUT policy DROP, each of stock's rules we need, the adb port not admitted unless it is open, nor
+# table (five for IPv4) and hardly another process (this runs every 5 s): every rule of the chain and their order, the
+# jump to it first in OUTPUT, the chain for what a plugin's port sends the Echo itself and the plugins' ports' chain with their jumps first in INPUT, INPUT policy DROP, each of stock's rules we need, the adb port not admitted unless it is open, nor
 # 2330 unless in Kiosk Satellite mode, nor a port of the app's that is not wanted now; without ip6tables, IPv6 off on every interface.
 wrong() {
     kiosk_state
@@ -381,6 +450,12 @@ wrong() {
         [ "$($t -w -S hassmic_out 2>/dev/null)" = "-N hassmic_out$NL$(rules $t)" ] || { echo "$t: hassmic_out is not as loaded"; return 1; }
         o=$($t -w -S OUTPUT 2>/dev/null)                   # policy line, then its rules (cutting them out of the whole
         case "${o#*"$NL"}$NL" in "-A OUTPUT -j hassmic_out$NL"*) ;; *) echo "$t: hassmic_out is not first in OUTPUT"; return 1;; esac   # listing took mksh 0.9 s)
+        if [ $t = iptables ]; then
+            [ "$($t -w -S hassmic_in 2>/dev/null)" = "-N hassmic_in$NL$(rules_in)" ] || { echo "$t: hassmic_in is not as loaded"; return 1; }
+            [ "$($t -w -S hassmic_self 2>/dev/null)" = "$(echo "-N hassmic_self"; rules_self)" ] || { echo "$t: hassmic_self is not as loaded (the Echo's address)"; return 1; }
+            o=$($t -w -S INPUT 2>/dev/null)
+            case "${o#*"$NL"}$NL" in "-A $SELF_JUMP$NL-A $IN_JUMP$NL"*) ;; *) echo "$t: hassmic_self and hassmic_in are not first in INPUT (plugins' ports)"; return 1;; esac
+        fi
         all=$($t -w -S 2>/dev/null)
         case "$NL$all" in *"$NL-P INPUT DROP$NL"*) ;; *) echo "$t: INPUT policy is not DROP"; return 1;; esac
         m=$(missing $t "$all"); [ -z "$m" ] || { echo "$t: missing:" $m; return 1; }

@@ -1,0 +1,33 @@
+# REQ_END: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message REQ_END 111
+id 65647
+run u32 1679809376
+why u8 1
+samples u32 1603454400
+dropped u32 1565276912
+packet 6f0000006f00010060db1f6401c0c5925ff03a4c5d
+case empty
+id 65647
+run u32 0
+why u8 1
+samples u32 0
+dropped u32 0
+packet 6f0000006f00010000000000010000000000000000
+case long
+id 65647
+run u32 4294967295
+why u8 7
+samples u32 4294967295
+dropped u32 4294967295
+packet 6f0000006f000100ffffffff07ffffffffffffffff
+case full
+id 65647
+run u32 1
+why u8 1
+samples u32 1
+dropped u32 1
+packet 6f0000006f00010001000000010100000001000000
+refuse short 6f0000006f0001
+refuse truncated 6f0000006f00010060db1f6401c0c5925ff03a4c
+refuse trailing 6f0000006f00010060db1f6401c0c5925ff03a4c5d00
+refuse enum:why 6f0000006f00010060db1f6400c0c5925ff03a4c5d

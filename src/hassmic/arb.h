@@ -59,6 +59,8 @@ int  arb_pair(void);
  * from K for that purpose, nobody else; -1 outside a network.  arb_self: our own id.  Any lock but arb's. */
 #define ARB_MSG_MAX 160
 int  arb_member(const char *node, unsigned char id[8], unsigned *ip);
+/* how that member settles rounds, by its beacons: ARB_HASSMIC, ARB_KIOSK; -1 no member heard under that name */
+int  arb_member_mode(const char *node);
 int  arb_tell(const unsigned char to[8], const void *p, size_t n);
 int  arb_derive(const char *label, unsigned char out[32]);
 void arb_self(unsigned char id[8]);                            /* the pairing gesture: 2 min in which an Echo nearby may join; -1 not running */

@@ -1,0 +1,6 @@
+# MUSIC_CLOSE: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message MUSIC_CLOSE 72
+id 65608
+packet 4800000048000100
+refuse short 48000000480001
+refuse trailing 480000004800010000

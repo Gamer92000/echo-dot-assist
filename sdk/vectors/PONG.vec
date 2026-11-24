@@ -1,0 +1,6 @@
+# PONG: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message PONG 7
+id 65543
+packet 0700000007000100
+refuse short 07000000070001
+refuse trailing 070000000700010000

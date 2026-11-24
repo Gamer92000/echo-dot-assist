@@ -178,7 +178,8 @@ class Echo:
         self.settings = tempfile.mktemp(suffix=".settings")
         self.state = state = tempfile.mkdtemp(); self.mdns = os.path.join(state, "hassmic.service")
         with open(self.settings, "w") as f: f.write("3 9 4.00 0 1 1 0 en\n")    # from before the mic level: gain values for HA
-        self.env = env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_SETTINGS=self.settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=self.play,
+        self.env = env = dict(os.environ, HASSMIC_LOGIN_MS="60000:300",     # (browsers log in one after the other here: web.c keeps others back 0.3 s after a press, not 30)
+                                          HASSMIC_STATE=state, HASSMIC_SETTINGS=self.settings, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=self.play,
                    HASSMIC_MDNS_FILE=self.mdns, HASSMIC_ARB_ADDR="127.255.255.255",  # arbitration beacons stay on this PC
                    HASSMIC_MODELS=os.path.join(state, "models"),
                    HASSMIC_ADB_OPEN=os.path.join(state, "adb-open.root"),      # on the Echo: in a directory only root writes

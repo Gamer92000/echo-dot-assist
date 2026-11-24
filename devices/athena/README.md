@@ -47,6 +47,11 @@ them. The file of this project's steps goes into `firmware/athena/` (not in git)
 blocked (`otacerts.zip` emptied, `softwareupdates.amazon.com` pointed at localhost). dm-verity is off
 (`ro.boot.veritymode=disabled`).
 
+> **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in Amazon's software,
+> and updates close such holes. Which versions still unlock is not tracked here (the XDA thread may know), and an
+> unlock that does not take can leave the Echo unusable. Never let the Echo update: do not set it up with the Alexa
+> app, and keep it off Wi-Fi until the install puts it there.
+
 ## Install
 
 The guided setup: `scripts/setup.sh athena` (`--dry-run` walks the steps without running any). By hand, with the Echo

@@ -2,7 +2,7 @@
  * Media over HTTPS (issue #30).  Home Assistant builds the URLs of TTS replies, announcements and play_media with
  * get_url(): when it serves HTTPS itself (http: ssl_certificate), that prefers the external URL and never hands out a
  * plain http:// one.  proto_esphome.c's own HTTP/1.0 client stays for http://; https:// goes through the firmware's
- * libcurl 7.50.1 (dlopen'ed, as in update.c and davs.c: OpenSSL and the system CA store, /system/etc/security/cacerts).
+ * libcurl 7.50.1 (dlopen'ed once for update.c, davs.c and this, fwcurl.c: OpenSSL and the system CA store, /system/etc/security/cacerts).
  * A thread runs the transfer and writes the body into one end of a socketpair; the other end goes to the decoders, so
  * they read it as they read a plain fetch, and the media player's cancel, a shutdown() of that socket, ends the
  * transfer too (the next write fails, and a write callback that returns short stops curl).
@@ -11,9 +11,10 @@
  * IP address (get_url: allow_ip false), so a public certificate passes as long as the Echo reaches that name; a
  * self-signed one does not: setting "https_verify" off accepts any certificate (the page says what that costs).
  */
+#include "logread.h"
 #include "https.h"
 #include "net.h"
-#include <dlfcn.h>
+#include "fwcurl.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -39,35 +40,7 @@ enum { OPT_WRITEDATA = 10001, OPT_URL = 10002, OPT_USERAGENT = 10018, OPT_LOW_SP
 struct curl_sockaddr { int family, socktype, protocol; unsigned addrlen; };     /* followed by the address; unused here */
 struct curl_slist;
 
-static struct {
-    void *(*init)(void);
-    int (*setopt)(void *, int, ...);
-    int (*perform)(void *);
-    void (*cleanup)(void *);
-    int (*getinfo)(void *, int, ...);
-    const char *(*strerror)(int);
-    struct curl_slist *(*slist_append)(struct curl_slist *, const char *);
-    void (*slist_free_all)(struct curl_slist *);
-} curl;
-static int curl_ok;
-
-static void curl_load(void)
-{
-    void *h;
-    if (!(h = dlopen("libcurl.so", RTLD_NOW)) && !(h = dlopen("libcurl.so.4", RTLD_NOW))) {    /* Echo; PC */
-        fprintf(stderr, "media: no libcurl for https (%s)\n", dlerror()); return;
-    }
-    curl.init = (void *(*)(void))dlsym(h, "curl_easy_init");
-    curl.setopt = (int (*)(void *, int, ...))dlsym(h, "curl_easy_setopt");
-    curl.perform = (int (*)(void *))dlsym(h, "curl_easy_perform");
-    curl.cleanup = (void (*)(void *))dlsym(h, "curl_easy_cleanup");
-    curl.getinfo = (int (*)(void *, int, ...))dlsym(h, "curl_easy_getinfo");
-    curl.strerror = (const char *(*)(int))dlsym(h, "curl_easy_strerror");
-    curl.slist_append = (struct curl_slist *(*)(struct curl_slist *, const char *))dlsym(h, "curl_slist_append");
-    curl.slist_free_all = (void (*)(struct curl_slist *))dlsym(h, "curl_slist_free_all");
-    curl_ok = curl.init && curl.setopt && curl.perform && curl.cleanup && curl.getinfo && curl.strerror
-              && curl.slist_append && curl.slist_free_all;
-}
+#define curl fwcurl()                   /* fwcurl.c: loaded once, for update.c, https.c and davs.c alike */
 
 static int on_socket(void *arg, int purpose, struct curl_sockaddr *a)
 {
@@ -107,7 +80,7 @@ static size_t on_header(char *d, size_t size, size_t n, void *arg)
 {
     struct xfer *x = arg; long code = 0;
     if (size * n <= 2 && (d[0] == '\r' || d[0] == '\n')) {
-        curl.getinfo(x->h, INFO_RESPONSE_CODE, &code);
+        curl->getinfo(x->h, INFO_RESPONSE_CODE, &code);
         if (code >= 200 && code < 300) set_state(x, 1);
     }
     return size * n;
@@ -128,16 +101,16 @@ static size_t on_data(char *d, size_t size, size_t n, void *arg)
 static void *run(void *arg)
 {
     struct xfer *x = arg;
-    int rc = curl.perform(x->h);
+    int rc = curl->perform(x->h);
     pthread_mutex_lock(&x->m); int began = x->state == 1; pthread_mutex_unlock(&x->m);
     if (rc && !(rc == CURLE_WRITE_ERROR && began))     /* a write error once the body came: the reader stopped it */
-        fprintf(stderr, "media: %s: %s%s\n", x->url, curl.strerror(rc),
+        log_private("media: %s: %s%s", x->url, curl->strerror(rc),        /* (an address with its token: logread.h) */
                 rc == CURLE_PEER_FAILED_VERIFICATION || rc == CURLE_SSL_CACERT
                     ? " (the settings page's \"Check HTTPS certificates\" off accepts it)" : "");
     set_state(x, -1);
     close(x->wfd);                      /* the reader's EOF */
-    curl.cleanup(x->h);
-    if (x->resolve) curl.slist_free_all(x->resolve);
+    curl->cleanup(x->h);
+    if (x->resolve) curl->slist_free_all(x->resolve);
     put(x);
     return NULL;
 }
@@ -157,41 +130,39 @@ static struct curl_slist *resolve_local(const char *url)
     unsigned a = mdns_resolve4(host);
     if (!a || !inet_ntop(AF_INET, &a, ip, sizeof ip)) return NULL;     /* curl tries DNS: some servers serve .local */
     snprintf(entry, sizeof entry, "%s:%.*s:%s", host, colon ? (int)(end - colon - 1) : 3, colon ? colon + 1 : "443", ip);
-    return curl.slist_append(NULL, entry);
+    return curl->slist_append(NULL, entry);
 }
 
 int https_open(const char *url)
 {
-    static pthread_once_t once = PTHREAD_ONCE_INIT;
-    pthread_once(&once, curl_load);
-    if (!curl_ok) { fprintf(stderr, "media: https is not available: %s\n", url); return -1; }
+    if (!curl) { log_private("media: https is not available: %s", url); return -1; }
     int sv[2]; struct xfer *x = calloc(1, sizeof *x); pthread_t t; pthread_attr_t at;
     if (!x) return -1;
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv)) { free(x); return -1; }
-    if (!(x->h = curl.init())) { close(sv[0]); close(sv[1]); free(x); return -1; }
+    if (!(x->h = curl->init())) { close(sv[0]); close(sv[1]); free(x); return -1; }
     pthread_mutex_init(&x->m, NULL); pthread_cond_init(&x->c, NULL);
     x->refs = 2; x->wfd = sv[1];
     snprintf(x->url, sizeof x->url, "%s", url);
     void *h = x->h; int v = https_verify(-1);
-    curl.setopt(h, OPT_URL, x->url);
-    curl.setopt(h, OPT_USERAGENT, "hassmic/" VERSION);
-    curl.setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP_S); curl.setopt(h, OPT_REDIR_PROTOCOLS, (long)PROTO_HTTP_S);
-    curl.setopt(h, OPT_FOLLOWLOCATION, 1L); curl.setopt(h, OPT_MAXREDIRS, 5L);
-    curl.setopt(h, OPT_FAILONERROR, 1L); curl.setopt(h, OPT_NOSIGNAL, 1L);
+    curl->setopt(h, OPT_URL, x->url);
+    curl->setopt(h, OPT_USERAGENT, "hassmic/" VERSION);
+    curl->setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP_S); curl->setopt(h, OPT_REDIR_PROTOCOLS, (long)PROTO_HTTP_S);
+    curl->setopt(h, OPT_FOLLOWLOCATION, 1L); curl->setopt(h, OPT_MAXREDIRS, 5L);
+    curl->setopt(h, OPT_FAILONERROR, 1L); curl->setopt(h, OPT_NOSIGNAL, 1L);
     /* as the plain fetch: 4 s per connect there (TLS adds its handshake here), 15 s without data (TTS may still be
      * rendering); no limit on the whole: play_media may be a long file */
-    curl.setopt(h, OPT_CONNECTTIMEOUT, 10L);
-    curl.setopt(h, OPT_LOW_SPEED_LIMIT, 1L); curl.setopt(h, OPT_LOW_SPEED_TIME, 15L);
-    curl.setopt(h, OPT_SSL_VERIFYPEER, v ? 1L : 0L); curl.setopt(h, OPT_SSL_VERIFYHOST, v ? 2L : 0L);
-    if (getenv("HASSMIC_CA_FILE")) curl.setopt(h, OPT_CAINFO, getenv("HASSMIC_CA_FILE"));     /* tests: their own CA */
-    if ((x->resolve = resolve_local(url))) curl.setopt(h, OPT_RESOLVE, x->resolve);
-    curl.setopt(h, OPT_HEADERFUNCTION, on_header); curl.setopt(h, OPT_HEADERDATA, x);
-    curl.setopt(h, OPT_WRITEFUNCTION, on_data); curl.setopt(h, OPT_WRITEDATA, x);
-    curl.setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl.setopt(h, OPT_OPENSOCKETDATA, NULL);
+    curl->setopt(h, OPT_CONNECTTIMEOUT, 10L);
+    curl->setopt(h, OPT_LOW_SPEED_LIMIT, 1L); curl->setopt(h, OPT_LOW_SPEED_TIME, 15L);
+    curl->setopt(h, OPT_SSL_VERIFYPEER, v ? 1L : 0L); curl->setopt(h, OPT_SSL_VERIFYHOST, v ? 2L : 0L);
+    if (getenv("HASSMIC_CA_FILE")) curl->setopt(h, OPT_CAINFO, getenv("HASSMIC_CA_FILE"));     /* tests: their own CA */
+    if ((x->resolve = resolve_local(url))) curl->setopt(h, OPT_RESOLVE, x->resolve);
+    curl->setopt(h, OPT_HEADERFUNCTION, on_header); curl->setopt(h, OPT_HEADERDATA, x);
+    curl->setopt(h, OPT_WRITEFUNCTION, on_data); curl->setopt(h, OPT_WRITEDATA, x);
+    curl->setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl->setopt(h, OPT_OPENSOCKETDATA, NULL);
     pthread_attr_init(&at); pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
     if (pthread_create(&t, &at, run, x)) {
-        pthread_attr_destroy(&at); close(sv[0]); close(sv[1]); curl.cleanup(h);
-        if (x->resolve) curl.slist_free_all(x->resolve);
+        pthread_attr_destroy(&at); close(sv[0]); close(sv[1]); curl->cleanup(h);
+        if (x->resolve) curl->slist_free_all(x->resolve);
         pthread_mutex_destroy(&x->m); pthread_cond_destroy(&x->c); free(x);
         return -1;
     }

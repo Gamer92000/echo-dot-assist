@@ -1,0 +1,26 @@
+# WAKE_OPEN: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message WAKE_OPEN 31
+id 65567
+slot u8 130
+word str 776f72642d33312dc3a9  # 'word-31-é'
+packet 1f0000001f000100820a00776f72642d33312dc3a9
+case empty
+id 65567
+slot u8 0
+word str -  # ''
+packet 1f0000001f000100000000
+case long
+id 65567
+slot u8 255
+word str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééééééé'
+packet 1f0000001f000100ff2800c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9
+case full
+id 65567
+slot u8 1
+word str -  # ''
+packet 1f0000001f000100010000
+refuse short 1f0000001f0001
+refuse truncated 1f0000001f000100820a00776f72642d33312dc3
+refuse trailing 1f0000001f000100820a00776f72642d33312dc3a900
+refuse over:word 1f0000001f0001008229006161616161616161616161616161616161616161616161616161616161616161616161616161616161
+refuse nul:word 1f0000001f000100820300610062

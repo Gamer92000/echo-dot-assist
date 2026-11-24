@@ -1,0 +1,26 @@
+# MUSIC_CMD: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message MUSIC_CMD 74
+id 65610
+cmd u8 5
+why u8 1
+packet 4a0000004a0001000501
+case empty
+id 65610
+cmd u8 1
+why u8 1
+packet 4a0000004a0001000101
+case long
+id 65610
+cmd u8 5
+why u8 4
+packet 4a0000004a0001000504
+case full
+id 65610
+cmd u8 1
+why u8 1
+packet 4a0000004a0001000101
+refuse short 4a0000004a0001
+refuse truncated 4a0000004a00010005
+refuse trailing 4a0000004a000100050100
+refuse enum:cmd 4a0000004a0001000001
+refuse enum:why 4a0000004a0001000500

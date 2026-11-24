@@ -64,7 +64,7 @@ boot_image() {
         die "magiskpolicy silently dropped a rule that names a type the policy does not have ($OUT/qrun.log)"
     DEVICE=$DEVICE tools/qrun.sh -t 120 $SEPOLICY_TOOL --load $OUT/sepolicy.hassmic --print-rules > $OUT/sepolicy.rules.txt 2>/dev/null || true
     grep -qx 'permissive adbd' $OUT/sepolicy.rules.txt && grep -q '^allow init su process' $OUT/sepolicy.rules.txt &&
-        grep -q '^type hassmic ' $OUT/sepolicy.rules.txt && ! grep -q '^allow hassmic [^ ]* property_service' $OUT/sepolicy.rules.txt &&
+        grep -q '^type hassmic ' $OUT/sepolicy.rules.txt && grep -q '^type hassmic_plugin ' $OUT/sepolicy.rules.txt && ! grep -q '^allow hassmic [^ ]* property_service' $OUT/sepolicy.rules.txt &&
         ! grep -qx 'permissive hassmic' $OUT/sepolicy.rules.txt ||
         die "the patched policy lacks its rules ($OUT/sepolicy.rules.txt)"
     python3 scripts/mkbootroot.py $OUT/boot.stock.img $IMG --sepolicy $OUT/sepolicy.hassmic --adbd $ADBD --no-verity > /dev/null

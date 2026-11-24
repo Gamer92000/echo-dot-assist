@@ -1,0 +1,6 @@
+# CALL_RINGING_THERE: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message CALL_RINGING_THERE 104
+id 65640
+packet 6800000068000100
+refuse short 68000000680001
+refuse trailing 680000006800010000

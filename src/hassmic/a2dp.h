@@ -22,6 +22,8 @@ void a2dp_pause(void);                     /* another source started: pause the 
 int  a2dp_stop(void);                      /* "<wake word>, stop": pause the streaming device (the button resumes it), or
                                               play nothing until it starts again without AVRCP.  1 = it streamed */
 void a2dp_unyield(void);                   /* the other source stopped */
+void a2dp_music_join(void);                /* its place in the core's table of music sources (core.h), whether or not
+                                              a2dp_start runs: main() has it join first, the action button's order */
 
 /* Playing to a Bluetooth speaker (the Echo as A2DP source; btout.c routes the mixer).  Any thread. */
 void a2dp_out_search(int on);              /* look for a speaker in pairing mode for up to a minute, pair the nearest,

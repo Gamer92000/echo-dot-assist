@@ -27,6 +27,36 @@ cp $T/c.bundle $T/bad.bundle; printf X | dd of=$T/bad.bundle bs=1 seek=40 conv=n
 printf '\n \tws\n' > $T/ws; $PY pack $T/c.sec 1 $T/ws.bundle $T/ws:644 $T/a.txt:644 >/dev/null
 $C install $T/c.pub $T/ws.bundle $T/ws.bundle.sig $T/ws-c >/dev/null && cmp -s $T/ws $T/ws-c/ws && cmp -s $T/a.txt $T/ws-c/a.txt
 ok $? "install: a file starting with whitespace"
+# a key under which any signature holds (src/include/edkey.h: small order): the null signature (R the identity, s = 0)
+# verifies under it for every bundle, and both refuse the key all the same: all zero (order 4), the identity
+printf '\001' > $T/null.sig; head -c 63 /dev/zero >> $T/null.sig; head -c 32 /dev/zero > $T/zero.pub
+printf '\001' > $T/id.pub; head -c 31 /dev/zero >> $T/id.pub
+for k in zero id; do
+    ! $PY verify $T/$k.pub $T/c.bundle $T/null.sig 2>/dev/null && ! $C verify $T/$k.pub $T/c.bundle $T/null.sig 2>/dev/null &&
+        $PY verify $T/$k.pub $T/c.bundle $T/null.sig 2>&1 | grep -q "any signature holds" &&
+        $C verify $T/$k.pub $T/c.bundle $T/null.sig 2>&1 | grep -q "any signature holds"; ok $? "both refuse a key of small order ($k) with the null signature"
+done
+python3 -c 'import sys; sys.path.insert(0, "scripts"); import otatool as o; sys.exit(not (o.weak(bytes(32)) and o.weak(b"\1" + bytes(31)) and not o.weak(o.key_pair(bytes(32))[1])))'; ok $? "otatool.py weak(): the all-zero key and the identity, never keygen's"
+# R4 of a review of 3c5d7ff: six encodings Monocypher reads as points of small order (the C side refuses them, edkey.h)
+# that decode() does not read at all; weak() took them for no weak key, and the Makefile and the index's tool for keys
+for k in 0100000000000000000000000000000000000000000000000000000000000080 ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff \
+         edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff \
+         eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff; do
+    python3 -c 'import sys; sys.path.insert(0, "scripts"); import otatool as o; sys.exit(not o.weak(bytes.fromhex(sys.argv[1])))' $k &&
+        python3 -c 'import sys; open(sys.argv[2], "wb").write(bytes.fromhex(sys.argv[1]))' $k $T/nc.pub &&
+        ! $PY verify $T/nc.pub $T/c.bundle $T/null.sig 2>/dev/null && ! $C verify $T/nc.pub $T/c.bundle $T/null.sig 2>/dev/null &&
+        $PY verify $T/nc.pub $T/c.bundle $T/null.sig 2>&1 | grep -q "any signature holds" &&
+        $C verify $T/nc.pub $T/c.bundle $T/null.sig 2>&1 | grep -q "any signature holds"; ok $? "weak() and both otatools: $k (Monocypher's small order, decode() no point) is no key"
+done
+# sdk/plugcheck.py takes its signatures through otatool.check: a listing and a manifest "signed" with the null signature
+# under the identity as the key (under which, without the rule, it verifies for every text) are none
+python3 -c 'import sys, hashlib, json; sys.path.insert(0, "sdk"); import plugcheck
+m = {"id": "probe", "version": 1, "author_key": "01" + "00" * 31}; mj = json.dumps(m).encode()
+text = b"hassmic plugin listing 2\nid probe\nversion 1\ntier official\nmanifest " + hashlib.blake2b(mj, digest_size=32).hexdigest().encode() + b"\nserial 1\n"
+null = b"\1" + bytes(63)
+f = {"manifest.json": mj, "listing.sig": null.hex().encode() + b"\n" + text}
+sys.exit(not (plugcheck.listing_read(f, m, b"\1" + bytes(31)) is None and not plugcheck.otatool.check(null, b"\1" + bytes(31), plugcheck.SIGN_MANIFEST + mj)))'
+ok $? "plugcheck.py: a listing and a manifest with the null signature under the identity as the key: none"
 # chgrp (the device side's, main.sh's light ring live): a file's group by number; never 0, a name or what is not a file
 : > $T/frame; $C chgrp $(id -g) $T/frame && [ "$(stat -c %g $T/frame)" = "$(id -g)" ]; ok $? "chgrp: a file's group by number"
 ! $C chgrp 0 $T/frame 2>/dev/null; ok $? "chgrp: never group 0"

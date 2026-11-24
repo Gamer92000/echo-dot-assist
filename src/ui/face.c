@@ -11,7 +11,7 @@
 
 /* the core's patterns (ring.h, main.c led()), as ring_band.c has them: how long each shows, -1 until unset */
 enum { P_RESET, P_LISTEN, P_THINK, P_TALK, P_END, P_CALL_OUT, P_CALL_IN, P_CALL, P_CALL_END, P_ERROR, P_MUTE, P_UNMUTE,
-       P_DND, P_IDENTIFY, P_LOGIN, P_PAIRING, P_TIMER, P_TIMER_SHORT, P_SETUP, P_COUNT };
+       P_DND, P_IDENTIFY, P_LOGIN, P_PAIRING, P_TIMER, P_TIMER_SHORT, P_SETUP, P_PLUGIN, P_COUNT };
 static const struct { const char *name; int ms; } pats[P_COUNT] = {
     [P_RESET] = { "factory-reset", -1 }, [P_LISTEN] = { "active-start", -1 }, [P_THINK] = { "active-thinking", -1 },
     [P_TALK] = { "active-talking", -1 }, [P_END] = { "active-end", 600 }, [P_CALL_OUT] = { "call_outbound_ringing", -1 },
@@ -19,12 +19,12 @@ static const struct { const char *name; int ms; } pats[P_COUNT] = {
     [P_ERROR] = { "anim_start_error_short", 3300 }, [P_MUTE] = { "mics-off_on", -1 }, [P_UNMUTE] = { "mics-off_end", 1100 },
     [P_DND] = { "do_not_disturb", 1760 }, [P_IDENTIFY] = { "zzz_rainbow", -1 }, [P_LOGIN] = { "authenticated_setup_mode", -1 },
     [P_PAIRING] = { "scone-setup", -1 }, [P_TIMER] = { "ready-timer", -1 }, [P_TIMER_SHORT] = { "ready-timer-short", 2233 },
-    [P_SETUP] = { "setup-mode", -1 },
+    [P_SETUP] = { "setup-mode", -1 }, [P_PLUGIN] = { "wait", -1 },
 };
 
 /* what the face shows, first wins */
 enum { M_IDLE, M_RESET, M_CALL_IN, M_CALL_OUT, M_CALL, M_LISTEN, M_THINK, M_TALK, M_TIMER, M_ERROR, M_MUTE, M_DND,
-       M_IDENTIFY, M_LOGIN, M_PAIRING, M_SETUP };
+       M_IDENTIFY, M_LOGIN, M_PLUGIN, M_PAIRING, M_SETUP };
 
 int pat_find(const char *name)
 {
@@ -69,6 +69,7 @@ int face_mode(struct scene *s)
     if (s->dnd) return M_DND;
     if (pat_on(s, P_IDENTIFY)) return M_IDENTIFY;
     if (pat_on(s, P_LOGIN)) return M_LOGIN;
+    if (pat_on(s, P_PLUGIN)) return M_PLUGIN;
     if (pat_on(s, P_PAIRING)) return M_PAIRING;
     if (pat_on(s, P_SETUP) || s->oobe) return M_SETUP;
     return M_IDLE;
@@ -152,6 +153,7 @@ static int eyes(struct scene *s, int m, float dt)
     case M_RESET: lh = rh = 0.5f; col = ORANGE; break;
     case M_IDENTIFY: col = hue(t / 2000); moving = 1; break;
     case M_LOGIN: lh = rh = 0.9f + 0.1f * sinf(t * 6.2832f / 1800); col = BLUE; moving = 1; break;
+    case M_PLUGIN: col = CYAN; gx = 0.05f * sinf(t * 6.2832f / 1056); moving = 1; break;     /* looking about, as the ring's three LEDs go round */
     case M_PAIRING: col = BLUE; gx = 0.06f * sinf(t * 6.2832f / 2000); moving = 1; break;
     case M_SETUP: col = ORANGE; break;
     default: break;
@@ -233,6 +235,12 @@ static void caption(struct scene *s, int m, int *used)
         break;
     case M_LOGIN:
         snprintf(buf, sizeof buf, "A browser wants in: press %s", s->act[0] ? s->act : "the action button");
+        text(s, ID_FACE + 10, buf, px, 0, 0.92f * w, w / 2, y - U(15), 1, c, 255);
+        break;
+    case M_PLUGIN:                      /* not the login's words.  Two things show this pattern (web.c): a plugin's
+                                         * install, which a press accepts, and the note of a copied plugin, which
+                                         * the button held for a second takes off; the page that asked says which */
+        snprintf(buf, sizeof buf, "Plugins: the settings page says how to use %s", s->act[0] ? s->act : "the action button");
         text(s, ID_FACE + 10, buf, px, 0, 0.92f * w, w / 2, y - U(15), 1, c, 255);
         break;
     case M_PAIRING: text(s, ID_FACE + 10, "Bluetooth pairing", px, 0, 0.8f * w, w / 2, y - U(15), 1, c, 255); break;

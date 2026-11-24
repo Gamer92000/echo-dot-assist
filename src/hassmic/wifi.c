@@ -4,11 +4,20 @@
  * root's watcher (main.sh ota_watch, every 2 s) hands to scripts/device/wifi.sh:
  *   scan <id>                          scan, then answer with the networks seen
  *   join <id> <ssid hex> <psk hex|->   switch to that network (- = open), and back if the Echo does not get on it
+ *   address <id> auto                  the address by DHCP again (issue #191)
+ *   address <id> fixed <ip> <prefix> <gateway> <dns> <dns2|->
+ *                                      a fixed address on the network it is on: tried, kept only once a connection
+ *                                      reached the Echo there within 2 minutes, else back to what it had
  * The answers are in a directory only root writes (HASSMIC_WIFI, /data/local/hassmic/wifi), as files the daemon reads:
- *   status   what wpa_supplicant says now (wpa_state, id, ssid, ip_address, freq; after each job and when the link comes up)
+ *   status   what wpa_supplicant says now (wpa_state, id, ssid, ip_address, freq; after each job and when the link comes up),
+ *            and the mask, router and DNS servers the Echo has (netmask, gateway, dns: what the page offers to keep)
  *   scan     "id <id>", then wpa_cli scan_results lines: bssid, frequency, signal, flags, ssid (wpa_supplicant's escapes)
  *   result   the last switch: "<id> switching <hex>", "<id> ok <hex> <ip> <saved 1|0>", "<id> failed <hex> <why> <back ssid>"
- *   lock/    exists while wifi.sh works: a scan, or a switch
+ *   address  the fixed address, root's own record: "fixed <ip> <prefix> <gateway> <dns> <dns2|-> <ssid hex>" (the network
+ *            it is for); none = DHCP
+ *   address-result  the last address request: "<id> applying <ip|->", "<id> waiting <ip>" (on it, waiting to be
+ *            reached), "<id> ok <ip>", "<id> failed <why> <ip now|->"
+ *   lock/    exists while wifi.sh works: a scan, a switch, an address
  * The id ties an answer to its request: a random number, so that what an earlier run left is never taken for the answer.
  *
  * The password: the page sends it sealed with the browser's key (web.c unseal: the page is plain HTTP), and only the
@@ -18,6 +27,7 @@
  * WPA2-PSK and open networks only: WPA3-only (SAE), WEP and enterprise networks are shown, not offered.
  */
 #include "wifi.h"
+#include "logread.h"
 #include "hash.h"
 #include "ws.h"
 #include "statefile.h"
@@ -28,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -145,6 +156,25 @@ static int read_result(struct result *r)
     return 0;
 }
 
+/* address-result: "<id> <state> <ip|why> [<ip>]" */
+struct aresult { unsigned id; char state[16], ip[20], why[16]; };
+
+static int read_aresult(struct aresult *r)
+{
+    char line[200], a[24] = "", b[24] = ""; FILE *f = out_open("address-result");
+    memset(r, 0, sizeof *r);
+    if (!f) return -1;
+    int ok = fgets(line, sizeof line, f) && sscanf(line, "%u %15s %23s %23s", &r->id, r->state, a, b) >= 3;
+    fclose(f);
+    if (!ok) return -1;
+    if (!strcmp(r->state, "failed")) { snprintf(r->why, sizeof r->why, "%s", a); snprintf(r->ip, sizeof r->ip, "%s", strcmp(b, "-") ? b : ""); }
+    else snprintf(r->ip, sizeof r->ip, "%s", strcmp(a, "-") ? a : "");
+    if ((!strcmp(r->state, "applying") || !strcmp(r->state, "waiting")) && !out_exists("lock"))
+        snprintf(r->state, sizeof r->state, "interrupted");              /* that run died (a reboot) */
+    return 0;
+}
+static int addr_busy(void) { struct aresult a; return !read_aresult(&a) && (!strcmp(a.state, "applying") || !strcmp(a.state, "waiting")); }
+
 /* the request waiting for root, if any: its kind and id */
 static int pending(char kind[8], unsigned *id)
 {
@@ -168,6 +198,7 @@ static int may_ask(const char *kind, unsigned *id, int *busy, char *err, size_t 
     if (out_exists("lock") && !read_result(&r) && !strcmp(r.state, "switching")) {
         snprintf(err, errsz, "The Echo is switching networks right now"); return -1;
     }
+    if (out_exists("lock") && addr_busy()) { snprintf(err, errsz, "The Echo is changing its address right now"); return -1; }
     *busy = 0;
     return 0;
 }
@@ -218,15 +249,88 @@ int wifi_join(const uint8_t *ssid, size_t n, const char *pass, unsigned *id, int
     pthread_mutex_unlock(&mu);
     crypto_wipe(line, sizeof line); crypto_wipe(ph, sizeof ph);
     jesc(name, sizeof name, ssid, n);
-    if (!r) fprintf(stderr, "wifi: asked root to switch to \"%s\" (%s)\n", name, pl ? "with a password" : "open");
+    if (!r) log_private("wifi: asked root to switch to \"%s\" (%s)", name, pl ? "with a password" : "open");
+    return r;
+}
+
+/* ---------------------------------------------------------------- a fixed address (issue #191) */
+
+/* a.b.c.d, decimal, no leading zeros (root's quad() takes nothing else either); its value in *v */
+static int quad(const char *s, uint32_t *v)
+{
+    uint32_t x = 0;
+    for (int i = 0; i < 4; i++) {
+        const char *b = s; unsigned o = 0;
+        while (*s >= '0' && *s <= '9' && s - b < 3) o = o * 10 + (unsigned)(*s++ - '0');
+        if (s == b || o > 255 || (s - b > 1 && *b == '0')) return -1;
+        x = x << 8 | o;
+        if (i < 3 && *s++ != '.') return -1;
+    }
+    if (*s) return -1;
+    *v = x;
+    return 0;
+}
+/* an address a host may have: not 0/8, loopback, multicast or above */
+static int unicast(uint32_t a) { return (a >> 24) != 0 && (a >> 24) != 127 && (a >> 24) < 224; }
+
+/* SPEC: "auto", or "fixed <ip> <prefix> <gateway> <dns> <dns2|->".  The checks root makes again (wifi.sh fixed_ok),
+ * here with words for the page */
+static int addr_check(const char *spec, char *line, size_t cap, char *err, size_t errsz)
+{
+    char w[7][24]; int n = 0; uint32_t ip, gw, d1, d2 = 0;
+    for (const char *p = spec; n < 7 && *p;) {
+        while (*p == ' ') p++;
+        size_t k = strcspn(p, " ");
+        if (!k) break;
+        if (k >= sizeof w[0]) { snprintf(err, errsz, "bad request"); return -1; }
+        memcpy(w[n], p, k); w[n++][k] = 0; p += k;
+    }
+    if (n == 1 && !strcmp(w[0], "auto")) { snprintf(line, cap, "auto"); return 0; }
+    if (n != 6 || strcmp(w[0], "fixed")) { snprintf(err, errsz, "bad request"); return -1; }
+    char *e; long pre = strtol(w[2], &e, 10);
+    if (quad(w[1], &ip) || !unicast(ip)) { snprintf(err, errsz, "The address is not one a device can have (four numbers 0 to 255, as 192.168.1.50)"); return -1; }
+    if (*e || e == w[2] || pre < 8 || pre > 30) { snprintf(err, errsz, "The subnet mask is not one of a home network (255.0.0.0 to 255.255.255.252)"); return -1; }
+    if (quad(w[3], &gw) || !unicast(gw)) { snprintf(err, errsz, "The router's address is not one a device can have"); return -1; }
+    if (quad(w[4], &d1) || !unicast(d1) || (strcmp(w[5], "-") && (quad(w[5], &d2) || !unicast(d2)))) {
+        snprintf(err, errsz, "A DNS server's address is not one a device can have"); return -1; }
+    uint32_t m = 0xffffffffu << (32 - pre), host = ~m;
+    if ((ip & m) != (gw & m)) { snprintf(err, errsz, "The router is not in the Echo's network: with that subnet mask the two addresses must begin alike"); return -1; }
+    if (ip == gw) { snprintf(err, errsz, "That is the router's own address"); return -1; }
+    if (!(ip & host) || (ip & host) == host) { snprintf(err, errsz, "That address is the network's own (the first or the last of it): no device can have it"); return -1; }
+    if (!(gw & host) || (gw & host) == host) { snprintf(err, errsz, "The router's address is the network's own (the first or the last of it)"); return -1; }
+    snprintf(line, cap, "fixed %s %ld %s %s %s", w[1], pre, w[3], w[4], w[5]);
+    return 0;
+}
+
+int wifi_address(const char *spec, unsigned *id, int *busy, char *err, size_t errsz)
+{
+    char line[160], req[200]; int r;
+    *busy = 0;
+    if (addr_check(spec, line, sizeof line, err, errsz)) return -1;
+    pthread_mutex_lock(&mu);
+    if (may_ask("address", id, busy, err, errsz)) { pthread_mutex_unlock(&mu); return -1; }
+    *id = new_id();
+    snprintf(req, sizeof req, "address %u %s\n", *id, line);
+    r = write_req(req, err, errsz);
+    pthread_mutex_unlock(&mu);
+    if (!r) fprintf(stderr, "wifi: asked root for %s\n", !strcmp(line, "auto") ? "an address by DHCP" : "a fixed address");
     return r;
 }
 
 /* ---------------------------------------------------------------- answers */
 
+/* root's record of the fixed address, if it is for the network of SSID hex H */
+static int fixed_for(const char *hx)
+{
+    char line[300], sh[80]; FILE *f = out_open("address");
+    int ok = f && fgets(line, sizeof line, f) && sscanf(line, "fixed %*s %*s %*s %*s %*s %79s", sh) == 1 && !strcasecmp(sh, hx);
+    if (f) fclose(f);
+    return ok;
+}
+
 static size_t current(char *o, size_t cap, int full)
 {
-    char line[300], st[32] = "", ip[48] = "", e[140]; uint8_t ssid[32]; size_t sl = 0; int have = 0;
+    char line[300], st[32] = "", ip[48] = "", e[140], mask[20] = "", gw[20] = "", dns[64] = ""; uint8_t ssid[32]; size_t sl = 0; int have = 0;
     FILE *f = out_open("status");
     if (!f) return (size_t)snprintf(o, cap, "null");
     while (fgets(line, sizeof line, f)) {
@@ -234,13 +338,22 @@ static size_t current(char *o, size_t cap, int full)
         if (!strncmp(line, "wpa_state=", 10)) snprintf(st, sizeof st, "%.31s", line + 10);
         else if (!strncmp(line, "ssid=", 5)) { sl = wpa_unescape(ssid, sizeof ssid, line + 5); have = 1; }
         else if (!strncmp(line, "ip_address=", 11)) snprintf(ip, sizeof ip, "%.47s", line + 11);
+        else if (!strncmp(line, "netmask=", 8)) snprintf(mask, sizeof mask, "%.19s", line + 8);
+        else if (!strncmp(line, "gateway=", 8)) snprintf(gw, sizeof gw, "%.19s", line + 8);
+        else if (!strncmp(line, "dns=", 4)) snprintf(dns, sizeof dns, "%.63s", line + 4);
     }
     fclose(f);
     if (!have || strcmp(st, "COMPLETED")) return (size_t)snprintf(o, cap, full ? "{\"state\":\"%s\"}" : "null", st);
     jesc(e, sizeof e, ssid, sl);
-    if (!full) return (size_t)snprintf(o, cap, "{\"ssid\":\"%s\",\"ip\":\"%s\"}", e, ip);
-    char h[65]; hexs(h, ssid, sl);
-    return (size_t)snprintf(o, cap, "{\"ssid\":\"%s\",\"hex\":\"%s\",\"state\":\"%s\",\"ip\":\"%s\"}", e, h, st, ip);
+    char h[65], dl[96] = ""; size_t dn = 0; uint32_t v;
+    hexs(h, ssid, sl);
+    if (!full) return (size_t)snprintf(o, cap, "{\"ssid\":\"%s\",\"ip\":\"%s\",\"fixed\":%s}", e, ip, fixed_for(h) ? "true" : "false");
+    if (quad(mask, &v)) mask[0] = 0;                    /* root's words, but only addresses go into the JSON */
+    if (quad(gw, &v)) gw[0] = 0;
+    for (char *t = strtok(dns, " "); t && dn + 20 < sizeof dl; t = strtok(NULL, " "))
+        if (!quad(t, &v)) dn += (size_t)snprintf(dl + dn, sizeof dl - dn, "%s\"%s\"", dn ? "," : "", t);
+    return (size_t)snprintf(o, cap, "{\"ssid\":\"%s\",\"hex\":\"%s\",\"state\":\"%s\",\"ip\":\"%s\",\"netmask\":\"%s\",\"gateway\":\"%s\",\"dns\":[%s]}",
+                            e, h, st, ip, mask, gw, dl);
 }
 
 size_t wifi_current_json(char *out, size_t cap) { size_t n = current(out, cap, 0); return n < cap ? n : cap - 1; }
@@ -331,6 +444,36 @@ int wifi_join_result(unsigned id, char *ip, size_t cap, char *why, size_t wcap)
     return -1;
 }
 
+/* root's words that go into the JSON as they are: an address, or a reason of letters */
+static const char *ip_or_empty(const char *s)
+{
+    uint32_t v;
+    if (!quad(s, &v)) return s;
+    for (const char *p = s; *p; p++) if (*p < 'a' || *p > 'z') return "";
+    return s;
+}
+
+/* {"mode":"auto"}, or {"mode":"fixed","ip","prefix","gateway","dns":[..],"ssid","here"}: root's record; "here" when
+ * it is for the network the Echo is on now */
+static size_t address_json(char *o, size_t cap)
+{
+    char line[300], ip[20], gw[20], d1[20], d2[20], sh[80], st[400], cur[65] = "", e[140]; int pre; uint32_t v;
+    FILE *f = out_open("address");
+    int ok = f && fgets(line, sizeof line, f) && sscanf(line, "fixed %19s %d %19s %19s %19s %79s", ip, &pre, gw, d1, d2, sh) == 6
+             && !quad(ip, &v) && !quad(gw, &v) && !quad(d1, &v) && (!strcmp(d2, "-") || !quad(d2, &v)) && pre >= 8 && pre <= 30;
+    if (f) fclose(f);
+    if (!ok) return (size_t)snprintf(o, cap, "{\"mode\":\"auto\"}");
+    uint8_t b[32]; int sl = unhexs(b, sizeof b, sh);
+    jesc(e, sizeof e, b, sl > 0 ? (size_t)sl : 0);
+    /* the network it is on: status's "hex" */
+    current(st, sizeof st, 1);
+    char *h = strstr(st, "\"hex\":\"");
+    if (h) { h += 7; size_t l = strcspn(h, "\""); if (l < sizeof cur) { memcpy(cur, h, l); cur[l] = 0; } }
+    return (size_t)snprintf(o, cap, "{\"mode\":\"fixed\",\"ip\":\"%s\",\"prefix\":%d,\"gateway\":\"%s\",\"dns\":[\"%s\"%s%s%s],\"ssid\":\"%s\",\"here\":%s}",
+                            ip, pre, gw, d1, strcmp(d2, "-") ? ",\"" : "", strcmp(d2, "-") ? d2 : "", strcmp(d2, "-") ? "\"" : "", e,
+                            cur[0] && fixed_for(cur) ? "true" : "false");
+}
+
 size_t wifi_status_json(char *o, size_t cap)
 {
     size_t n = 0; char kind[8]; unsigned pid; struct result r;
@@ -356,6 +499,12 @@ size_t wifi_status_json(char *o, size_t cap)
                                   r.id, r.state, e, r.hex, r.ip, r.saved ? "true" : "false", r.why, be);
         }
     }
+    if (n < cap) n += (size_t)snprintf(o + n, cap - n, ",\"address\":");
+    if (n < cap) n += address_json(o + n, cap - n);
+    struct aresult a;
+    if (n < cap) n += read_aresult(&a) ? (size_t)snprintf(o + n, cap - n, ",\"address_result\":null")
+        : (size_t)snprintf(o + n, cap - n, ",\"address_result\":{\"id\":%u,\"state\":\"%s\",\"ip\":\"%s\",\"reason\":\"%s\"}",
+                           a.id, a.state, ip_or_empty(a.ip), ip_or_empty(a.why));
     if (n < cap) n += (size_t)snprintf(o + n, cap - n, "}");
     return n < cap ? n : cap - 1;
 }

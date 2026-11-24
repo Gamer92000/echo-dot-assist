@@ -20,6 +20,7 @@
  * queue), "qc" (its items changed), lists as "L"/"I"/"E", images as "img" with the bytes (the server's imageproxy
  * scales them: sizes 80, 160, 256, 512).  Tested against a stand-in server by tests/fake_ma_api.py.
  */
+#include "logread.h"
 #include "mass.h"
 #include "json.h"
 #include "net.h"
@@ -58,15 +59,32 @@ static pthread_mutex_t wslk = PTHREAD_MUTEX_INITIALIZER; static int wsopen;
 static char text_[200], host[200]; static int port, schema;
 static unsigned up_gen;                                     /* the gen the session up runs for: host and token belong together */
 static char self[96], queue[96], last_ma[260], last_pq[400];
+/* the queue's question: the one on its way (its message id, set as it is sent: the answer may come before send_how
+ * returns), when it went, and whether another is wanted once it is answered (what changed while it was out may have
+ * been after Music Assistant answered it); a tap that needs a queue ("mplay", "mhere") while this Echo had none, held
+ * for the answer (issue #222) */
+#define Q_WAIT_MS q_ms(0)               /* Music Assistant answers in ms: a question out 5 s is taken for lost */
+#define Q_HOLD_MS q_ms(1)               /* a held tap: played within 10 s, else "no queue" */
+static long long q_ms(int hold)         /* (HASSMIC_MASS_QUEUE_MS=<wait>:<hold> for the tests) */
+{
+    static long long w, h;
+    if (!w) { const char *e = getenv("HASSMIC_MASS_QUEUE_MS"); long long a = 0, b = 0; if (e) sscanf(e, "%lld:%lld", &a, &b); h = b > 0 ? b : 10000; w = a > 0 ? a : 5000; }
+    return hold ? h : w;
+}
+#define Q_HELD 4                        /* taps held at once (Add, Add, ...): a fifth takes the fourth's place */
+static int q_ask, q_again, q_heldn; static unsigned q_n, q_held_n, q_put_n; static long long q_ask_ms, q_held_ms;   /* q_put_n:
+                                           the newest question whose answer was taken: an older one's, late, is not */
+static char q_held[Q_HELD][1100];       /* q_n: questions sent; q_held_n: those sent before the last tap was held */
 static int next_id;
 
 enum { K_LIST = 1, K_CMD, K_GROUP, K_PLAYERS, K_QUEUE, K_AUTH };
-struct pend { int id, kind, ui_req, offset, paged, sent; char what[24]; char fallback[1300]; };   /* sent: items told of a listing in pieces */
+struct pend { int id, kind, ui_req, offset, paged, sent; unsigned n; char what[24]; char fallback[1300]; };   /* n: a queue question's number */   /* sent: items told of a listing in pieces */
 static struct pend pend[NPEND];
 
 /* the players as last told, and what the UI was told of each */
 struct player {
-    char id[96], provider[64], name[64], state[12], synced[96], group[96], playing[160], members[600], can[2400], outs[300];
+    char id[96], provider[64], name[64], state[12], synced[96], group[96], playing[160], members[600], can[2400], outs[300],
+         source[160];                                       /* active_source: an AirPlay receiver's while it plays, no queue's */
     int vol, gvol, muted, avail, shown, is_group, volctl, told;   /* gvol: a group's (its players' average), -1 none */
     unsigned long long line;                                /* what the UI was told: its line's hash */
 };
@@ -157,12 +175,13 @@ static void ws_shut(void)
 
 /* a command; how (kind 0: no answer wanted) is what its answer is for, filled in before it goes out (an answer may come
  * back before send returns) */
-static int send_how(const struct pend *how, const char *command, const char *args)
+static int send_how_id(const struct pend *how, const char *command, const char *args, int *idp)
 {
     char *m = malloc(strlen(args) + 300); int id;
     if (!m) return -1;
     pthread_mutex_lock(&lk);
     id = ++next_id;
+    if (idp) *idp = id;                                      /* (lk's: the caller's record of it, before any answer) */
     if (how && how->kind) {
         int k = 0; while (k < NPEND && pend[k].id) k++;
         if (k == NPEND) {                                     /* answers that never came: the oldest go (a list */
@@ -175,9 +194,13 @@ static int send_how(const struct pend *how, const char *command, const char *arg
     int n = sprintf(m, "{\"message_id\":\"%d\",\"command\":\"%s\",\"args\":%s}", id, command, args);
     int rc = ws_put(m, (size_t)n);
     wipe(m, (size_t)n); free(m);                               /* the login's has the token */
-    if (rc && how && how->kind) { pthread_mutex_lock(&lk); struct pend *p = pend_of(id); if (p) p->id = 0; pthread_mutex_unlock(&lk); }   /* never sent */
+    if (rc && how && how->kind) {                              /* never sent */
+        pthread_mutex_lock(&lk); struct pend *p = pend_of(id); if (p) p->id = 0; if (idp && *idp == id) *idp = 0; pthread_mutex_unlock(&lk);
+    }
     return rc ? -1 : id;
 }
+
+static int send_how(const struct pend *how, const char *command, const char *args) { return send_how_id(how, command, args, NULL); }
 
 static int send_cmd(int kind, int ui_req, const char *command, const char *args)
 {
@@ -397,7 +420,11 @@ static void player_put(struct json *j, int p)
         csv(j, json_get(j, p, "output_protocols"), outs, sizeof outs);
         json_str(j, json_get(j, p, "type"), ty, sizeof ty);
         int mine = cid && cid[0] && (!strcmp(id, cid) || in_csv(outs, cid));
-        if (!mine && !speaker_shown(j, p, ty)) return;
+        /* the player this Echo follows, or the group it plays in: kept though hidden (a sync group's leader may be a
+         * protocol player), on_event watches its source for this Echo's queue */
+        struct player *s = self[0] ? player_of(self) : NULL;
+        int near = s && (!strcmp(id, s->synced) || !strcmp(id, s->group));
+        if (!mine && !near && !speaker_shown(j, p, ty)) return;
         static const int order[3] = { 0, -1, 1 };              /* one hidden first, then one not in this answer yet, then
                                                                    one shown (past 128 speakers: this Echo before them) */
         for (int k = 0; npl == NPL && mine && k < 3; k++)
@@ -410,6 +437,7 @@ static void player_put(struct json *j, int p)
     if (!json_str(j, json_get(j, p, "playback_state"), e->state, sizeof e->state)) json_str(j, json_get(j, p, "state"), e->state, sizeof e->state);
     json_str(j, json_get(j, p, "synced_to"), e->synced, sizeof e->synced);
     json_str(j, json_get(j, p, "active_group"), e->group, sizeof e->group);
+    json_str(j, json_get(j, p, "active_source"), e->source, sizeof e->source);
     csv(j, json_get(j, p, "group_members"), e->members, sizeof e->members);
     if (!e->members[0]) csv(j, json_get(j, p, "group_childs"), e->members, sizeof e->members);   /* before 2.4 */
     csv(j, json_get(j, p, "can_group_with"), e->can, sizeof e->can);
@@ -462,23 +490,63 @@ static void player_gone(const char *id)    /* lk held */
     }
 }
 
-/* this Echo's queue: asked for whenever who it plays with may have changed */
+static long long mono_ms(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000; }
+
+/* this Echo's queue: asked for whenever who it plays with, or what its leader plays from, may have changed.  One
+ * question at a time, and one more after its answer for whatever asked meanwhile: Music Assistant has no queue for a
+ * player while its leader plays from a source (AirPlay into a sync group), and as that ends it clears synced_to a few
+ * ms before the source (issue #222), so the answer to the first change can be "none" though the second gives one */
+static void no_queue_said(void) { ui("merr This Echo has no queue in Music Assistant yet"); }
+
 static void ask_queue(void)
 {
-    char a[700], e[600]; pthread_mutex_lock(&lk); int ok = self[0] != 0; json_esc(e, sizeof e, self); pthread_mutex_unlock(&lk);
-    if (!ok) return;
+    char a[700], e[600]; long long now = mono_ms(); int none = 0;
+    pthread_mutex_lock(&lk);
+    if (!self[0]) { none = q_heldn; q_heldn = 0; pthread_mutex_unlock(&lk); if (none) no_queue_said(); return; }
+    if (q_ask && now - q_ask_ms < Q_WAIT_MS) { q_again = 1; pthread_mutex_unlock(&lk); return; }
+    struct pend how; memset(&how, 0, sizeof how); how.kind = K_QUEUE;
+    json_esc(e, sizeof e, self); q_ask = 0; q_ask_ms = now; q_again = 0; how.n = ++q_n;   /* (q_ask 0: a lost one's late
+                                                                   answer is no longer the current one's) */
+    pthread_mutex_unlock(&lk);
     snprintf(a, sizeof a, "{\"player_id\":%s}", e);
-    send_cmd(K_QUEUE, 0, "player_queues/get_active_queue", a);
+    if (send_how_id(&how, "player_queues/get_active_queue", a, &q_ask) < 0) {   /* not sent: held taps told, unless */
+        pthread_mutex_lock(&lk); if (!q_ask && q_heldn) { q_heldn = 0; none = 1; } pthread_mutex_unlock(&lk);   /* another is out */
+        if (none) no_queue_said();
+    }
+}
+
+/* a tap that needs this Echo's queue while it has none: held, the queue asked for; played by the answer that has one */
+static void hold_tap(const char *line)
+{
+    pthread_mutex_lock(&lk);
+    if (queue[0]) { pthread_mutex_unlock(&lk); mass_ui(line); return; }   /* (came as this tap was read: in order) */
+    if (!q_heldn) q_held_ms = mono_ms();                       /* (the first's time: they end together) */
+    if (q_heldn == Q_HELD) q_heldn--;
+    snprintf(q_held[q_heldn++], sizeof q_held[0], "%s", line);
+    q_held_n = q_n;                                            /* a question sent before this tap: its "none" not final */
+    pthread_cond_signal(&iq_cv);                               /* (image_thread keeps its time) */
+    pthread_mutex_unlock(&lk);
+    ask_queue();                                               /* (one on its way: another after it) */
+}
+
+static int held_over(long long now)                         /* lk held */
+{
+    if (!q_heldn || now - q_held_ms < Q_HOLD_MS) return 0;
+    q_heldn = 0; return 1;
 }
 
 static void queue_put(struct json *j, int q)               /* lk held */
 {
     char id[96] = "", st[16] = "", rp[8] = "", name[96] = "";
-    if (json_type(j, q) != J_OBJ) { queue[0] = 0; snprintf(last_pq, sizeof last_pq, "pq-"); screen_line(last_pq); return; }
+    if (json_type(j, q) != J_OBJ) {                         /* none: its leader plays from a source, or it is new */
+        if (queue[0]) fprintf(stderr, "mass: this Echo's queue: none\n");
+        queue[0] = 0; snprintf(last_pq, sizeof last_pq, "pq-"); screen_line(last_pq); return;
+    }
     json_str(j, json_get(j, q, "queue_id"), id, sizeof id);
     json_str(j, json_get(j, q, "state"), st, sizeof st);
     json_str(j, json_get(j, q, "repeat_mode"), rp, sizeof rp);
     json_str(j, json_get(j, q, "display_name"), name, sizeof name); clean(name);
+    if (strcmp(queue, id)) fprintf(stderr, "mass: this Echo's queue: %s\n", id[0] ? id : "none");
     snprintf(queue, sizeof queue, "%s", id);
     char line[sizeof last_pq];
     snprintf(line, sizeof line, "pq %s\t%d\t%s\t%lld\t%lld\t%s", st, json_bool(j, json_get(j, q, "shuffle_enabled"), 0), rp[0] ? rp : "off",
@@ -559,10 +627,34 @@ static void on_result(int id, struct json *j, int r, const char *err)
         pthread_mutex_unlock(&lk);
         ask_queue();
         break;
-    case K_QUEUE:
-        pthread_mutex_lock(&lk); if (!err) queue_put(j, r); pthread_mutex_unlock(&lk);
+    case K_QUEUE: {                                         /* an older question's answer is taken too, but only the
+                                                                   newest's "none" is the last word for a held tap */
+        char run[Q_HELD][sizeof q_held[0]]; int nrun = 0, none = 0, again = 0;
+        pthread_mutex_lock(&lk);
+        int newest = p.n >= q_put_n;                           /* (a lost question's answer after a newer one's: dropped) */
+        if (newest) q_put_n = p.n;
+        if (!err && newest) queue_put(j, r);
+        int cur = id == q_ask;
+        if (cur) { q_ask = 0; again = q_again; q_again = 0; }
+        if (q_heldn && queue[0] && newest) { memcpy(run, q_held, sizeof run); nrun = q_heldn; q_heldn = 0; }
+        else if (held_over(mono_ms())) none = 1;
+        else if (q_heldn && cur && !again) {                   /* none: final only if asked after the last tap */
+            if (p.n > q_held_n) { q_heldn = 0; none = 1; } else again = 1;
+        }
+        pthread_mutex_unlock(&lk);
+        if (again) ask_queue();
+        if (none) no_queue_said();
+        for (int k = 0; k < nrun; k++) mass_ui(run[k]);        /* (has_q now: queue is the session thread's, this one) */
         break;
     }
+    }
+}
+
+/* what decides a player's queue: where it plays from and with whom (lk held) */
+static void play_key(const struct player *e, char *out, size_t n)
+{
+    if (!e) { snprintf(out, n, "-"); return; }
+    snprintf(out, n, "%s\t%s\t%s\t%s", e->state, e->source, e->synced, e->group);
 }
 
 static void on_event(struct json *j, int root)
@@ -573,15 +665,22 @@ static void on_event(struct json *j, int root)
     int d = json_get(j, root, "data");
     if (!strcmp(ev, "player_added") || !strcmp(ev, "player_updated")) {
         pthread_mutex_lock(&lk);
-        char was[96], ws_[96], wg[96]; snprintf(was, sizeof was, "%s", self);
+        char was[96], ws_[96], wg[96], pid[96] = "", wk[400], nk[400]; snprintf(was, sizeof was, "%s", self);
         struct player *m = me();
         snprintf(ws_, sizeof ws_, "%s", m ? m->synced : ""); snprintf(wg, sizeof wg, "%s", m ? m->group : "");
+        json_str(j, json_get(j, d, "player_id"), pid, sizeof pid);
+        play_key(player_of(pid), wk, sizeof wk);
         player_put(j, d);
         m = me();
         int moved = strcmp(was, self) || (m && (strcmp(ws_, m->synced) || strcmp(wg, m->group)));
+        /* no queue yet: asked again when this Echo, its leader or its group starts or stops playing from somewhere
+         * (an AirPlay source gone: the sync group's queue is this Echo's again).  Not on every second of play */
+        play_key(player_of(pid), nk, sizeof nk);
+        int near = m && pid[0] && (!strcmp(pid, m->id) || !strcmp(pid, m->synced) || !strcmp(pid, m->group));
+        int lost = !queue[0] && near && strcmp(wk, nk);
         players_tell(moved);
         pthread_mutex_unlock(&lk);
-        if (moved) ask_queue();
+        if (moved || lost) ask_queue();
     } else if (!strcmp(ev, "player_removed")) {
         pthread_mutex_lock(&lk); player_gone(obj); pthread_mutex_unlock(&lk);
     } else if (!strcmp(ev, "queue_updated")) {
@@ -727,7 +826,7 @@ static void session(unsigned seen)
     json_free(&j);
     ws_shut();                                                  /* first: a request after this fails (send_how), none waits for ever */
     pthread_mutex_lock(&lk);
-    up = 0; self[0] = queue[0] = 0; last_pq[0] = 0;
+    up = 0; self[0] = queue[0] = 0; last_pq[0] = 0; q_ask = q_again = q_heldn = 0; q_put_n = q_n;   /* (held taps: the UI hears "ma error") */
     for (int i = 0; i < npl; i++) if (pl[i].told) ui("pl- %s", pl[i].id);
     npl = 0;
     for (int k = 0; k < NPEND; k++) if (pend[k].id && pend[k].kind == K_LIST) ui("E %d connection lost", pend[k].ui_req);
@@ -800,11 +899,22 @@ static uint8_t *http_get(const char *h, int p, const char *path, const char *tok
 static void *image_thread(void *arg)
 {
     (void)arg;
+    long long ping_at = 0;
     for (;;) {
         pthread_mutex_lock(&lk);
-        while (!iqn) {                                         /* (idle: the session's pings, see session()) */
-            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += quiet_s() / 3;
-            if (pthread_cond_timedwait(&iq_cv, &lk, &ts) == ETIMEDOUT && up) { pthread_mutex_unlock(&lk); ws_ping(); pthread_mutex_lock(&lk); }
+        while (!iqn) {                                         /* (idle: the session's pings every third of quiet_s(),
+                                                                   see session(); and the end of held taps, which no
+                                                                   answer may come to say) */
+            long long now = mono_ms(), per = quiet_s() * 1000LL / 3;
+            if (!ping_at) ping_at = now + per;
+            if (now >= ping_at) { ping_at = now + per; if (up) { pthread_mutex_unlock(&lk); ws_ping(); pthread_mutex_lock(&lk); } continue; }
+            if (held_over(now)) { pthread_mutex_unlock(&lk); no_queue_said(); pthread_mutex_lock(&lk); continue; }
+            long long wait = ping_at - now;
+            if (q_heldn && q_held_ms + Q_HOLD_MS - now < wait) wait = q_held_ms + Q_HOLD_MS - now;
+            if (wait < 1) wait = 1;
+            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += wait / 1000; ts.tv_nsec += (wait % 1000) * 1000000; if (ts.tv_nsec >= 1000000000) { ts.tv_sec++; ts.tv_nsec -= 1000000000; }
+            pthread_cond_timedwait(&iq_cv, &lk, &ts);
         }
         char key[12]; int size = iq[iqn - 1].size;              /* the newest first: what the UI shows now */
         snprintf(key, sizeof key, "%s", iq[iqn - 1].key); iqn--;
@@ -927,9 +1037,10 @@ void mass_ui(const char *line_in)
     if (!isup) { ui("merr Music Assistant is not connected"); return; }
     sscanf(rest, "%127s %599[^\n]", a1, a2);
     if (!strcmp(cmd, "mplay")) {
-        if (!has_q) { ui("merr This Echo has no queue in Music Assistant yet"); return; }
         int radio = !strcmp(a1, "radio"); char e[3700];
         if (strcmp(a1, "play") && strcmp(a1, "next") && strcmp(a1, "add") && strcmp(a1, "replace") && !radio) return;
+        if (!has_q && has_me) { hold_tap(line); return; }    /* asked again, played by its answer (issue #222) */
+        if (!has_q) { no_queue_said(); return; }
         /* radio: from schema 34 a radio playlist of the item (radio_mode is deprecated: music_assistant_client 1.7.1
          * turns it into one itself), before it the flag */
         char seed[700]; int rp = radio && schema >= 34;
@@ -976,6 +1087,8 @@ void mass_ui(const char *line_in)
         snprintf(x, sizeof x, "{\"player_id\":%s,\"volume_level\":%d}", ld, v);
         send_cmd(K_CMD, 0, "players/cmd/group_volume", x);
     } else if (!strcmp(cmd, "mhere")) {
+        if (!a1[0]) return;
+        if (!has_q && has_me) { hold_tap(line); return; }
         if (!has_q) return;
         char src[96] = "", e[600];
         pthread_mutex_lock(&lk);
@@ -1035,7 +1148,7 @@ int mass_set(const char *u, const char *t)
     pthread_mutex_lock(&wslk);
     if (wsopen) shutdown(w.fd, SHUT_RDWR);                     /* the session sees the new settings at once */
     pthread_mutex_unlock(&wslk);
-    fprintf(stderr, "mass: %s, %s\n", u && u[0] ? u : "server found by itself", token[0] ? "a token" : "no token");
+    log_private("mass: %s, %s", u && u[0] ? u : "server found by itself", token[0] ? "a token" : "no token");      /* (the address the owner entered) */
     return rc;
 }
 

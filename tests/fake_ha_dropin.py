@@ -124,6 +124,21 @@ def level(path, secs):
     return 10 * np.log10((x ** 2).mean() / 32768 ** 2 + 1e-20) if len(x) else -200
 
 
+def tone(path, secs, hz=700):
+    """dBFS of the HZ tone in the last secs of a raw 16 kHz file: each 20 ms frame's own (700 Hz: 14 whole periods)
+    and their powers averaged.  Summed over the whole window as one, a frame the far end's jitter buffer lost or
+    concealed moves the tone's phase from there on and the sum cancels: the hall's tone measured 1.3 dB under the
+    level it was all of (-22.7 dB of -21.4 dBFS) once frames were lost under tests/run.py -j 8, and a few such frames
+    cost 6 dB and more.  Per frame a jump costs that frame at most; a tone at another level, or noise beside it, still
+    shows (level() then above it)"""
+    try: x = np.fromfile(path, np.int16).astype(float)[-16000 * secs:]
+    except OSError: return -200
+    f = x[:len(x) // 320 * 320].reshape(-1, 320)
+    if not len(f): return -200
+    a = np.abs((f * np.exp(-2j * np.pi * hz * np.arange(320) / 16000)).sum(1)) * 2 / 320 / np.sqrt(2) / 32768
+    return 10 * np.log10((a ** 2).mean() + 1e-24)
+
+
 def envelope_match(path, ref_path):
     """how well the 20 ms energy envelope of what played matches the speech that was sent (best lag): Opus and the gain
     change the waveform, not the shape of the words"""
@@ -322,8 +337,7 @@ async def main():
         # gate ducks it, as it should, and the level measured would depend on where the speech file is
         a.cli.switch_command(a.by["mute"].key, True)
         await asyncio.sleep(3.5)
-        x = np.fromfile(a.voip, np.int16).astype(float)[-16000 * 2:]
-        t = np.arange(len(x)) / 16000; tdb = 20 * np.log10(abs((x * np.exp(-2j * np.pi * 700 * t)).sum()) * 2 / len(x) / np.sqrt(2) / 32768 + 1e-12)
+        tdb = tone(a.voip, 2)
         check(-30 < tdb < -14 and tdb > level(a.voip, 2) - 1, f"  the kitchen plays the hall's 700 Hz at its own level ({tdb:.1f} dB of {level(a.voip, 2):.1f} dBFS; -20 sent)")
         b.page.set(call_mic="assistant")
         check(await until(lambda: "call: switched to the assistant's: the assistant's microphone for the rest of this call" in b.text(), 2),
@@ -356,9 +370,9 @@ async def main():
         check(await until(lambda: "call: micHfp is back" in b.text()[smark:], 3), "  micHfp is back")
         check(await until(lambda: "front end: listening 1" in b.text()[smark:].split("call: micHfp is back")[-1], 2), "  and its tone switches listening mode on again")
         await asyncio.sleep(2.5)
-        x = np.fromfile(a.voip, np.int16).astype(float)[-16000 * 2:]
-        t = np.arange(len(x)) / 16000; tdb = 20 * np.log10(abs((x * np.exp(-2j * np.pi * 700 * t)).sum()) * 2 / len(x) / np.sqrt(2) / 32768 + 1e-12)
-        check(-30 < tdb < -14 and "delivers nothing" not in b.text()[smark:], f"  the kitchen plays the hall's 700 Hz again ({tdb:.1f} dB)")
+        tdb = tone(a.voip, 2)
+        check(-30 < tdb < -14 and tdb > level(a.voip, 2) - 1 and "delivers nothing" not in b.text()[smark:],
+              f"  the kitchen plays the hall's 700 Hz again ({tdb:.1f} dB of {level(a.voip, 2):.1f} dBFS)")     # (the tone, not noise: a frame's 50 Hz bin)
         lmark = len(b.text())
         open(b.stall, "w").close()
         check(await until(lambda: "call: micHfp stalls, the assistant's microphone meanwhile" in b.text()[lmark:], 3), "  the hall's micHfp stalls: micAsr meanwhile")

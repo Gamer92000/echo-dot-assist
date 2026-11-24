@@ -32,7 +32,8 @@ You also need:
 
 > [!IMPORTANT]
 > **Do not set the Echo up with the Alexa app, and do not let it onto Wi-Fi before the unlock.** Amazon updates it
-> as soon as it is online, and a newer version may not unlock any more.
+> as soon as it is online. The older the Echo's firmware, the likelier the unlock works: which versions still unlock
+> is not tracked here, and an unlock that does not take can leave the Echo unusable.
 
 ## What the words mean
 

@@ -1,0 +1,22 @@
+# STORE_DEL: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message STORE_DEL 43
+id 65579
+key str 6b65792d34332dc3a9  # 'key-43-é'
+packet 2b0000002b00010009006b65792d34332dc3a9
+case empty
+id 65579
+key str -  # ''
+packet 2b0000002b0001000000
+case long
+id 65579
+key str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééééééééééé'
+packet 2b0000002b0001003000c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9
+case full
+id 65579
+key str -  # ''
+packet 2b0000002b0001000000
+refuse short 2b0000002b0001
+refuse truncated 2b0000002b00010009006b65792d34332dc3
+refuse trailing 2b0000002b00010009006b65792d34332dc3a900
+refuse over:key 2b0000002b000100310061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161
+refuse nul:key 2b0000002b0001000300610062

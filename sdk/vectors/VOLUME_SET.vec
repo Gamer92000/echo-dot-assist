@@ -1,0 +1,20 @@
+# VOLUME_SET: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message VOLUME_SET 75
+id 65611
+percent u8 6
+packet 4b0000004b00010006
+case empty
+id 65611
+percent u8 0
+packet 4b0000004b00010000
+case long
+id 65611
+percent u8 255
+packet 4b0000004b000100ff
+case full
+id 65611
+percent u8 1
+packet 4b0000004b00010001
+refuse short 4b0000004b0001
+refuse truncated 4b0000004b000100
+refuse trailing 4b0000004b0001000600

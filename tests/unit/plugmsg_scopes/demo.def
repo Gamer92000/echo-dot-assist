@@ -1,0 +1,34 @@
+# A definition of the plugin protocol's form for tests/unit/plugmsg_scopes_test.py (make unit-plugmsg): scope demo
+# at version 2, with what a version may add (a message, fields appended, a list element's field, an enum value and
+# the value a peer of version 1 gets in its place, one with none (not sent to a peer of version 1: only on an enum
+# that messages marked drop alone hold, PUT and PICK), a constant, a key of the manifest) and its mark (it widens what the capability lets a plugin do), fields of an enum's values (in a
+# list's element too), a message of two scopes and a greeting.  demo.lock is what tools/mkplugmsg.py recorded of it;
+# the test breaks each rule on a copy and holds the generated readers and writers to each version's layout.
+scope core 1 "the greeting"
+scope demo 2 "a capability that grew"
+scope other 1 "a second capability"
+version demo 2 widens "NEW, PUT's b and the key extra"
+
+const MAX_PACKET core 32768
+const LIM demo 10
+const MORE demo@2 20
+enum CAP core DEMO=0 OTHER=1
+enum KIND demo A=1 C=3 B=2@2>A D=4@2>-
+keys demo.entry demo name kind
+keys demo.entry demo@2 extra
+
+msg HELLO 1 > core "the greeting"
+    u32 sdk ""
+msg PUT 10 < demo drop "grew in demo 2: a field appended, and one in its list's element"
+    u8 a enum:KIND ""
+    str s 16 ""
+    list items 4 ""
+        u8 x enum:KIND ""
+        u16 y @2 ""
+    u16 b @2 ""
+msg NEW 11 < demo@2 "brought by demo 2"
+    u8 z ""
+msg PICK 14 < demo drop "one of KIND's values: B only to a peer of demo 2 (a message of one layout, so a value of B is refused by a peer of demo 1 for its value alone)"
+    u8 kind enum:KIND ""
+msg BOTH 12 > demo|other "of two scopes: never grows"
+    u8 k ""

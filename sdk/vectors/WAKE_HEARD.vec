@@ -1,0 +1,32 @@
+# WAKE_HEARD: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message WAKE_HEARD 36
+id 65572
+slot u8 145
+score u8 114
+begin u64 4427218577690292368
+end u64 5493030457504622016
+packet 2400000024000100917290703d0ad7a3703dc0e5f607192a3b4c
+case empty
+id 65572
+slot u8 0
+score u8 0
+begin u64 0
+end u64 0
+packet 2400000024000100000000000000000000000000000000000000
+case long
+id 65572
+slot u8 255
+score u8 255
+begin u64 18446744073709551615
+end u64 18446744073709551615
+packet 2400000024000100ffffffffffffffffffffffffffffffffffff
+case full
+id 65572
+slot u8 1
+score u8 1
+begin u64 1
+end u64 1
+packet 2400000024000100010101000000000000000100000000000000
+refuse short 24000000240001
+refuse truncated 2400000024000100917290703d0ad7a3703dc0e5f607192a3b
+refuse trailing 2400000024000100917290703d0ad7a3703dc0e5f607192a3b4c00

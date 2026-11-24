@@ -27,6 +27,7 @@
  *               steered by the error: resample.h)
  */
 #include "sendspin.h"
+#include "logread.h"
 #include "musiclight.h"
 #include <ctype.h>
 #include <math.h>
@@ -146,7 +147,8 @@ static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cond = PTHREAD_COND_INITIALIZER;
 static struct chunk *q_head, *q_tail; static size_t q_bytes;
 static atomic_int stream_on, player_muted, snap_next;
-static void stream_set(int on) { atomic_store(&stream_on, on); core_music(MUSIC_SENDSPIN, on); }
+static int music_src = -1;              /* our number in the core's table of music sources (sendspin_start) */
+static void stream_set(int on) { atomic_store(&stream_on, on); core_music(music_src, on); }
 static atomic_int static_delay_ms;
 
 static void q_flush(void)
@@ -309,8 +311,12 @@ static void *player_thread(void *arg)
             double e; tf_synced(&e); stat_t = raw_us();
             /* the rate: what the music plays at, the output's clock (the error's share of it besides: the queue's slots
              * read skewed); integral: what was learnt of it, kept */
-            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs\n",
-                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs);
+            /* mixer: how far the queue's model was moved towards the mixer's own count (audio_mixer.c, issue #225):
+             * what the output fell behind (+) or ran ahead since the stream's start, which the error alone never shows */
+            long long st = music_steered_us(); char steer[40] = "";
+            if (st != MUSIC_UNSTEERED) snprintf(steer, sizeof steer, ", mixer %+.2f ms", st / 1000.0);
+            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs%s\n",
+                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs, steer);
             rate_sum = 0; rate_n = 0;
             if (++stats % 60 == 0) { drift_of[routed] = servo.drift; drift_save(drift_of, drift_kept); }      /* 10 min */
         }
@@ -916,7 +922,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
     } else if (!strcmp(type, "noise/handshake")) {
         if (rehandshake(s, j)) { fprintf(stderr, "sendspin: re-handshake failed\n"); s->closing = 1; shutdown(s->ws.fd, SHUT_RDWR); }
     } else if (!strcmp(type, "server/hello")) {
-        js_str(j, "name", str, sizeof str); fprintf(stderr, "sendspin: server \"%s\"\n", str);
+        js_str(j, "name", str, sizeof str); log_private("sendspin: server \"%s\"", str);
         /* 1.0: the player's commands go to client/state, the pairing methods are an object keyed by method.  The
          * 9.1.1 shapes are what that library requires, and what marks a client as its dialect for 10.x.  Forced: 9.1.1
          * asks for it again after a re-handshake, before its server/activate (1.0 does not ask).  A model with a screen
@@ -999,7 +1005,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
     } else if (!strcmp(type, "server/pair-finalize")) {
         if (s->pairing) { record_put(s->new_psk, s->server_id); s->pairing = 0; fprintf(stderr, "sendspin: paired, long-term key stored\n"); }
     } else if (!strcmp(type, "pair/abort")) {
-        js_str(j, "reason", str, sizeof str); fprintf(stderr, "sendspin: pairing aborted by the server: %s\n", str); s->pairing = 0;
+        js_str(j, "reason", str, sizeof str); log_private("sendspin: pairing aborted by the server: %s", str); s->pairing = 0;
     } else if (!strcmp(type, "server/unpair")) {
         if (s->psk_cat == PSK_LONGTERM) { fprintf(stderr, "sendspin: unpaired by the server\n"); record_drop(s->server_id); goodbye(s, "unpaired"); }
     } else if (!s->admitted) {
@@ -1367,10 +1373,16 @@ int sendspin_unpaired(int set)
     return set != 0;
 }
 
+/* the action button's two rounds (core.h): Sendspin's press pauses what plays and resumes what it paused in the
+ * first; the second has nothing more for it */
+static int music_button(int resume) { return resume ? 0 : sendspin_button(); }
+static const struct music_source source = { "sendspin", sendspin_pause, sendspin_stop, music_button, sendspin_skip, sendspin_volume_changed, NULL };
+
 int sendspin_start(int p)
 {
     pthread_t t;
     port = p;
+    music_src = music_register(&source);
     load_identity();
     pthread_create(&t, NULL, player_thread, NULL); pthread_detach(t);
     return pthread_create(&t, NULL, listen_thread, NULL) ? -1 : (pthread_detach(t), 0);

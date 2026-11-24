@@ -1,0 +1,24 @@
+# MUSIC_OPEN: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message MUSIC_OPEN 70
+id 65606
+rate u32 209976144
+channels u8 216
+packet 460000004600010050fb830cd8
+case empty
+id 65606
+rate u32 0
+channels u8 0
+packet 46000000460001000000000000
+case long
+id 65606
+rate u32 4294967295
+channels u8 255
+packet 4600000046000100ffffffffff
+case full
+id 65606
+rate u32 1
+channels u8 1
+packet 46000000460001000100000001
+refuse short 46000000460001
+refuse truncated 460000004600010050fb830c
+refuse trailing 460000004600010050fb830cd800

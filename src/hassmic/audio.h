@@ -3,6 +3,7 @@
 #define AUDIO_H
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
 
 #define CAP_RATE 16000
 
@@ -26,12 +27,26 @@ void      music_close(void);
 /* Silence a freshly opened music output wants before music_queued_us says what is in front of the speaker: 0 where
  * the queue drains as it plays (the Dots' mixer); audio_android.c's player takes AudioTrack's buffer's worth at once */
 long long music_prime_us(void);
+/* How far the music queue's model was moved since its reference (audio_mixer.c, mixsteer.h: the mixer's own count
+ * against the model), for the log; MUSIC_UNSTEERED where nothing steers it (other backends, before the reference) */
+#define MUSIC_UNSTEERED LLONG_MIN
+long long music_steered_us(void);
 
 /* What the music and Bluetooth streams' PCM is multiplied by before the mixer gets it: 1, or less while the volumes
  * are separate and MainVolume is louder than the music's (main.c); audio_call_gain the same for the Voip stream (Drop
  * In's far end).  Any thread */
 void      audio_music_gain(float gain);
 void      audio_call_gain(float gain);
+
+/* A music plugin's stream (plugin.c, docs/plugins.md 3.5): like the music stream, beside it.  Not Sendspin's own:
+ * its player thread writes the music stream without a lock and blocks in the write at playback speed, so a second
+ * writer would need a hand-over inside sendspin.c; a stream of its own needs none, and "the newest source wins" is
+ * kept by pausing the others (main.c core_music), as for a phone's Bluetooth stream beside Sendspin.  One at a time:
+ * plugin.c gives it to the newest plugin that opens one */
+int       plug_open(unsigned rate, unsigned channels);
+int       plug_write(const void *data, size_t len);
+long long plug_queued_us(void);
+void      plug_close(void);
 
 /* Bluetooth speaker stream: like the music stream, beside it */
 int       bt_open(unsigned rate, unsigned channels);

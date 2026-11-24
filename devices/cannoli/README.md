@@ -21,8 +21,11 @@ unlock](#reference-the-boot-chain-and-the-unlock).
 
 ## Read this first
 
-- **Keep the Echo off Wi-Fi until the install is done.** An Amazon update would move it off build
-  8349, which everything here is pinned against.
+- **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in
+  Amazon's software, and updates close such holes. Which versions still unlock is not tracked here,
+  and an unlock that does not take can leave the Echo unusable. Never let the Echo update: do not
+  set it up with the Alexa app, and keep it off Wi-Fi until the install is done (an update would
+  also move it off build 8349, which everything here is pinned against).
 - **Never connect +5 V to the test pads.** The Dot keeps running on its own 15 V adapter; the USB
   wires carry data and ground only.
 - **Do not use TWRP's generic wipe, format or ZIP-install menus** on this Dot's NAND — only the
