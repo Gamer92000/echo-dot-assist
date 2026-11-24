@@ -4,7 +4,7 @@
 
 The LX05 port is **vibecoded**: its hardware adaptations, integration and documentation were developed with OpenAI Codex, with iterative tests on the owner's speaker. It is a community experiment and has not been audited. The base is the `xiaomi-l09g` branch of this fork.
 
-**Status: source code and development notes, not a tested fresh-device installer.** The working device had root, a writable `/data`, a working SSH server and an `/etc` overlay before the port was deployed. Rooting, initial overlay/boot setup, Wi-Fi credentials, SSH provisioning and recovery are not automated here. Do not use the Echo installers or OTA updater on this speaker. Changes to boot settings can make a device inaccessible; keep a verified recovery method and a private backup of its boot environment and data. The working device retained its signed, read-only SquashFS instead of rewriting it. Other firmware versions may differ.
+**Status: source code and development notes, not a tested fresh-device installer.** See [UART, overlay and LAN isolation](SETUP.md) for the approach used on the working unit. The process is not automated; Wi-Fi credentials, SSH provisioning and the Assist installation need individual setup. Do not use the Echo installers or OTA updater on this speaker. Changes to boot settings can make a device inaccessible; keep a verified recovery method and a private backup of its boot environment and data. The working device retained its signed, read-only SquashFS instead of rewriting it. Other firmware versions may differ.
 
 ## Tested features and limits
 
@@ -33,7 +33,7 @@ The example scripts expect `/data/lx05-assist`, `state`, `models`, `wifi`, a run
 
 The tested ALSA arrangement routes BlueALSA through an `lx_bt` PCM with a `lx05_bt_duck` softvol, then through the common `mysoftvol`; Bluetooth's existing init script needs to select that PCM and start `bt-pair-service.sh`. The original mixer and init configuration must be backed up and adapted to the exact firmware. Pairing is off when the state file is absent; the helper applies the HA switch by changing BlueZ Pairable and Discoverable, leaving the adapter on. A separate system pairing agent may be needed.
 
-The tested device starts through an early boot hook, mounts `/data`, uses overlay for `/etc`, disables competing stock voice/audio services and configures a local-only IPv4 policy route before Wi-Fi starts. This branch does **not** supply or verify that boot hook, SSH setup, network guard, ALSA configuration or a recovery installer. Keep a UART recovery path and verify your own setup before relying on it. The Wi-Fi helper saves its network in `/data/lx05/wpa.conf`; it supports switches only within the configured /24 and attempts rollback on failure. Test rollback before relying on web-based changes.
+The tested device starts through an early boot hook, mounts `/data`, uses overlay for `/etc`, disables competing stock voice/audio services and configures a local-only IPv4 policy route before Wi-Fi starts. [Setup notes](SETUP.md) describe the boot hook and guard used on that unit, but there is no automated boot, SSH, ALSA or recovery installer. Keep a UART recovery path and verify your own setup before relying on it. The Wi-Fi helper saves its network in `/data/lx05/wpa.conf`; it supports switches only within the configured /24 and attempts rollback on failure. Test rollback before relying on web-based changes.
 
 Create `/data/lx05-assist/network.conf` (a root-owned shell file) with the first three octets of your own /24 LAN, for example:
 
