@@ -3,8 +3,10 @@
 #define DROPIN_H
 #include <stddef.h>
 #include <stdint.h>
+#include "call.h"
 
-enum { DROPIN_IDLE, DROPIN_CALLING, DROPIN_RINGING, DROPIN_LIVE };
+/* a call's states (call.h), which Home Assistant's "Drop In" sensor says */
+enum { DROPIN_IDLE = CALL_IDLE, DROPIN_CALLING = CALL_CALLING, DROPIN_RINGING = CALL_RINGING, DROPIN_LIVE = CALL_LIVE };
 extern const char *const dropin_states[4];      /* "idle", "calling", "ringing", "connected": Home Assistant's text */
 /* What came of a call this Echo made (Home Assistant's event entity "Drop In result", its event types): the other Echo
  * took it, rings (not the end: one of the others follows), refused it (busy, do not disturb, its microphones off, Drop In

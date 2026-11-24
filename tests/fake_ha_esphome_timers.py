@@ -287,6 +287,8 @@ async def main(e):
           f"keyed link: Home Assistant's rule as the zone of its home's country, in state/timezone for root and state/zone: {read('timezone')!r} {read('zone')!r}")
     z = page.state()["zone"]
     check(z == {"zone": "Europe/Berlin", "how": "home", "country": "DE", "home": "DE", "wifi": "NL", "language": "de"}, f"the page: what Automatic stands on: {z}")
+    # (the line comes after state/zone, through the log's reader process: waited for, never read in the same breath)
+    await until(lambda: "of the country of Home Assistant's home location, DE" in echo_log(), 5)
     check("of the country of Home Assistant's home location, DE" in echo_log() and not any(c in echo_log() for c in ("50.93", "6.96")),
           "the log names the country, never the home's coordinates")
     # the first zone written was already the home's (the zone waited for zone.home's answer after the time's): one line

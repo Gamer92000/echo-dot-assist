@@ -1,0 +1,10 @@
+{ "id": "testnet", "name": "Test forwarder", "version": 1, "version_name": "0.1", "requires": {"core": 1, "storage": 1, "log.read": 1, "net.server": 1},
+  "author": "hassmic's tests", "description": "Sends this Echo's log to the server you enter.", "license": "MIT",
+  "memory_mb": 16, "threads": 2,
+  "capabilities": { "storage": 4, "log.read": true,
+                    "net.server": [ { "setting": "server", "proto": "udp", "ports": "setting:port" },
+                                    { "setting": "server", "proto": "tcp", "ports": [16996] } ] },
+  "settings": [
+    { "name": "server", "label": "Log server", "type": "host", "help": "Its name or address." },
+    { "name": "port", "label": "Port", "type": "int", "min": 1, "max": 65535 },
+    { "name": "mode", "label": "Mode", "type": "select", "options": [ "forward", "tcp", "probe", "badcall", "bigput", "readyconn" ], "default": "forward" } ] }

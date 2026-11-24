@@ -17,6 +17,8 @@
  *                    they do on the Echo (core_button_events)
  *   wake word        the event entity "Wake word" (core_wake_events): taken, near miss, answered by another device,
  *                    nothing said after it.  Listed while the feature is on
+ *   plugins          the event entity "Plugin" (core_plugin_events): one installed, updated, removed, synced from
+ *                    another Echo.  Listed while the feature is on
  *   light ring       a light with RGB, brightness and effects, steps aside while the Echo shows something of its own
  *                    (ring.h); listed where root installed the ring's animations
  *   timers           finished timers ring (core_timer_finished); "Timer ringing" and "Ringing timers" (their names)
@@ -42,6 +44,8 @@
  *                    install button (update.c); install only over the connection with the key
  *   request text     the text sensors "Last heard" and "Last reply": what speech-to-text understood and what the
  *                    assistant answered, both cleared when a run starts (issue #53).  Listed while the feature is on
+ *   wake word engine a binary sensor of class problem, listed while the engine is a plugin (plugin.h): on while that
+ *                    plugin does not listen (missing: Amazon's wake word stands in; down: none is heard)
  *   whisper          a binary sensor: the last request was whispered (whisper.h), set on the VAD end, before the
  *                    conversation agent runs, so its prompt template can read it; listed only with the model installed
  *   drop in          the action "drop_in" (esphome.<node>_drop_in, target: another Echo's name or node) calls an Echo
@@ -75,6 +79,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include "a2dp.h"
+#include "logread.h"
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
@@ -97,6 +102,9 @@
 #include "net.h"
 #include "netio.h"
 #include "statefile.h"
+#include "plugin.h"
+#include "plugin_store.h"
+#include "plugmsg.h"
 #define MINIMP3_IMPLEMENTATION
 #define MINIMP3_NO_SIMD                 /* plain C: same code on the PC and on the armv7 build */
 #include "../third_party/minimp3.h"
@@ -150,15 +158,22 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_ANNOUNCE, KEY_DND, KEY_EQ_BASS, KEY_EQ_MID, KEY_EQ_TREBLE, KEY_BT_LANG, KEY_ARB_JOIN, KEY_ARB_PEERS, KEY_ARB_SERVICE,
        KEY_SS_UNPAIRED, KEY_DENOISE, KEY_ADB_WIFI, KEY_LUX, KEY_LED_AUTO, KEY_LED_BRIGHTNESS, KEY_SOUND_DETECTION, KEY_SOUND,
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
-       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
+       KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_WAKE_ENGINE, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
        KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON, KEY_LIGHT, KEY_ASSIST_VOLUME, KEY_SOUNDS_VOLUME, KEY_TIMER_VOLUME,
        KEY_CALL_VOLUME, KEY_WAKE, KEY_RING_FILL, KEY_RING_ROTATION, KEY_RING_LEDS, KEY_LAST_HEARD, KEY_LAST_REPLY,
        KEY_NEXT_TIMER, KEY_NEXT_TIMER_NAME, KEY_NEXT_TIMER_LENGTH, KEY_SCR_AUTO, KEY_SCR_LEVEL, KEY_SCR_ADJUST,
        /* the light ring live (ringlive.h): four actions, the design select, then a light per LED (RING_LEDS_MAX keys:
         * a new key goes after KEY_LIVE_LED + RING_LEDS_MAX) */
-       KEY_LIVE_FRAME, KEY_LIVE_ANIM, KEY_LIVE_DESIGN_SVC, KEY_LIVE_STOP, KEY_LIVE_DESIGN, KEY_LIVE_LED };
-enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
+       KEY_LIVE_FRAME, KEY_LIVE_ANIM, KEY_LIVE_DESIGN_SVC, KEY_LIVE_STOP, KEY_LIVE_DESIGN, KEY_LIVE_LED,
+       KEY_PLUGIN = KEY_LIVE_LED + RING_LEDS_MAX, KEY_MWW_DEPRECATED };
+enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_PAUSED = 3, MP_CMD_PLAY = 0, MP_CMD_PAUSE = 1, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
+/* A music plugin is listed (plugin.h plugin_has_music, docs/plugins.md 4.7): the media player offers pause and play
+ * besides, for what the plugin plays; without one the features stay what they were */
+enum { MP_FEATURES_MUSIC = 1 | 16384 };
+/* plugins' entities and actions (plugin.c ha_key): a range of their own above every key of hassmic's */
+#define PLUGIN_KEY(k) ((k) >= 0x40000000u)
+enum { SVC_BOOL = 0, SVC_INT = 1, SVC_STRING = 3 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
 /* Several API clients at a time, like ESPHome firmware: Home Assistant plus e.g. a debugging client.  Replies go to the
@@ -417,6 +432,8 @@ static void send_setting(int key)       /* lock held */
     case KEY_WHISPERED:                 /* unknown until a request has been scored */
         { int w = core_whispered(); if (w != -2) { pb_uint(&b, 2, w == 1); pb_uint(&b, 3, w < 0); send_state(BINARY_SENSOR_STATE, &b); } }
         break;
+    case KEY_WAKE_ENGINE: pb_uint(&b, 2, core_wake_problem_held(NULL, 0) != 0); send_state(BINARY_SENSOR_STATE, &b); break;
+    case KEY_MWW_DEPRECATED: pb_uint(&b, 2, 1); send_state(BINARY_SENSOR_STATE, &b); break;
     case KEY_WIFI_MOTION:               /* unknown while switched off */
         if (wifimotion_present()) { int m = wifimotion_motion(); pb_uint(&b, 2, m > 0); pb_uint(&b, 3, m < 0); send_state(BINARY_SENSOR_STATE, &b); }
         break;
@@ -663,12 +680,15 @@ static int listed(int key)
     case KEY_SENDSPIN_TOKEN: return core_sendspin_port != 0;
     case KEY_SOUND: return settings_on("sound_detection");
     case KEY_WAKE: return settings_on("wake_events");
+    case KEY_PLUGIN: return settings_on("plugins");
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: return settings_on("request_text");
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
     case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
+    case KEY_WAKE_ENGINE: return core_local_wake && core_wake_engine(-1) >= WAKE_PLUGIN;     /* only while the engine is a plugin */
+    case KEY_MWW_DEPRECATED: return core_local_wake && core_wake_engine(-1) == WAKE_MWW;      /* only while the built-in one listens */
     case KEY_WIFI_MOTION: case KEY_WIFI_MOTION_SENS: return wifimotion_present() && settings_on("wifi_motion");
     case KEY_LED_AUTO: return have_auto;
     case KEY_SCR_AUTO: case KEY_SCR_LEVEL: case KEY_SCR_ADJUST: return settings_find("screen_brightness_auto") != NULL;
@@ -688,6 +708,89 @@ static int listed(int key)
             return ringlive_enabled() && key - KEY_LIVE_LED < ringlive_leds();
         return 1;
     }
+}
+
+static void send_mp_state(void);
+/* A plugin's entity or action as the manifest names it (plugin.h plugin_entities_each, docs/plugins.md 4.10): object
+ * id "p<length of the plugin's id>_<id>_<name>", the name "Plugin <length of the id> <id>: <label>" (plugin.c ha_name:
+ * its entity id never one of hassmic's own, tests/unit/ha_names_test.py, nor another plugin's), its key one given once and kept (plugin_store.c .hakeys: the same across restarts and
+ * updates, so Home Assistant keeps the entity and its history; never another's).  Listed while the plugin is switched
+ * on and may run, running or not: whatever changes the list has the links closed, as a feature's switch does
+ * (plugin.c ha_relist, core_plugin_entities_changed) */
+static void list_plugin(const struct plugin_entity *e, void *arg)
+{
+    PB(b, 768); (void)arg;
+    if (e->kind < 0) {                                          /* an action: esphome.<node>_p_<plugin>_<name> */
+        pb_str(&b, 1, e->object_id); pb_fixed32(&b, 2, e->key);
+        for (int i = 0; i < e->n; i++) { PB(a, 64); pb_str(&a, 1, e->words[i]); pb_uint(&a, 2, e->is_int[i] ? SVC_INT : SVC_STRING); pb_msg(&b, 3, &a); }
+        send_msg(LIST_SERVICE, &b); return;
+    }
+    pb_str(&b, 1, e->object_id); pb_fixed32(&b, 2, e->key); pb_str(&b, 3, e->name);
+    switch (e->kind) {
+    case PE_BINARY_SENSOR: if (e->icon[0]) pb_str(&b, 8, e->icon); send_msg(LIST_BINARY_SENSOR, &b); break;
+    case PE_SENSOR: if (e->icon[0]) pb_str(&b, 5, e->icon); if (e->unit[0]) pb_str(&b, 6, e->unit); pb_uint(&b, 7, (unsigned)e->decimals); pb_uint(&b, 10, 1); send_msg(LIST_SENSOR, &b); break;
+    case PE_TEXT_SENSOR: if (e->icon[0]) pb_str(&b, 5, e->icon); send_msg(LIST_TEXT_SENSOR, &b); break;
+    case PE_SWITCH: if (e->icon[0]) pb_str(&b, 5, e->icon); send_msg(LIST_SWITCH, &b); break;
+    case PE_BUTTON: if (e->icon[0]) pb_str(&b, 5, e->icon); send_msg(LIST_BUTTON, &b); break;
+    case PE_NUMBER:
+        if (e->icon[0]) pb_str(&b, 5, e->icon);
+        pb_float(&b, 6, (float)e->min); pb_float(&b, 7, (float)e->max); pb_float(&b, 8, (float)e->step);
+        if (e->unit[0]) pb_str(&b, 11, e->unit);
+        send_msg(LIST_NUMBER, &b); break;
+    case PE_SELECT: if (e->icon[0]) pb_str(&b, 5, e->icon); for (int i = 0; i < e->n; i++) pb_str(&b, 6, e->words[i]); send_msg(LIST_SELECT, &b); break;
+    case PE_EVENT: if (e->icon[0]) pb_str(&b, 5, e->icon); for (int i = 0; i < e->n; i++) pb_str(&b, 9, e->words[i]); send_msg(LIST_EVENT, &b); break;
+    }
+}
+
+/* lock held: a plugin entity's state as the plugin said it last (plugin_entity_value), or unavailable while the
+ * plugin does not run (missing_state; a switch has none, and says nothing then).  Nothing for one not listed */
+static void send_plugin_state(unsigned key)
+{
+    char v[256]; int kind = -1, r = plugin_entity_value(key, &kind, v, sizeof v);
+    PB(b, 320);
+    if (r < 0) return;
+    pb_fixed32(&b, 1, key);
+    switch (kind) {
+    case PE_BINARY_SENSOR: pb_uint(&b, 2, r && !strcmp(v, "on")); if (!r) pb_uint(&b, 3, 1); send_state(BINARY_SENSOR_STATE, &b); break;
+    case PE_SENSOR: pb_float(&b, 2, r ? strtof(v, NULL) : 0); if (!r) pb_uint(&b, 3, 1); send_state(SENSOR_STATE, &b); break;
+    case PE_TEXT_SENSOR: pb_str(&b, 2, r ? v : ""); if (!r) pb_uint(&b, 3, 1); send_state(TEXT_SENSOR_STATE, &b); break;
+    case PE_SWITCH: if (r) { pb_uint(&b, 2, !strcmp(v, "on")); send_state(SWITCH_STATE, &b); } break;
+    case PE_NUMBER: pb_float(&b, 2, r ? strtof(v, NULL) : 0); if (!r) pb_uint(&b, 3, 1); send_state(NUMBER_STATE, &b); break;
+    case PE_SELECT: pb_str(&b, 2, r ? v : ""); if (!r) pb_uint(&b, 3, 1); send_state(SELECT_STATE, &b); break;
+    default: break;                                             /* a button, an event: no state */
+    }
+}
+static void plugin_state_all(const struct plugin_entity *e, void *arg) { (void)arg; if (e->kind >= 0) send_plugin_state(e->key); }
+
+/* lock held (core_plugin_entity): a state, or an event of TYPE; never for what is not listed now */
+static void plugin_entity(unsigned key, const char *type)
+{
+    int kind; char v[8];
+    if (!type) { send_plugin_state(key); return; }
+    if (plugin_entity_value(key, &kind, v, sizeof v) < 0 || kind != PE_EVENT) return;
+    PB(b, 96); pb_fixed32(&b, 1, key); pb_str(&b, 2, type); send_state(EVENT, &b);
+}
+static void music_changed(void) { send_mp_state(); }
+
+/* lock held: Home Assistant set one of a plugin's switches, numbers or selects.  Over the keyed link only, as Drop In's
+ * action: a plugin's entity may open a door (4.10), and before Home Assistant set a key any client on the network
+ * could set it (a review of efde36e).  An Echo is keyed from its adoption on (Home Assistant sets the key at once) */
+static int plugin_command(unsigned type, const unsigned char *p, const unsigned char *end, int c)
+{
+    struct pbf f; unsigned key = 0; float num = 0; int on = 0; char v[256] = "";
+    const unsigned char *q = p;
+    while (pb_next(&q, end, &f)) {
+        if (f.field == 1) key = (unsigned)f.v;
+        else if (f.field == 2 && f.wire == 5) { uint32_t u = (uint32_t)f.v; memcpy(&num, &u, 4); }
+        else if (f.field == 2 && f.wire == 0) on = f.v != 0;
+        else if (f.field == 2 && f.data) pbf_str(&f, v, sizeof v);
+    }
+    if (!PLUGIN_KEY(key)) return 0;
+    if (c < 0 || !clients[c].keyed) { fprintf(stderr, "plugin: a command refused, it did not come over the keyed connection\n"); return 1; }
+    if (type == SWITCH_COMMAND) snprintf(v, sizeof v, "%s", on ? "on" : "off");
+    else if (type == NUMBER_COMMAND) snprintf(v, sizeof v, "%.9g", num);
+    if (plugin_entity_command(key, v)) fprintf(stderr, "plugin: a command for an entity its plugin cannot take now\n");
+    return 1;
 }
 
 static void send_setting_entities(void)
@@ -718,6 +821,12 @@ static void send_setting_entities(void)
       send_msg(LIST_EVENT, &b); }
     if (listed(KEY_WAKE)) { PB(b, 192); pb_str(&b, 1, "wake_word"); pb_fixed32(&b, 2, KEY_WAKE); pb_str(&b, 3, "Wake word"); pb_str(&b, 5, "mdi:account-voice");
       for (int i = 0; i < core_wake_nevents; i++) pb_str(&b, 9, core_wake_events[i]);
+      send_msg(LIST_EVENT, &b); }
+    /* Plugins (docs/plugins.md 5.4): what is installed on an Echo changed, so that the logbook has it and an
+     * automation can say so.  It is what stands in for the button's press when a plugin comes from another Echo
+     * ("synced").  All four types listed from the start: an automation written today triggers on them later */
+    if (listed(KEY_PLUGIN)) { PB(b, 192); pb_str(&b, 1, "plugin"); pb_fixed32(&b, 2, KEY_PLUGIN); pb_str(&b, 3, "Plugin"); pb_str(&b, 5, "mdi:puzzle");
+      for (int i = 0; i < core_plugin_nevents; i++) pb_str(&b, 9, core_plugin_events[i]);
       send_msg(LIST_EVENT, &b); }
     if (listed(KEY_BT_PAIRING)) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
       pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
@@ -766,6 +875,16 @@ static void send_setting_entities(void)
           pb_float(&b, 6, WIFIMOTION_SENS_MIN); pb_float(&b, 7, WIFIMOTION_SENS_MAX); pb_float(&b, 8, 1); pb_uint(&b, 10, 1); pb_uint(&b, 12, 2);
           send_msg(LIST_NUMBER, &b); }
     }
+    /* The wake word engine is a plugin (plugin.h) and does not listen: it is missing and Amazon's wake word stands in,
+     * or it is installed and down and no wake word is heard at all.  For an automation that tells someone: an Echo on
+     * a shelf says nothing about it by itself */
+    if (listed(KEY_WAKE_ENGINE)) { PB(b, 192); pb_str(&b, 1, "wake_word_engine"); pb_fixed32(&b, 2, KEY_WAKE_ENGINE);
+        pb_str(&b, 3, "Wake word engine"); pb_str(&b, 5, "problem"); pb_uint(&b, 9, 2); send_msg(LIST_BINARY_SENSOR, &b); }
+    /* The built-in microWakeWord engine listens: it is deprecated, the microWakeWord plugin replaces it, and a later
+     * release takes it out (docs/plugins.md 5.9).  Its name says so where Home Assistant lists problems; on for as
+     * long as it is listed, gone once the engine is another (the move on the Wake word page) */
+    if (listed(KEY_MWW_DEPRECATED)) { PB(b, 192); pb_str(&b, 1, "wake_word_engine_deprecated"); pb_fixed32(&b, 2, KEY_MWW_DEPRECATED);
+        pb_str(&b, 3, "Built-in microWakeWord is deprecated: move to its plugin"); pb_str(&b, 5, "problem"); pb_uint(&b, 9, 2); send_msg(LIST_BINARY_SENSOR, &b); }
     /* Timers: "binary_sensor.<node>_timer_ringing" still on a minute after it came on = nobody heard it, for an
      * automation that announces it elsewhere.  The names (or the length of a timer without one) are a diagnostic beside
      * it, set before the ring goes on so a trigger on it can read them */
@@ -824,6 +943,7 @@ static void send_setting_entities(void)
     { PB(b, 128); pb_str(&b, 1, "restart"); pb_fixed32(&b, 2, KEY_RESTART); pb_str(&b, 3, "Restart");
       pb_uint(&b, 7, 1); pb_str(&b, 8, "restart"); send_msg(LIST_BUTTON, &b); }
     send_light_entities();
+    plugin_entities_each(list_plugin, NULL);
 }
 
 /* lock held: the live ring's lights and design select, after something changed them */
@@ -847,8 +967,8 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
         if (!listed(key)) return;
         char e[120];
         if (!strcmp(opt, "None")) ringlive_stop();
-        else if (ringlive_design(opt, 0, 1, e, sizeof e)) fprintf(stderr, "light ring live: %s\n", e);
-        else fprintf(stderr, "light ring live: design \"%s\"\n", opt);
+        else if (ringlive_design(opt, 0, 1, e, sizeof e)) log_private("light ring live: %s", e);         /* (a design's name, the owner's) */
+        else log_private("light ring live: design \"%s\"", opt);
         send_setting(key); return;
     }
     if (type == SELECT_COMMAND && key == KEY_DENOISE) { for (int i = 0; i < 4; i++) if (!strcmp(opt, denoise_names[i])) core_mic_denoise(i); }
@@ -994,8 +1114,9 @@ struct media_job {
 
 static void send_mp_state(void)         /* lock held */
 {
-    PB(b, 32);
-    pb_fixed32(&b, 1, MP_KEY); pb_uint(&b, 2, media_playing ? MP_PLAYING : MP_IDLE); pb_float(&b, 3, core_volume() / 100.0f);
+    PB(b, 32); int pm = media_playing ? 0 : plugin_music_state();      /* HA's media first; else what a music plugin plays */
+    pb_fixed32(&b, 1, MP_KEY); pb_uint(&b, 2, media_playing || pm == PM_MUSIC_PLAYING ? MP_PLAYING : pm == PM_MUSIC_PAUSED ? MP_PAUSED : MP_IDLE);
+    pb_float(&b, 3, core_volume() / 100.0f);
     send_state(MEDIA_PLAYER_STATE, &b);
 }
 
@@ -1014,7 +1135,7 @@ static int http_get_host(const char *host, const char *port, const char *path)
         size_t i = 0; char c;
         while (i < sizeof line - 1 && read(fd, &c, 1) == 1 && c != '\n') line[i++] = c;
         line[i] = 0;
-        if (first && !strstr(line, " 200")) { fprintf(stderr, "media: http://%s:%s%s -> %s\n", host, port, path, line); close(fd); return -1; }
+        if (first && !strstr(line, " 200")) { log_private("media: http://%s:%s%s -> %s", host, port, path, line); close(fd); return -1; }
         if (i <= 1) return fd;                          /* "\r": end of headers */
     }
 }
@@ -1023,7 +1144,7 @@ static int http_get(const char *url)    /* returns a socket positioned at the bo
 {
     char host[256], port[8] = "80"; const char *p = url, *path;
     if (!strncasecmp(p, "https://", 8)) return https_open(url);     /* Home Assistant serving HTTPS itself (https.c) */
-    if (strncmp(p, "http://", 7)) { fprintf(stderr, "media: only http:// and https:// are supported: %s\n", url); return -1; }
+    if (strncmp(p, "http://", 7)) { log_private("media: only http:// and https:// are supported: %s", url); return -1; }
     p += 7; path = strchr(p, '/');
     snprintf(host, sizeof host, "%.*s", (int)(path ? path - p : (long)strlen(p)), p);
     char *colon = strrchr(host, ':'), *close_br = strrchr(host, ']');
@@ -1163,7 +1284,7 @@ static void media_start(const char *url0, const char *url1, int announce, int st
     struct media_job *job = calloc(1, sizeof *job); pthread_t t;
     if (!job) return;
     if (atomic_exchange(&media_busy, 1)) {              /* one at a time: refuse, the running one finishes first */
-        fprintf(stderr, "media: busy, dropped %s\n", url1);
+        log_private("media: busy, dropped %s", url1);
         if (announce) { PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); }
         free(job); return;
     }
@@ -1172,7 +1293,9 @@ static void media_start(const char *url0, const char *url1, int announce, int st
     job->announce = announce; job->start_conversation = start_conversation; job->media = media; job->fd = -1;
     media_cur = job;
     announcing = announce; media_playing = 1; send_mp_state();
-    fprintf(stderr, "media: %s%s\n", announce ? "announce " : "", url1);
+    /* private, as every media address: a reply's (tts_proxy/<token>) fetches what was answered, a media source's
+     * carries its signature (authSig) */
+    log_private("media: %s%s", announce ? "announce " : "", url1);
     pthread_create(&t, NULL, media_thread, job); pthread_detach(t);
 }
 
@@ -1388,7 +1511,7 @@ static void bt_ask(const char *msg)
                                                        the announce schema takes a real bool only: a template renders one */
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].actions) { send_to(clients[i].fd, HA_ACTION, &b); n++; }
     if (n) bt_asked_ms = now_ms();
-    fprintf(stderr, "bluetooth: \"%s\" %s\n", msg, n ? "asked of Home Assistant" : "not spoken: no client takes actions");
+    log_private("bluetooth: \"%s\" %s", msg, n ? "asked of Home Assistant" : "not spoken: no client takes actions");
 }
 
 static void bt_try(void)                /* lock held */
@@ -1415,7 +1538,7 @@ static void bt_device(const char *name, int on)
     else snprintf(bt_next, sizeof bt_next, "%s", on ? l->on_any : l->off_any);
     bt_next_ms = now_ms();
     bt_try();
-    if (bt_next[0]) fprintf(stderr, "bluetooth: \"%s\" waits for the announcement before\n", bt_next);
+    if (bt_next[0]) log_private("bluetooth: \"%s\" waits for the announcement before", bt_next);
 }
 
 static void announce_done(void) { bt_asked_ms = 0; bt_free_ms = now_ms() + 1000; }
@@ -1527,13 +1650,14 @@ static void on_event(const unsigned char *p, const unsigned char *end)
     case EV_WAKE_END:   core_remote_wake(); break;          /* the wake word was heard in Home Assistant (-w remote) */
     case EV_STT_START:  core_set_state(LISTENING); break;
     case EV_VAD_END:    core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
-    case EV_STT_END:    fprintf(stderr, "transcript: %s\n", text);
+    case EV_STT_END:    log_private("transcript: %s", text);
         /* "stop" to a ring or music: the run is cancelled, and the word is not put on the screen (what showed goes) */
         if (core_transcript(text)) { screen_words(SCREEN_WORDS_RUN, NULL); break; }
         screen_words(SCREEN_WORDS_HEARD, said);
+        plugin_request_text(PLUGIN_TEXT_HEARD, said);      /* request.text (3.6): what passed core_transcript, as the screen has it */
         core_mic_off(); if (core_state() == LISTENING) core_set_state(THINKING); break;
     case EV_INTENT_END: if (cont) core_restart_after(); break;
-    case EV_TTS_START:  fprintf(stderr, "reply: %s\n", text); screen_words(SCREEN_WORDS_REPLY, said); break;
+    case EV_TTS_START:  log_private("reply: %s", text); screen_words(SCREEN_WORDS_REPLY, said); plugin_request_text(PLUGIN_TEXT_REPLY, said); break;
     case EV_INTENT_PROGRESS: if (!stream_now) break;    /* streaming TTS: the URL from RUN_START can be fetched already */
         /* fall through */
     case EV_TTS_END:
@@ -1560,7 +1684,7 @@ static void on_event(const unsigned char *p, const unsigned char *end)
         }
         /* nothing said: no failure to show (core_no_speech) */
         if (!strcmp(code, "stt-no-text-recognized")) { fprintf(stderr, "pipeline: nothing said\n"); core_no_speech(); break; }
-        fprintf(stderr, "pipeline error: %s\n", text); core_error(); break;
+        log_private("pipeline error: %s", text); core_error(); break;           /* (Home Assistant's words, which may quote what was said) */
     }
 }
 
@@ -1574,8 +1698,8 @@ static void on_timer(const unsigned char *p, const unsigned char *end)
         else if (f.field == 5) left = f.v; else if (f.field == 6) active = f.v != 0;
     }
     static const char *const names[] = { "started", "updated", "cancelled", "finished" };
-    if (type < 2) fprintf(stderr, "timer %s: %s (%u s, %u s left%s)\n", names[type], tname, total, left, active ? "" : ", paused");
-    else fprintf(stderr, "timer %s: %s (%u s)\n", type < 4 ? names[type] : "?", tname, total);
+    if (type < 2) log_private("timer %s: %s (%u s, %u s left%s)", names[type], tname, total, left, active ? "" : ", paused");
+    else log_private("timer %s: %s (%u s)", type < 4 ? names[type] : "?", tname, total);
     if (type == 3) core_timer_finished(id, tname, total); else if (type == 2) core_timer_cancelled(id);
     else if (type < 2) core_timer_running(id, tname, total, left, active);
 }
@@ -1591,7 +1715,7 @@ static void on_announce(const unsigned char *p, const unsigned char *end)
     }
     /* Do not disturb drops announcements (reported as not played), but not the one we asked for ourselves: a Bluetooth
      * connection message answers something the user just did, as stock's does. */
-    if (core_dnd(-1) && !bt_asked_ms) { fprintf(stderr, "media: do not disturb, dropped announcement %s\n", media); PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); return; }
+    if (core_dnd(-1) && !bt_asked_ms) { log_private("media: do not disturb, dropped announcement %s", media); PB(b, 8); pb_uint(&b, 1, 0); send_va(VA_ANNOUNCE_FINISHED, &b); return; }
     media_start(pre, media, 1, conv, 0, 0);
 }
 
@@ -1637,6 +1761,10 @@ static void on_mp_command(const unsigned char *p, const unsigned char *end)
         else core_tts_flush();
     }
     if (has_cmd && cmd == MP_CMD_STOP) core_alarm_stop("media player stop");     /* as "Stop ringing" does, for automations */
+    /* what a music plugin plays (4.7): Home Assistant's media player is its remote as the button is.  Sendspin's and a
+     * phone's stay theirs (Music Assistant, the phone), as before */
+    if (has_cmd && (cmd == MP_CMD_STOP || cmd == MP_CMD_PAUSE || cmd == MP_CMD_PLAY))
+        plugin_music_ha(cmd == MP_CMD_STOP ? PM_MCMD_STOP : cmd == MP_CMD_PAUSE ? PM_MCMD_PAUSE : PM_MCMD_RESUME);
     if (has_url && url[0]) media_start("", url, 0, 0, 0, !announcement);
     if (has_cmd && !has_url) send_mp_state();
 }
@@ -1696,7 +1824,7 @@ static void send_entities(void)
         pb_str(&fmt, 1, "wav"); pb_uint(&fmt, 2, MEDIA_RATE); pb_uint(&fmt, 3, 1); pb_uint(&fmt, 4, purpose); pb_uint(&fmt, 5, 2);
         pb_varint(&b, 9 << 3 | 2); pb_varint(&b, fmt.n); pb_raw(&b, fmt.p, fmt.n);      /* purpose 0 encodes as absent: fine */
     }
-    pb_uint(&b, 11, MP_FEATURES);
+    pb_uint(&b, 11, MP_FEATURES | (plugin_has_music() ? MP_FEATURES_MUSIC : 0));
     send_msg(LIST_MEDIA_PLAYER, &b);
     send_setting_entities();
     send_msg(LIST_ENTITIES_DONE, NULL);
@@ -1729,9 +1857,9 @@ static void on_va_set_config(const unsigned char *p, const unsigned char *end)
         pbf_str(&f, id, sizeof id);
         int i = 0;
         while (i < n && strcmp(w[i].id, id)) i++;
-        if (i == n) fprintf(stderr, "wake word: Home Assistant picked unknown \"%s\", ignored\n", id);
+        if (i == n) log_private("wake word: Home Assistant picked unknown \"%s\", ignored", id);
         else if (k < CORE_WAKE_ACTIVE_MAX) pick[k++] = i;
-        else fprintf(stderr, "wake word: Home Assistant picked more than %d, \"%s\" ignored\n", CORE_WAKE_ACTIVE_MAX, id);
+        else log_private("wake word: Home Assistant picked more than %d, \"%s\" ignored", CORE_WAKE_ACTIVE_MAX, id);
     }
     if (k) core_wake_set(pick, k);
 }
@@ -1747,13 +1875,14 @@ static void send_all_settings(void)
         send_setting(KEY_SS_UNPAIRED); send_setting(KEY_ADB_WIFI);
         send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS); send_setting(KEY_BT_OUT_DELAY);
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
-        send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED);
+        send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED); send_setting(KEY_WAKE_ENGINE); send_setting(KEY_MWW_DEPRECATED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
         send_setting(KEY_NEXT_TIMER_NAME); send_setting(KEY_NEXT_TIMER_LENGTH); send_setting(KEY_NEXT_TIMER);
         send_setting(KEY_DROPIN_PEER); send_setting(KEY_DROPIN_STATE);
         send_setting(KEY_LAST_HEARD); send_setting(KEY_LAST_REPLY);
         send_setting(KEY_ASSIST_VOLUME); send_setting(KEY_SOUNDS_VOLUME); send_setting(KEY_TIMER_VOLUME); send_setting(KEY_CALL_VOLUME);
         send_light_states();
+        plugin_entities_each(plugin_state_all, NULL);
 }
 
 static void settings_changed(void) { send_all_settings(); }      /* lock held: a setting changed (web page, settings.c) */
@@ -1810,6 +1939,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
     case SUBSCRIBE_STATES:
         for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd == reply_fd) clients[i].states = 1;
         send_mp_state(); send_all_settings(); send_token_state(c); send_web_state();
+        core_plugin_held_flush();       /* `synced` events that waited for a link of Home Assistant's (core.h) */
         ask_time(c, 1); break;
     case GET_TIME_RESP: {
         uint32_t epoch = 0; char tz[128] = "";
@@ -1821,13 +1951,17 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         if (c >= 0 && epoch && ha_time(epoch) && core_timer_next(NULL, 0, NULL, NULL)) send_setting(KEY_NEXT_TIMER);
         if (c >= 0 && clients[c].keyed && tz[0]) screen_tz(tz);
     } break;
-    case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: on_setting(type, p, end); break;
+    case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: if (!plugin_command(type, p, end, c)) on_setting(type, p, end); break;
     case LIGHT_COMMAND: on_light(p, end); break;
     case BUTTON_COMMAND: { struct pbf f;
         while (pb_next(&p, end, &f)) if (f.field == 1 && f.v == KEY_IDENTIFY) core_identify(); else if (f.field == 1 && f.v == KEY_RESET) core_reset("Home Assistant's button");
                                        else if (f.field == 1 && f.v == KEY_RESTART) core_reboot("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_TIMER_STOP) core_alarm_stop("Home Assistant's button");
             else if (f.field == 1 && f.v == KEY_DROPIN_END && listed(KEY_DROPIN_END)) dropin_hangup("Home Assistant's button");
+            else if (f.field == 1 && PLUGIN_KEY((unsigned)f.v)) {
+                if (c < 0 || !clients[c].keyed) fprintf(stderr, "plugin: a button refused, it did not come over the keyed connection\n");
+                else plugin_entity_command((unsigned)f.v, "");
+            }
         break; }
     case UPDATE_COMMAND: {
         unsigned key = 0, cmd = 0;
@@ -1857,14 +1991,14 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         arb_ha_state(ent, st);
     } break;
     case EXECUTE_SERVICE: {
-        unsigned key = 0; int argn = 0, nc = 0, na = 0, ints[3] = { 0, 0, 0 }; char args[3][256] = { "", "", "" }, colors[RING_LEDS_MAX][16];
+        unsigned key = 0; int argn = 0, nc = 0, na = 0, ints[4] = { 0, 0, 0, 0 }, isstr[4] = { 0, 0, 0, 0 }; char args[4][256] = { "", "", "", "" }, colors[RING_LEDS_MAX][16];
         struct pbf g; char *lines = NULL; size_t nl = 0;        /* a string array whole, one per line (the live ring's frames) */
         while (pb_next(&p, end, &f)) {
             if (f.field == 1) key = (unsigned)f.v;
-            else if (f.field == 2 && f.data && argn < 3) {
+            else if (f.field == 2 && f.data && argn < 4) {
                 const unsigned char *q = f.data;
                 while (pb_next(&q, f.data + f.len, &g)) {
-                    if (g.field == 4 && g.data) pbf_str(&g, args[argn], sizeof args[argn]);
+                    if (g.field == 4 && g.data) { pbf_str(&g, args[argn], sizeof args[argn]); isstr[argn] = 1; }
                     else if (g.field == 2 && !g.data) ints[argn] = (int)(int32_t)g.v;                     /* legacy int32 */
                     else if (g.field == 5 && !g.data) ints[argn] = (int)((uint32_t)g.v >> 1 ^ -(int32_t)(g.v & 1));   /* sint32 */
                     else if (g.field == 9 && g.data) {                                                   /* string array */
@@ -1887,19 +2021,26 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
             else if (key == KEY_LIVE_ANIM) rc = ringlive_animate(lines ? lines : "", nl, ints[1], bri, e, sizeof e);
             else if (key == KEY_LIVE_DESIGN_SVC) rc = ringlive_design(args[0], ints[1], bri, e, sizeof e);
             else ringlive_clear();
-            if (rc) fprintf(stderr, "light ring live: %s\n", e);
+            if (rc) log_private("light ring live: %s", e);              /* (a design's name, the owner's) */
             send_live_states();
             free(lines);
             break;
         }
         free(lines);
         if (key == KEY_RING_LEDS && listed(KEY_RING_LEDS)) { ring_leds_from(colors, nc); break; }
+        /* a plugin's action (4.10): from Home Assistant itself, the keyed link, as Drop In's */
+        if (PLUGIN_KEY(key)) {
+            if (c < 0 || !clients[c].keyed) { fprintf(stderr, "plugin: an action refused, it did not come over the keyed connection\n"); break; }
+            /* (each argument as its manifest types it, plugin.c action_send: an empty string is no field on the wire) */
+            if (plugin_action(key, args, ints, argn)) fprintf(stderr, "plugin: an action its plugin cannot take now\n");
+            break;
+        }
         /* Drop In from Home Assistant (an automation, the voice blueprint): it may open another Echo's microphone, so
          * only over the keyed link too */
         if (key == KEY_DROPIN_SERVICE && listed(KEY_DROPIN_SERVICE)) {
             char e[120];
             if (c < 0 || !clients[c].keyed) fprintf(stderr, "drop in: refused, the action did not come over the keyed connection\n");
-            else if (dropin_call(args[0], e, sizeof e)) fprintf(stderr, "drop in: %s: %s\n", args[0], e);
+            else if (dropin_call(args[0], e, sizeof e)) log_private("drop in: %s: %s", args[0], e);       /* (whom, as a person named it) */
             break;
         }
         /* the network key only from Home Assistant itself: a client holding the device key (without one, anyone on the
@@ -2146,6 +2287,20 @@ static void wake_event(const char *event)       /* lock held */
     if (listed(KEY_WAKE)) { send_state(EVENT, &b); fprintf(stderr, "wake event: %s\n", event); }
 }
 
+/* lock held.  How many of Home Assistant's own links it went out on (core.h): subscribed to states, and with the
+ * device key where this Echo has one.  A link without it, while a key is set, is not Home Assistant's (it gets
+ * "requires encryption" and nothing more); with no key set every link is plaintext or zero-PSK and Home Assistant's
+ * is one of them, no better told apart than for anything else it does then */
+static int plugin_event(const char *event)
+{
+    PB(b, 64); int n = 0;
+    pb_fixed32(&b, 1, KEY_PLUGIN); pb_str(&b, 2, event);
+    if (!listed(KEY_PLUGIN)) return 0;
+    send_state(EVENT, &b);
+    for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].fd >= 0 && clients[i].states && (clients[i].keyed || !have_key)) n++;
+    return n;
+}
+
 static void whispered(int on) { (void)on; send_setting(KEY_WHISPERED); }   /* lock held */
 static void timers_changed(void)        /* lock held: names first, the next timer's end last */
 {
@@ -2169,6 +2324,8 @@ static void dropin_result(const char *result)   /* lock held */
     if (listed(KEY_DROPIN_RESULT)) send_state(EVENT, &b);
 }
 
+static int keyed(void) { return have_key; }            /* lock held */
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut };
+                                     timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut, plugin_event,
+                                     plugin_entity, music_changed, keyed };

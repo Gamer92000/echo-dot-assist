@@ -1,4 +1,4 @@
-/* wake.h: the engine the model names, per slot.  Engine hints (wake_property) always reach the vendor engine, which
+/* wake.h: the engine the model names, per slot (a plugin's: wake_open returns once it is asked for, plugin.c).  Engine hints (wake_property) always reach the vendor engine, which
  * keeps them for when it opens next (microWakeWord has none: its cutoff is fixed per model). */
 #include "wake.h"
 #include <stdatomic.h>
@@ -16,6 +16,9 @@ int wake_is_mww(const char *model)
     return n > 5 && !strcmp(model + n - 5, ".json");
 }
 
+int wake_is_plugin(const char *model) { return model && !strncmp(model, "plugin:", 7); }
+int wake_is_vendor(const char *model) { return !wake_is_mww(model) && !wake_is_plugin(model); }
+
 static void heard(int slot, const char *keyword, uint64_t begin, uint64_t end)
 {
     atomic_store(&last_slot, slot);
@@ -27,7 +30,7 @@ int wake_open(int slot, const char *model, wake_cb cb)
     if (slot < 0 || slot >= WAKE_SLOTS) return -1;
     wake_close(slot);
     user_cb = cb;
-    const struct wake_engine *e = wake_is_mww(model) ? &wake_mww : &wake_vendor;
+    const struct wake_engine *e = wake_is_plugin(model) ? &wake_plugin : wake_is_mww(model) ? &wake_mww : &wake_vendor;
     if (e->open(slot, model, heard)) return -1;
     cur[slot] = e;
     return 0;

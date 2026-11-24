@@ -2,6 +2,7 @@
  * sets, which root installs): manifest.json and model.tflite.  A model is only ever put in place whole and after it
  * loaded in our interpreter: written into a hidden folder beside the others, then renamed over the old one.  After every
  * change the core lists the wake words anew (core_wake_models_changed). */
+#include "logread.h"
 #include "mww.h"
 #include "core.h"
 #include "statefile.h"
@@ -313,7 +314,8 @@ int mww_add(const char *id, const char *json, size_t jn, const void *model, size
     }
     pthread_mutex_unlock(&lk);
     if (r) return -1;
-    fprintf(stderr, "microwakeword: model %s (\"%s\", cutoff %.2f, window %d, %zu bytes) added\n", id, i.name, i.cutoff, i.window, mn);
+    /* private: the model's id and phrase are what the owner named it (logread.h) */
+    log_private("microwakeword: model %s (\"%s\", cutoff %.2f, window %d, %zu bytes) added", id, i.name, i.cutoff, i.window, mn);
     core_wake_models_changed();
     return 0;
 }
@@ -327,7 +329,7 @@ int mww_install_dir(const char *dir, const char *id, char *err, size_t errsz)
     int r = count_others(id) >= MWW_MODELS_MAX ? (snprintf(err, errsz, "at most %d models: delete one first", MWW_MODELS_MAX), -1) : swap_in(dir, id, err, errsz);
     pthread_mutex_unlock(&lk);
     if (r) return -1;
-    fprintf(stderr, "microwakeword: model %s arrived from another Echo\n", id);
+    log_private("microwakeword: model %s arrived from another Echo", id);
     core_wake_models_changed();
     return 0;
 }
@@ -364,7 +366,7 @@ int mww_edit(const char *id, const char *text, char *err, size_t errsz)
     int r = write_manifest(path, &i);
     pthread_mutex_unlock(&lk);
     if (r) { snprintf(err, errsz, "cannot write the manifest"); return -1; }
-    fprintf(stderr, "microwakeword: model %s now \"%s\", cutoff %.2f, window %d\n", id, i.name, i.cutoff, i.window);
+    log_private("microwakeword: model %s now \"%s\", cutoff %.2f, window %d", id, i.name, i.cutoff, i.window);
     core_wake_models_changed();
     return 0;
 }
@@ -379,7 +381,7 @@ int mww_delete(const char *id, char *err, size_t errsz)
     if (!r) rm_dir(d);
     pthread_mutex_unlock(&lk);
     if (r) { snprintf(err, errsz, "no such model"); return -1; }
-    fprintf(stderr, "microwakeword: model %s deleted\n", id);
+    log_private("microwakeword: model %s deleted", id);
     core_wake_models_changed();
     return 0;
 }

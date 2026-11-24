@@ -1,0 +1,177 @@
+# The system calls a plugin may make (docs/plugins.md 2.4), as data: tools/mkfilter.py makes the launcher's seccomp
+# program from it (build/plugfilter.h, src/tools/plugrun.c), and the SDK's harness judges a trace by the same table.
+#
+#   nr NAME ARM X86_64          the call's number per architecture (-: the architecture has no such call)
+#   allow NAME[|NAME...] [if COND [and COND...]]
+#                               allowed, with conditions on its arguments; several lines for one call are alternatives
+#   errno ERR NAME[|NAME...]    refused with ERR instead of the default
+#   above N ERR                 ARM only: every number above N answers ERR
+#   pc ...                      a line for the PC build only (x86_64: hassmic's own tests, 5.8), never in the ARM program
+#
+# COND: aN [& EXPR] in EXPR[,EXPR...]    argument N (0..5), masked, is one of the values
+#       aN == $NAME                      a value only the launcher knows when it starts the plugin (all 64 bits on the PC)
+# EXPR: numbers, the constants below, | & ~ and brackets.  Everything not allowed: EPERM.
+#
+# A name that has no number on an architecture is left out there (mmap2 on x86_64, mmap on ARM).  Arguments are
+# compared as 32 bits: on ARM that is all of them; on the PC the upper half is not looked at, which is good enough
+# for tests and no wall.
+
+above 386 ENOSYS        # bpf is the last call of 3.18's table: every model shows a plugin the oldest kernel's calls,
+                        # and musl's and Go's time64 calls fall back as on an old kernel (they do so on ENOSYS only)
+
+# ---- numbers (ARM: EABI, asm/unistd-common.h and unistd-eabi.h; x86_64: asm/unistd_64.h)
+nr restart_syscall 0 219
+nr exit 1 60
+nr read 3 0
+nr write 4 1
+nr close 6 3
+nr execve 11 59
+nr lseek 19 8
+nr getpid 20 39
+nr getuid 24 102
+nr dup 41 32
+nr brk 45 12
+nr getgid 47 104
+nr geteuid 49 107
+nr getegid 50 108
+nr ioctl 54 16
+nr fcntl 55 72
+nr gettimeofday 78 96
+nr munmap 91 11
+nr fstat 108 5
+nr sigreturn 119 -
+nr clone 120 56
+nr uname 122 63
+nr mprotect 125 10
+nr _llseek 140 -
+nr readv 145 19
+nr writev 146 20
+nr sched_yield 158 24
+nr nanosleep 162 35
+nr mremap 163 25
+nr poll 168 7
+nr prctl 172 157
+nr rt_sigreturn 173 15
+nr rt_sigaction 174 13
+nr rt_sigprocmask 175 14
+nr rt_sigtimedwait 177 128
+nr sigaltstack 186 131
+nr ugetrlimit 191 -
+nr mmap2 192 -
+nr fstat64 197 -
+nr getuid32 199 -
+nr getgid32 200 -
+nr geteuid32 201 -
+nr getegid32 202 -
+nr madvise 220 28
+nr fcntl64 221 -
+nr gettid 224 186
+nr tkill 238 200
+nr futex 240 202
+nr sched_getaffinity 242 204
+nr exit_group 248 231
+nr epoll_ctl 251 233
+nr epoll_wait 252 232
+nr set_tid_address 256 218
+nr clock_gettime 263 228
+nr clock_getres 264 229
+nr clock_nanosleep 265 230
+nr tgkill 268 234
+nr send 289 -
+nr sendto 290 44
+nr recv 291 -
+nr recvfrom 292 45
+nr shutdown 293 48
+nr setsockopt 294 54
+nr getsockopt 295 55
+nr getsockname 286 51
+nr getpeername 287 52
+nr recvmsg 297 47
+nr ppoll 336 271
+nr set_robust_list 338 273
+nr epoll_pwait 346 281
+nr eventfd2 356 290
+nr epoll_create1 357 291
+nr dup3 358 292
+nr pipe2 359 293
+nr getrandom 384 318
+nr set_tls 0x0f0005 -       # __ARM_NR_set_tls: the thread pointer, musl's and Go's start
+nr mmap - 9
+nr getrlimit - 97
+nr arch_prctl - 158
+nr newfstatat - 262
+nr prlimit64 369 302
+nr rseq 398 334
+nr readlinkat 332 267
+nr clone3 435 435
+
+# ---- I/O on what it holds
+allow read|write|readv|writev|close|lseek|_llseek|fstat64|dup|dup3|pipe2|eventfd2
+# no F_SETFL: a socket handed over may be shared with a thread of hassmic's, and stays non-blocking (4.6).
+# Plain fcntl beside fcntl64: Go's runtime.checkfds asks F_GETFD of 0..2 with it and throws on EPERM
+allow fcntl64|fcntl if a1 in F_GETFD,F_SETFD,F_GETFL,F_DUPFD_CLOEXEC
+allow ioctl if a1 in FIONREAD
+
+# ---- waiting
+allow poll|ppoll|epoll_create1|epoll_ctl|epoll_wait|epoll_pwait|nanosleep|clock_nanosleep|restart_syscall|sched_yield
+
+# ---- sockets handed over.  No sendmsg: its destination is inside a struct the filter cannot read, and it is the
+# only way to pass a descriptor on.  No socket, connect, bind, listen, accept: sockets are the broker's to make
+allow recv|recvfrom|recvmsg|shutdown|getsockname|getpeername
+allow send if a3 & ~(MSG_DONTWAIT|MSG_NOSIGNAL) in 0
+allow sendto if a4 in 0 and a3 & ~(MSG_DONTWAIT|MSG_NOSIGNAL) in 0
+allow getsockopt if a1 in SOL_SOCKET and a2 in SO_ERROR,SO_RCVBUF,SO_SNDBUF,SO_TYPE
+allow setsockopt if a1 in SOL_SOCKET and a2 in SO_KEEPALIVE,SO_RCVBUF,SO_SNDBUF
+allow setsockopt if a1 in IPPROTO_TCP and a2 in TCP_NODELAY,TCP_KEEPIDLE,TCP_KEEPINTVL,TCP_KEEPCNT
+allow setsockopt if a1 in IPPROTO_IP and a2 in IP_TOS
+
+# ---- memory.  Never executable (someone who gets into a plugin's parser from the network stays on
+# return-oriented code), never a descriptor, never shared.  MAP_ANONYMOUS as a bit that has to be set: without it a
+# private read-only mapping of the plugin's own program went through (biscuit, 2026-11-18).  Hints and MAP_FIXED:
+# musl's malloc passes a hint, Go's runtime commits its arena with MAP_FIXED over its own reservation
+allow brk|munmap
+allow mmap2|mmap if a2 & PROT_EXEC in 0 and a3 & (MAP_ANONYMOUS|MAP_PRIVATE) in MAP_ANONYMOUS|MAP_PRIVATE and a3 & ~(MAP_ANONYMOUS|MAP_PRIVATE|MAP_FIXED|MAP_NORESERVE|MAP_STACK) in 0
+allow mremap if a3 in 0,MREMAP_MAYMOVE
+allow mprotect if a2 & PROT_EXEC in 0
+allow madvise if a2 in MADV_DONTNEED,MADV_FREE
+
+# ---- threads, never a process: both flag sets have CLONE_VM and CLONE_THREAD.  0x7d0f00: musl (C, C++, Rust; with
+# CLONE_DETACHED, which bionic's 0x3d0f00 lacks), 0x50f00: Go's runtime (no TLS flags).  Measured on biscuit and donut
+allow clone if a0 in 0x7d0f00,0x50f00
+allow sched_getaffinity                                 # Go's runtime at start, for GOMAXPROCS
+# no PI operation (CVE-2014-3153 and what followed), no WAKE_OP
+allow futex if a1 & ~(FUTEX_PRIVATE_FLAG|FUTEX_CLOCK_REALTIME) in FUTEX_WAIT,FUTEX_WAKE,FUTEX_REQUEUE,FUTEX_CMP_REQUEUE,FUTEX_WAIT_BITSET,FUTEX_WAKE_BITSET
+allow set_tid_address|set_robust_list|sigaltstack|gettid|exit|exit_group|set_tls
+allow prctl if a0 in PR_SET_NAME,PR_GET_NAME
+
+# ---- signals: its own (abort(), pthread_kill), nobody else's.  musl's raise(), abort(), pthread_kill() and
+# pthread_cancel() send with tkill, not tgkill (a review of 6631974: under EPERM abort() ended as SIGSEGV, raise() did
+# nothing, and the development flag stopped a plugin at its first raise).  tkill names a thread alone, by an id the
+# kernel hands out from one counter for every process, so no rule of the table can hold it to the plugin's own
+# threads; what does is the user (2.3): a slot's user is that plugin's alone, and a signal to a process of another
+# user, hassmic's included, is EPERM from the kernel.  On the PC (plugrun-host, no user change) it is the tester's
+# own: no wall there, as for everything the filter says on the PC
+allow rt_sigaction|rt_sigprocmask|rt_sigreturn|sigreturn|rt_sigtimedwait
+allow tgkill if a0 == $PID
+allow tkill
+
+# ---- time, identity, randomness
+allow clock_gettime|clock_getres|gettimeofday|getpid|getuid32|geteuid32|getgid32|getegid32|ugetrlimit|uname
+allow getrandom
+
+# ---- the start: the launcher's own exec, by the three pointers it passes (2.3).  A hurdle, not a wall: with
+# MAP_FIXED a plugin can put pages at those addresses, and gains a program under the same filter and user
+allow execve if a0 == $EXEC_PATH and a1 == $EXEC_ARGV and a2 == $EXEC_ENVP
+
+# ---- the PC build (static glibc test plugins of hassmic's own tests; none of this is in the ARM program)
+pc allow fstat|getuid|geteuid|getgid|getegid|getrlimit|arch_prctl
+pc allow newfstatat if a3 & AT_EMPTY_PATH in AT_EMPTY_PATH      # glibc's fstat(): the descriptor itself
+# reading its own limits (sysconf, pthread's stack size): its own pid 0, no new limit.  On ARM since 2026-11-19: musl's
+# getrlimit asks this first and takes EPERM for "no limits to be read" (seen on a Dot 2), ugetrlimit only after ENOSYS
+allow prlimit64 if a0 in 0 and a2 in 0
+pc allow clone if a0 in 0x3d0f00                                # glibc's pthread_create ...
+pc errno ENOSYS clone3                                          # ... once clone3, whose flags are in a struct, says no
+pc errno ENOSYS rseq
+# glibc's static start asks for its own path (_dl_get_origin) and takes a refusal; as EPERM the development flag (a
+# refusal of the table's raised as SIGSYS: plugrun.h PLUGRUN_SPAWN_DEVELOP) would stop the PC's test plugins before main
+pc errno ENOSYS readlinkat

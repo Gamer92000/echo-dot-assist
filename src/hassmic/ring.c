@@ -100,6 +100,10 @@ const struct ring_slot ring_slots[] = {
     { "call_live", "call_connected", RING_PLAIN }, { "call_end", "call_connected_end", RING_PLAIN },
     { "setup", "setup-mode", RING_PLAIN }, { "reset", "factory-reset", RING_PLAIN },
     { "login", "authenticated_setup_mode", RING_PLAIN },
+    /* a plugin's install waits for the action button (docs/plugins.md 4.3): stock's "wait", three cyan LEDs going
+     * round, in every model's layer config and no other slot's; not the login's blue breathing, so that a person at
+     * the Echo sees which of the two a press accepts.  New slots go here, at the end: the ids are kept in designs */
+    { "plugin", "wait", RING_PLAIN },
 };
 const int ring_nslots = (int)(sizeof ring_slots / sizeof ring_slots[0]);
 enum { S_LISTEN, S_END };                 /* ring_slots' first two */

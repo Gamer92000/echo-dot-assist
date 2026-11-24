@@ -136,7 +136,7 @@ static atomic_int level_db = -1000;      /* the talker, dBFS x 10, from the pipe
 static float loud;                       /* smoothed 0..1; the band thread's */
 
 enum pid { P_RESET, P_VOLUME, P_ASSIST, P_LISTEN, P_THINK, P_TALK, P_END, P_CALL_OUT, P_CALL_IN, P_CALL, P_CALL_END, P_ERROR,
-           P_MUTE, P_UNMUTE, P_DND, P_IDENTIFY, P_LOGIN, P_PAIRING, P_TIMER, P_TIMER_SHORT, P_SETUP, P_COUNT };
+           P_MUTE, P_UNMUTE, P_DND, P_IDENTIFY, P_LOGIN, P_PLUGIN, P_PAIRING, P_TIMER, P_TIMER_SHORT, P_SETUP, P_COUNT };
 /* priority order (first wins: the volume over a reply, as the ring shows it) and how long each shows: -1 until unset */
 static const struct { const char *name; int ms; } pats[P_COUNT] = {
     [P_RESET] = { "factory-reset", -1 },
@@ -151,6 +151,7 @@ static const struct { const char *name; int ms; } pats[P_COUNT] = {
     [P_DND] = { "do_not_disturb", 1760 },
     [P_IDENTIFY] = { "zzz_rainbow", -1 },
     [P_LOGIN] = { "authenticated_setup_mode", -1 },
+    [P_PLUGIN] = { "wait", -1 },                     /* a plugin's install waits for the action button */
     [P_PAIRING] = { "scone-setup", -1 },
     [P_TIMER] = { "ready-timer", -1 }, [P_TIMER_SHORT] = { "ready-timer-short", 2233 },
     [P_SETUP] = { "setup-mode", -1 },
@@ -185,6 +186,9 @@ static void draw(int p, struct rgb *led, long long t, int arg, float loudness)
     case P_DND: all(led, scale(hex(VIOLET), sinf((float)M_PI * clamp01(t / 1760.f)))); break;
     case P_ERROR: all(led, scale(hex(RED), 0.9f * wave(t, 1100))); break;            /* three red pulses */
     case P_LOGIN: all(led, scale(hex(BLUE), wave(t, 1800))); break;                   /* blue breathing */
+    case P_PLUGIN:                       /* three cyan LEDs round the ring, a step every 88 ms (donut's "wait") */
+        for (int k = 0, h = (int)(t / 88 % LEDS); k < 3; k++) led[(h + k) % LEDS] = hex(CYAN);
+        break;
     case P_PAIRING: runner(led, t, 1060, hex(BLUE), 0); break;                         /* one blue LED round the ring */
     case P_SETUP: runner(led, t, 1380, hex(ORANGE), 0); break;                         /* one orange LED round the ring */
     case P_RESET: all(led, scale(hex(ORANGE), 0.1f + 0.9f * wave(t, 830))); break;
@@ -265,6 +269,8 @@ const struct ring_slot ring_slots[] = {
     { "call_live", "call_connected", RING_PLAIN }, { "call_end", "call_connected_end", RING_PLAIN },
     { "setup", "setup-mode", RING_PLAIN }, { "reset", "factory-reset", RING_PLAIN },
     { "login", "authenticated_setup_mode", RING_PLAIN },
+    /* (ring.c says why "wait") */
+    { "plugin", "wait", RING_PLAIN },
 };
 const int ring_nslots = (int)(sizeof ring_slots / sizeof ring_slots[0]);
 #define SHIFT 5                          /* 10.5 - 5.5: the talker's pair to the middle of the band */
@@ -337,7 +343,7 @@ static void design_draw(int s, int p, struct rgb *led, long long t, int arg)
 static const struct { int intro, loop; } runs[P_COUNT] = {
     [P_LISTEN] = { 500, STOCK_MS }, [P_THINK] = { 0, 200 }, [P_TALK] = { 0, 1690 }, [P_END] = { 600, 0 },
     [P_MUTE] = { 700, STOCK_MS }, [P_UNMUTE] = { 1100, 0 }, [P_DND] = { 1760, 0 }, [P_ERROR] = { 3300, 0 },
-    [P_LOGIN] = { 0, 1800 }, [P_PAIRING] = { 0, 1060 }, [P_SETUP] = { 0, 1380 }, [P_RESET] = { 0, 830 },
+    [P_LOGIN] = { 0, 1800 }, [P_PLUGIN] = { 0, 88 * LEDS }, [P_PAIRING] = { 0, 1060 }, [P_SETUP] = { 0, 1380 }, [P_RESET] = { 0, 830 },
     [P_TIMER] = { 0, 750 }, [P_TIMER_SHORT] = { 2233, 0 }, [P_CALL_OUT] = { 0, 900 }, [P_CALL_IN] = { 0, 5200 },
     [P_CALL] = { 0, 2400 }, [P_CALL_END] = { 1480, 0 }, [P_IDENTIFY] = { 0, 2000 },
 };

@@ -123,6 +123,7 @@
  * outside the firewall's inbound 16384-32767: lockdown.sh admits it while state/config says arbitration_mode=kiosk.
  * The socket is the loop's own: opened and closed there as the mode changes, so no other thread ever polls a closed one.
  */
+#include "logread.h"
 #include "arb.h"
 #include <arpa/inet.h>
 #include <ctype.h>
@@ -480,7 +481,11 @@ static struct peer *peer(const uint8_t id[8])
     return old;
 }
 
-/* A packet that authenticated: 1 if its counter is new (not a replay, not the second copy) */
+/* A packet that authenticated: 1 if its counter is new (not a replay, not the second copy).  Against hosts without
+ * the network's key.  A member's id is its own word, signed only with the shared key: a member that sends one
+ * message under another member's id with a counter far ahead of that member's has every message of that member
+ * dropped here (claims, Drop In, ducking, the plugins' handover) until this Echo restarts or the place goes to a
+ * newcomer (peer()).  A member with the key is trusted for all of arbitration (docs/SECURITY.md) */
 static int fresh(const uint8_t id[8], uint64_t c, long long now)
 {
     struct peer *p = peer(id);
@@ -966,9 +971,9 @@ static void kiosk_packet(const char *t, long long now)
     c.at = now; kheard = now;
     kclaims[kclaim_next++ % NCLAIM] = c;
     if (ago(klogged, now, 1000)) { kunlogged++; return; }
-    fprintf(stderr, "arbitration: kiosk claim from %.16s: \"%s\", %.1f dB", c.id, c.p, c.e / 10.0);
-    if (kunlogged) fprintf(stderr, " (%d more since the last one logged)", kunlogged);
-    fprintf(stderr, "\n");
+    /* private: the phrase may be a model the owner named (a custom wake word); one line, one write (logread.h) */
+    if (kunlogged) log_private("arbitration: kiosk claim from %.16s: \"%s\", %.1f dB (%d more since the last one logged)", c.id, c.p, c.e / 10.0, kunlogged);
+    else log_private("arbitration: kiosk claim from %.16s: \"%s\", %.1f dB", c.id, c.p, c.e / 10.0);
     klogged = now; kunlogged = 0;
 }
 
@@ -1455,6 +1460,16 @@ int arb_member(const char *nd, unsigned char id[8], unsigned *ip)
     pthread_mutex_lock(&lk);
     for (int i = 0; running && in_net && i < NPEER; i++)
         if (ago(peers[i].seen, now, PEER_TTL_MS) && peers[i].ip && !strcmp(peers[i].node, nd)) { memcpy(id, peers[i].id, 8); *ip = peers[i].ip; r = 0; break; }
+    pthread_mutex_unlock(&lk);
+    return r;
+}
+
+int arb_member_mode(const char *nd)
+{
+    int r = -1; long long now = now_ms();
+    pthread_mutex_lock(&lk);
+    for (int i = 0; running && in_net && i < NPEER; i++)
+        if (ago(peers[i].seen, now, PEER_TTL_MS) && peers[i].ip && !strcmp(peers[i].node, nd)) { r = peers[i].kiosk ? ARB_KIOSK : ARB_HASSMIC; break; }
     pthread_mutex_unlock(&lk);
     return r;
 }

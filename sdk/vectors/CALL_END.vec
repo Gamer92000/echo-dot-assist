@@ -1,0 +1,21 @@
+# CALL_END: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message CALL_END 106
+id 65642
+result u8 4
+packet 6a0000006a00010004
+case empty
+id 65642
+result u8 1
+packet 6a0000006a00010001
+case long
+id 65642
+result u8 5
+packet 6a0000006a00010005
+case full
+id 65642
+result u8 1
+packet 6a0000006a00010001
+refuse short 6a0000006a0001
+refuse truncated 6a0000006a000100
+refuse trailing 6a0000006a0001000400
+refuse enum:result 6a0000006a00010000

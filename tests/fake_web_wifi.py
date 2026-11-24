@@ -4,6 +4,9 @@ from the protocol (tests/webclient.py: the password sealed with Python's BLAKE2b
 scripts/device/wifi.sh against stand-ins for wpa_cli and friends (tests/fake_wifi_tools.py).  Scans with wpa_supplicant's
 escapes, the PSK as PBKDF2 makes it, a wrong password, a network out of reach, no DHCP, a silent router, an open
 network, a second password for a known network: what is saved, and that a failed switch goes back and saves nothing.
+A fixed address (issue #191): hassmic's refusals, one kept once a connection reached it, every way back (taken by
+another device, a silent router, nothing reaching it, a link from before that proves nothing), netwatch's keep (the
+Dots: dhcpcd-static over wifisvc's dhcpcd-wlan0), DHCP again, and a switch of network around a fixed address.
 Run twice: the Dots' world (wpa_supplicant) and checkers' (ANDROID=1: WifiService through the wifictl.dex
 calls, the same fake world answering as the framework would, app_process included).  The Dots' run also holds issue #90:
 main.sh's psk_only (the entry wifisvc rewrites, cut back) and the setup's scripts/device/wifi-join.sh on WPA3."""
@@ -31,7 +34,7 @@ def main(android=False):
     print(f"--- {mode}")
     tmp = tempfile.mkdtemp(); state, out, fake = (os.path.join(tmp, d) for d in ("state", "wifi", "bin"))
     for d in (state, out, fake): os.makedirs(d)
-    for t in ("wpa_cli", "app_process", "ifconfig", "getprop", "setprop", "dhcpcd", "ping", "stop", "start"):     # argv[0] tells the tool which one it is
+    for t in ("wpa_cli", "app_process", "ifconfig", "getprop", "setprop", "dhcpcd", "ping", "stop", "start", "ip"):     # argv[0] tells the tool which one it is
         os.symlink(f"{ROOT}/tests/fake_wifi_tools.py", os.path.join(fake, t))
     world = os.path.join(tmp, "world.json"); arp = os.path.join(tmp, "arp"); route = os.path.join(tmp, "route")
     home = {"id": 0, "ssid": H("HomeNet"), "psk": PSK("old password", "HomeNet"), "key_mgmt": "WPA-PSK", "priority": 3, "disabled": 0}
@@ -62,6 +65,7 @@ def main(android=False):
     W = lambda: json.load(open(world))
     renv = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_ARP=arp, WIFI_ROUTE=route,
                 WIFI_SCAN_SECS="0", WIFI_STEP="0.1", WIFI_JOIN_SECS="6", WIFI_ADDR_SECS="5", WIFI_BACK_SECS="6",
+                WIFI_TCP=os.path.join(tmp, "tcp"), WIFI_REACH_SECS="8",
                 **({"ANDROID": "1"} if android else {}))     # looks: the stand-ins answer at the third
     # root's folder: wifi.sh with what it finds next to it (wifictl.dex, runas: a stand-in that hands the uid to the fake
     # framework)
@@ -110,7 +114,142 @@ def main(android=False):
         check(e.get("hex") == H(EXOTIC) and e.get("sec") == "open" and nets.get("Only3", {}).get("sec") == "sae", "UTF-8 and \\t decoded, open and WPA3-only told apart")
         check(len(nets) == 6 and [n["signal"] for n in w["scan"]["networks"]] == sorted((n["signal"] for n in w["scan"]["networks"]), reverse=True),
               "the hidden one left out, strongest first")
-        check(b.state()["wifi"] == {"ssid": "HomeNet", "ip": "192.168.1.20"}, "the page's state: the network now")
+        check(b.state()["wifi"] == {"ssid": "HomeNet", "ip": "192.168.1.20", "fixed": False}, "the page's state: the network now")
+
+        # ---- a fixed address (issue #191)
+        tcp = renv["WIFI_TCP"]
+        def links(*rows):                          # /proc/net/tcp: local and remote "a.b.c.d:port" in hex, state
+            hx = lambda a: "".join("%02X" % int(x) for x in reversed(a.split(":")[0].split("."))) + ":%04X" % int(a.split(":")[1])
+            with open(tcp, "w") as f:
+                f.write("  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n")
+                for i, (l, r, st) in enumerate(rows):
+                    f.write(f"   {i}: {hx(l)} {hx(r)} {st} 00000000:00000000 00:00000000 00000000  1000        0 {1000 + i} 1 0000000000000000\n")
+        links(("192.168.1.20:28931", "192.168.1.77:50100", "01"))
+        def addr(spec):
+            st, _, data = b.call("POST", "/api/wifi/address", spec.encode()); return st, json.loads(data)
+        def wifi(): return json.loads(b.call("GET", "/api/wifi")[2])
+        for spec, word in (("fixed 192.168.1.50 24 10.0.0.1 192.168.1.1 -", "router is not in"),
+                           ("fixed 192.168.1.0 24 192.168.1.1 192.168.1.1 -", "network's own"),
+                           ("fixed 192.168.1.255 24 192.168.1.1 192.168.1.1 -", "network's own"),
+                           ("fixed 192.168.1.50 31 192.168.1.1 192.168.1.1 -", "subnet mask"),
+                           ("fixed 192.168.01.50 24 192.168.1.1 192.168.1.1 -", "not one a device"),
+                           ("fixed 127.0.0.5 8 127.0.0.1 192.168.1.1 -", "not one a device"),
+                           ("fixed 192.168.1.1 24 192.168.1.1 192.168.1.1 -", "router's own"),
+                           ("fixed 192.168.1.50 24 192.168.1.1 224.0.0.1 -", "DNS"),
+                           ("fixed 192.168.1.50 24 192.168.1.1", "bad request"), ("auto now", "bad request"), ("dhcp", "bad request")):
+            st, r = addr(spec)
+            check(st == 400 and word in r.get("error", "") and not os.path.exists(reqf), f"refused by hassmic: {spec!r} ({r.get('error')})")
+        w = wifi()
+        check(w["current"]["netmask"] == "255.255.255.0" and w["current"]["gateway"] == "192.168.1.1" and w["address"] == {"mode": "auto"}
+              and w["address_result"] is None, f"what the page fills in: the mask and router the Echo has; DHCP now ({w['current']})")
+        def addr_run(spec, reach=None):
+            """ask, let root run; reach: a connection to write into /proc/net/tcp once root waits for one"""
+            st, r = addr(spec)
+            assert st == 200, r
+            p = root(); seen = []
+            for _ in range(200):
+                time.sleep(0.05)
+                a = wifi()["address_result"]
+                if a and a["id"] == r["id"]: seen.append(a["state"])
+                if reach and a and a["state"] == "waiting": links(*reach); reach = None
+                if p.poll() is not None: break
+            o, _ = p.communicate(timeout=60); rootlog.append(o)
+            return r["id"], wifi(), seen, o
+        on = lambda: W()["svc"] if not android else {}
+        rid, w, seen, o = addr_run("fixed 192.168.1.50 24 192.168.1.1 192.168.1.1 9.9.9.9",
+                                   reach=[("192.168.1.20:28931", "192.168.1.77:50100", "06"), ("192.168.1.50:28931", "192.168.1.77:50102", "06")])
+        a = w["address_result"]; wd = W()
+        check(a == {"id": rid, "state": "ok", "ip": "192.168.1.50", "reason": ""} and "waiting" in seen,
+              f"fixed: on it, waited until a connection reached it (the page's, in TIME_WAIT), kept ({seen[-3:]})")
+        check(w["address"] == {"mode": "fixed", "ip": "192.168.1.50", "prefix": 24, "gateway": "192.168.1.1", "dns": ["192.168.1.1", "9.9.9.9"],
+                               "ssid": "HomeNet", "here": True} and b.state()["wifi"]["fixed"] is True and w["current"]["ip"] == "192.168.1.50",
+              f"root's record: the address on HomeNet; the page's state says fixed ({w['address']})")
+        if android:
+            n0 = next(n for n in wd["networks"] if n["id"] == 0)
+            check(n0.get("ipconf") == {"ip": "192.168.1.50", "prefix": 24, "gw": "192.168.1.1", "dns": ["192.168.1.1", "9.9.9.9"]}
+                  and "app_process reassoc" in wd["calls"], "Android: the network's IP configuration, taken by a reassociation")
+        else:
+            check(wd["static_starts"][-1] == ["192.168.1.50", "255.255.255.0", "192.168.1.1", "192.168.1.1", "9.9.9.9"]
+                  and wd["svc"]["dhcpcd-wlan0"] == "stopped" and wd["svc"]["dhcpcd-static"] == "running" and wd["addrs"] == ["192.168.1.50"],
+                  "the Dots: dhcpcd-static with the values in the properties, in place of dhcpcd-wlan0, its address alone on wlan0")
+        record = open(os.path.join(out, "address")).read()
+        check(record == f"fixed 192.168.1.50 24 192.168.1.1 192.168.1.1 9.9.9.9 {H('HomeNet')}\n", f"the record, root's ({record.strip()})")
+        n_static = len(W().get("static_starts", []))
+        with open(world) as f: wd = json.load(f)
+        wd["taken"] = ["192.168.1.99"]
+        with open(world, "w") as f: json.dump(wd, f)
+        rid, w, seen, o = addr_run("fixed 192.168.1.99 24 192.168.1.1 192.168.1.1 -")
+        check(w["address_result"]["state"] == "failed" and w["address_result"]["reason"] == "inuse" and len(W().get("static_starts", [])) == n_static
+              and w["address"]["ip"] == "192.168.1.50", "an address another device answers at: refused before anything changed")
+        for spec, why, reach in (("fixed 192.168.1.70 24 192.168.1.254 192.168.1.1 -", "nogateway", None),   # nobody at that router
+                                 # nothing connects to it; the Echo's own connection out from it proves nothing
+                                 ("fixed 192.168.1.60 24 192.168.1.1 192.168.1.1 -", "unreached", [("192.168.1.60:41234", "192.168.1.5:8095", "01")]),
+                                 # the same address: the link from before (there when it was set) counts not
+                                 ("fixed 192.168.1.50 24 192.168.1.1 8.8.4.4 -", "unreached", "before")):
+            if reach == "before": links(("192.168.1.50:28931", "192.168.1.77:50102", "06")); reach = None
+            rid, w, seen, o = addr_run(spec, reach=reach)
+            a = w["address_result"]; wd = W()
+            back = (next(n for n in wd["networks"] if n["id"] == 0).get("ipconf") or {}).get("dns") == ["192.168.1.1", "9.9.9.9"] if android \
+                else wd["static_starts"][-1] == ["192.168.1.50", "255.255.255.0", "192.168.1.1", "192.168.1.1", "9.9.9.9"]
+            check(a["state"] == "failed" and a["reason"] == why and a["ip"] == "192.168.1.50" and back
+                  and open(os.path.join(out, "address")).read() == record, f"{spec}: {why}, back on the fixed address it had, the record as it was")
+        if not android:
+            keep = lambda: subprocess.run(["sh", f"{dev}/wifi.sh", "keep", state, out], env=renv, capture_output=True, text=True, timeout=30).stdout
+            with open(world) as f: wd = json.load(f)                  # a boot: wifisvc's dhcpcd-wlan0, its lease
+            wd["svc"] = {"dhcpcd-wlan0": "running", "dhcpcd-static": "stopped"}; wd["addrs"] = ["192.168.1.20"]; wd["props"].update(result="ok", reason="BOUND", ipaddress="")
+            with open(world, "w") as f: json.dump(wd, f)
+            o = keep(); wd = W()
+            check("set again" in o and wd["svc"] == {"dhcpcd-wlan0": "stopped", "dhcpcd-static": "running"} and wd["addrs"] == ["192.168.1.50"],
+                  f"keep (netwatch) after a boot: dhcpcd-wlan0 gives way to the fixed address ({o.strip()!r})")
+            n = len(wd["static_starts"])
+            check(keep() == "" and len(W()["static_starts"]) == n, "keep again: nothing to do")
+            with open(world) as f: wd = json.load(f)
+            wd["ssid_fails"] = True; wd["svc"]["dhcpcd-static"] = "stopped"
+            with open(world, "w") as f: json.dump(wd, f)
+            check(keep() == "" and len(W()["static_starts"]) == n and W()["svc"]["dhcpcd-wlan0"] == "stopped",
+                  "keep while the network's name cannot be read (wpa_cli says FAIL): the link left as it is")
+            with open(world) as f: wd = json.load(f)
+            wd["ssid_fails"] = False; wd["svc"]["dhcpcd-static"] = "running"
+            with open(world, "w") as f: json.dump(wd, f)
+            with open(os.path.join(out, "address"), "w") as f: f.write(record.replace(H("HomeNet"), H("Elsewhere")))
+            o = keep(); wd = W()
+            check("DHCP" in o and wd["svc"]["dhcpcd-wlan0"] == "running" and wd["svc"]["dhcpcd-static"] == "stopped" and wd["addrs"] == ["192.168.1.20"],
+                  "keep on a network the fixed address is not for: DHCP")
+            with open(os.path.join(out, "address"), "w") as f: f.write(record)
+            os.makedirs(os.path.join(out, "lock")); open(os.path.join(out, "lock", "pid"), "w").write(f"{os.getpid()}\n")
+            open(os.path.join(out, "lock", "boot"), "w").write(open("/proc/sys/kernel/random/boot_id").read())
+            check(keep() == "" and W()["svc"]["dhcpcd-wlan0"] == "running", "keep while a run of wifi.sh has the link: nothing")
+            shutil.rmtree(os.path.join(out, "lock"))
+            check("set again" in keep() and W()["addrs"] == ["192.168.1.50"], "and the fixed address again once it is through")
+            main_sh = open(f"{ROOT}/scripts/system/main.sh").read()
+            nw = re.search(r"^netwatch\(\) \{.*?^\}$", main_sh, re.M | re.S).group(0)
+            check(re.search(r"init\.svc\.\$WIFI_SERVICE\)\" != running \]; \} && sh \$D/wifi\.sh keep$", nw, re.M), "netwatch hands the link to keep once wifisvc is stopped")
+        rid, w, seen, o = addr_run("auto")
+        a = w["address_result"]; wd = W()
+        check(a["state"] == "ok" and a["ip"] == "192.168.1.20" and w["address"] == {"mode": "auto"} and not os.path.exists(os.path.join(out, "address"))
+              and b.state()["wifi"]["fixed"] is False, f"DHCP again: its lease, the record gone ({a})")
+        if android: check("ipconf" not in next(n for n in wd["networks"] if n["id"] == 0), "Android: the network's IP configuration DHCP again")
+        else: check(wd["svc"] == {"dhcpcd-wlan0": "running", "dhcpcd-static": "stopped"} and wd["addrs"] == ["192.168.1.20"], "the Dots: dhcpcd-wlan0 again")
+        # the fixed address before does not come back up either (the router stopped answering there): DHCP, the record gone
+        rid, w, seen, o = addr_run("fixed 192.168.1.50 24 192.168.1.1 192.168.1.1 -", reach=[("192.168.1.50:16700", "192.168.1.2:41010", "01")])
+        check(w["address_result"]["state"] == "ok", "fixed at 192.168.1.50 (reached on Wyoming's port)")
+        with open(world) as f: wd = json.load(f)
+        next(a for a in wd["air"] if a["hex"] == H("HomeNet"))["arp"] = False
+        with open(world, "w") as f: json.dump(wd, f)
+        with open(arp, "w") as f: f.write("IP address       HW type     Flags       HW address            Mask     Device\n")   # its entry gone stale
+        rid, w, seen, o = addr_run("fixed 192.168.1.70 24 192.168.1.1 192.168.1.1 -")
+        check(w["address_result"]["state"] == "failed" and w["address_result"]["reason"] == "nogateway" and w["address"] == {"mode": "auto"}
+              and not os.path.exists(os.path.join(out, "address")) and "does not come back either" in o,
+              f"the address before does not come back either: DHCP, the record gone ({w['address_result']})")
+        with open(world) as f: wd = json.load(f)
+        next(a for a in wd["air"] if a["hex"] == H("HomeNet"))["arp"] = True
+        with open(world, "w") as f: json.dump(wd, f)
+        # fixed again, for the switches below: a failed one comes back to it, one that works leaves it behind
+        rid, w, seen, o = addr_run("fixed 192.168.1.50 24 192.168.1.1 192.168.1.1 -", reach=[("192.168.1.50:26053", "192.168.1.2:41000", "01")])
+        check(w["address_result"]["state"] == "ok", "fixed again (Home Assistant's connection reached it)")
+        st, r = addr("auto"); line = open(reqf).read()
+        check(st == 200 and line == f"address {r['id']} auto\n", "the request for root: one line")
+        os.remove(reqf)
 
         # ---- the password, sealed
         def join(ssid, pw, ctr_body=None):
@@ -146,6 +285,7 @@ def main(android=False):
         w = json.loads(b.call("GET", "/api/wifi")[2]); res = w["result"]; wd = W()
         check(res["state"] == "failed" and res["reason"] == "wrongkey" and res["back"] == "HomeNet" and not w["busy"],
               f"wrong password: failed at the key handshake, back on HomeNet ({res})")
+        check(w["current"]["ip"] == "192.168.1.50" and w["address"]["here"], f"and on its fixed address there ({w['current']['ip']})")
         if android:
             check(wd["current"] == 0 and [n["id"] for n in wd["networks"]] == [0, 1] and [n["disabled"] for n in wd["networks"]] == [0, 0]
                   and not any(c.endswith("save_config") for c in wd["calls"])
@@ -156,12 +296,13 @@ def main(android=False):
                   and wd["saved"] == [home, attic, p2p] and not any(c.endswith("save_config") for c in wd["calls"]),
                   "the new network removed, the others enabled again, the saved configuration never touched")
 
-        # ---- out of reach, no address, a silent router
+        # ---- out of reach, no address, a silent router (HomeNet's IP configuration aside: the fixed address above)
+        plain = lambda nets: [{k: v for k, v in n.items() if k not in ("ipconf", "ipconf_on")} for n in nets]
         for name, why in (("Nowhere", "notfound"), ("NoDHCP", "noaddress"), ("Silent", "nogateway")):
             st, r = join(name, None); root_run()
             res = json.loads(b.call("GET", "/api/wifi")[2])["result"]; wd = W()
             check(st == 200 and res["id"] == r["id"] and res["state"] == "failed" and res["reason"] == why and res["back"] == "HomeNet"
-                  and wd["current"] == 0 and wd["saved"] == ([home, attic] if android else [home, attic, p2p]),
+                  and wd["current"] == 0 and plain(wd["saved"]) == ([home, attic] if android else [home, attic, p2p]),
                   f"{name}: {why}, back on HomeNet, nothing saved")
 
         # ---- it works
@@ -174,6 +315,8 @@ def main(android=False):
               "saved as a PSK, found even when hidden")
         check([n["ssid"] for n in wd["saved"]] == ([H(KITCHEN)] if android else [H("DIRECT-xy"), H(KITCHEN)]) and new.get("disabled") == 0,
               "the networks from before forgotten once it works (the P2P group left alone)")
+        check(w["address"] == {"mode": "auto"} and not os.path.exists(os.path.join(out, "address")) and any("was the old network's" in o for o in rootlog),
+              "the fixed address was HomeNet's: on the new network DHCP")
 
         # ---- the same network with another password (the router's changed): replaced, not added
         st, r = join(KITCHEN, "f" * 64); assert open(reqf).read().split()[3] == "f" * 64

@@ -7,7 +7,7 @@
  *   wake:<name>  a wake word model set, models/<name>/ (Home Assistant offers each in the wake word select)
  *   sound        Amazon's newer sound detection model, aed/ (sound_pryon.c takes it over the firmware's)
  *   whisper      the whisper detection model, whisper/ (whisper_pryon.c)
- *   mww:<id>     a microWakeWord model, state/mww/<id>/ (mww_store.c): not Amazon's, but copied the same way
+ *   mww:<id>     a microWakeWord model, state/mww/<id>/ (mww_store.c): not Amazon's, but copied the same way (its two files only)
  * Each is a folder of files, with at most two levels of folders inside: Amazon's whisper model keeps its networks in
  * whisper_components/, some wake word sets (alexa-de-DE) theirs in BDPGeneratedFiles/, and the newer ones (alexa-de-DE,
  * every en-US set, 2026-10) configs in nttfusionconfig/ntt_conv/.  A file's name is then its path, "sub/file" or
@@ -98,6 +98,19 @@ static int resolve(const char *id, char *dir, size_t dcap, char *stage, size_t s
 }
 
 struct file { char name[MAX_NAME + 1]; long size; long long mtime; };
+
+/* A microWakeWord model is its two files and nothing else.  Under builds before 2026-11-21 the plugin of that name
+ * kept its own marks (checked, title, fields) in the same folder; listed and copied with the model, they went into
+ * the other Echo's state/mww, where that build's start took them as the plugin's own: a model "checked" there that
+ * no plugin had looked at, a title nobody had (plugin_store.c ps_mww_own; a review).  So only these two are listed,
+ * read and kept, whatever else a folder of the kind holds or a copy brings */
+static int mww_file(const char *name) { return !strcmp(name, "manifest.json") || !strcmp(name, "model.tflite"); }
+static int mww_only(struct file *f, int n)
+{
+    int k = 0;
+    for (int i = 0; i < n; i++) if (mww_file(f[i].name)) f[k++] = f[i];
+    return k;
+}
 static int cmp_file(const void *a, const void *b) { return strcmp(((const struct file *)a)->name, ((const struct file *)b)->name); }
 
 /* the regular files of DIR/SUB (SUB "" for DIR itself) into f[n..max), named with SUB in front; those of its folders,
@@ -175,6 +188,7 @@ static size_t one_json(char *o, size_t cap, const char *id, int first)
     char dir[300], stage[300], dh[65]; const char *kind; struct file f[MAX_FILES]; uint8_t d[32]; size_t n = 0; long total = 0;
     int k, manifest = 0;
     if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind) || (k = list_dir(dir, f, MAX_FILES, 0)) <= 0) return 0;
+    if (!strcmp(kind, "mww")) k = mww_only(f, k);
     for (int i = 0; i < k; i++) {
         total += f[i].size;
         manifest |= !strcmp(f[i].name, "pryon.manifest") || !strcmp(f[i].name, "pryon_whisper.manifest") || (!strcmp(kind, "mww") && !strcmp(f[i].name, "manifest.json"));
@@ -240,6 +254,7 @@ int art_read(const char *id, const char *file, long off, long len, void **data, 
     char dir[300], stage[300], p[460]; const char *kind; int fd; struct stat st;
     *data = NULL; *got = 0;
     if (resolve(id, dir, sizeof dir, stage, sizeof stage, &kind) || !good_path(file)) { snprintf(err, errsz, "no such artifact"); return -1; }
+    if (!strcmp(kind, "mww") && !mww_file(file)) { snprintf(err, errsz, "no such file"); return -1; }
     if (off < 0 || len <= 0 || len > ART_CHUNK_MAX) { snprintf(err, errsz, "bad range"); return -1; }
     snprintf(p, sizeof p, "%s/%s", dir, file);
     if ((fd = open(p, O_RDONLY | O_NOFOLLOW)) < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode)) {
@@ -474,6 +489,11 @@ int art_commit(const char *id, char *err, size_t errsz)
         if (r < 0) fprintf(stderr, "artifacts: no pryon_test here, %s installed untried\n", id);
     }
     if (!strcmp(kind, "mww")) {                             /* ours: no root, no restart; in place now or not at all */
+        for (int i = 0; i < m; i++) if (!mww_file(have[i].name)) {     /* (the whole copy was checked: what it is not, out) */
+            char *slash = strchr(have[i].name, '/');
+            snprintf(p, sizeof p, "%s/%.*s", stage, slash ? (int)(slash - have[i].name) : (int)strlen(have[i].name), have[i].name);
+            rm_tree(p); unlink(p);
+        }
         pthread_mutex_unlock(&lk);                          /* it takes core_lock to list the wake words anew */
         int r = mww_install_dir(stage, id + 4, err, errsz);
         if (r) fprintf(stderr, "artifacts: %s refused: %s\n", id, err);

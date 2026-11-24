@@ -27,6 +27,7 @@
  *               steered by the error: resample.h)
  */
 #include "sendspin.h"
+#include "logread.h"
 #include "musiclight.h"
 #include <ctype.h>
 #include <math.h>
@@ -95,30 +96,46 @@ static long long raw_us(void)
 /* ---------------------------------------------------------------- time filter (aiosendspin client/time_sync.py) */
 
 static pthread_mutex_t tf_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct { long long last; int count; double offset, drift, poo, pod, pdd; int use_drift; } tf;
+static struct { long long last; int count; double offset, drift, poo, pod, pdd, base; int use_drift; } tf;
+/* The drift's first estimate, (z2 - z1) / dt, only once it can be within 1 % (sd): a server that stalled answered two
+ * exchanges at once, read 40 us apart, and z's ms of difference made it +2300 (CI 2026-11-24: "moved the clock
+ * +843274.7 ms", then a drift of 16 % passed the significance test, used, and the music resynced by -690 ms).  Until
+ * then each sample is weighed into the offset (by its variance; `base`, the time the offset stands for, likewise), so
+ * the baseline grows and a reply read late counts for what its error says.  At 0.1 ms a sample 200 ms apart: at once */
+#define TF_INIT_DRIFT_SD 0.01
 
 static void tf_reset(void) { pthread_mutex_lock(&tf_lock); memset(&tf, 0, sizeof tf); tf.poo = INFINITY; pthread_mutex_unlock(&tf_lock); }
 
 static void tf_update(double z, double max_error, long long t)
 {
+    double moved = 0;
     pthread_mutex_lock(&tf_lock);
     if (t > tf.last) {
         double dt = (double)(t - tf.last), r = (max_error * 0.5) * (max_error * 0.5);
         tf.last = t;
-        if (tf.count == 0) { tf.count = 1; tf.offset = z; tf.poo = r; tf.drift = 0; }
-        else if (tf.count == 1) { tf.count = 2; tf.drift = (z - tf.offset) / dt; tf.offset = z; tf.pdd = (tf.poo + r) / (dt * dt); tf.poo = r; }
+        if (tf.count == 0) { tf.count = 1; tf.offset = z; tf.poo = r; tf.drift = 0; tf.base = (double)t; }
+        else if (tf.count == 1) {
+            double b = (double)t - tf.base;
+            if (tf.poo + r > TF_INIT_DRIFT_SD * TF_INIT_DRIFT_SD * b * b) {
+                double w = tf.poo / (tf.poo + r);
+                tf.offset += w * (z - tf.offset); tf.base += w * ((double)t - tf.base); tf.poo = tf.poo * r / (tf.poo + r);
+            }
+            else { tf.count = 2; tf.drift = (z - tf.offset) / b; tf.offset = z; tf.pdd = (tf.poo + r) / (b * b); tf.poo = r; }
+        }
         else {
             double pred = tf.offset + tf.drift * dt, npdd = tf.pdd + dt * 1e-22, npod = tf.pod + tf.pdd * dt;
             double npoo = tf.poo + 2 * tf.pod * dt + tf.pdd * dt * dt, resid = z - pred;
             if (tf.count < 100) tf.count++;
             else if (fabs(resid) > 3.0 * max_error) { npdd *= 4; npod *= 4; npoo *= 4; }       /* adaptive forgetting */
             double u = 1 / fmax(npoo + r, 1e-9), ko = npoo * u, kd = npod * u;
-            tf.offset = pred + ko * resid; tf.drift += kd * resid;
+            tf.offset = pred + ko * resid; tf.drift += kd * resid; moved = ko * resid;
             tf.pdd = npdd - kd * npod; tf.pod = npod - kd * npoo; tf.poo = npoo - ko * npoo;
             tf.use_drift = tf.drift * tf.drift > 4.0 * tf.pdd;
         }
     }
     pthread_mutex_unlock(&tf_lock);
+    /* one exchange that moves the clock by more than a resync's worth of the servo's own: worth a line */
+    if (fabs(moved) > 5000) fprintf(stderr, "sendspin: one time exchange moved the clock %+.1f ms (round trip %.1f ms)\n", moved / 1000, max_error * 2 / 1000);
 }
 
 static int tf_synced(double *error_us)
@@ -128,6 +145,17 @@ static int tf_synced(double *error_us)
     if (error_us) *error_us = ok ? sqrt(tf.poo) : 1e9;
     pthread_mutex_unlock(&tf_lock);
     return ok;
+}
+
+/* How far off the clock may be at client time `at` with no sample before it: the offset's uncertainty grown by the
+ * drift's over the gap (the filter's own prediction step) */
+static double tf_error_at(long long at)
+{
+    pthread_mutex_lock(&tf_lock);
+    double dt = at > tf.last ? (double)(at - tf.last) : 0;
+    double v = tf.count >= 2 && isfinite(tf.poo) ? tf.poo + 2 * tf.pod * dt + tf.pdd * dt * dt : INFINITY;
+    pthread_mutex_unlock(&tf_lock);
+    return v > 0 ? sqrt(v) : 0;
 }
 
 static long long tf_client_time(long long server_us)
@@ -146,7 +174,8 @@ static pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t q_cond = PTHREAD_COND_INITIALIZER;
 static struct chunk *q_head, *q_tail; static size_t q_bytes;
 static atomic_int stream_on, player_muted, snap_next;
-static void stream_set(int on) { atomic_store(&stream_on, on); core_music(MUSIC_SENDSPIN, on); }
+static int music_src = -1;              /* our number in the core's table of music sources (sendspin_start) */
+static void stream_set(int on) { atomic_store(&stream_on, on); core_music(music_src, on); }
 static atomic_int static_delay_ms;
 
 static void q_flush(void)
@@ -231,7 +260,7 @@ static void *player_thread(void *arg)
     static int16_t silence[RATE / 50 * CHANNELS]; int open = 0; long long stat_t = 0; int resyncs = 0, routed = -1, stats = 0;
     float duck_g = 1; double step = 1, rate_sum = 0, drift_of[2], drift_kept[2]; long rate_n = 0;   /* rate_sum: the log's mean */
     struct resampler rs; struct rate_servo servo = { 0 };    /* the drift kept across streams: the same output clock */
-    int16_t *out = NULL; size_t out_cap = 0;
+    int16_t *out = NULL; size_t out_cap = 0; long long wrote_at = 0;
     (void)arg;
     rs_reset(&rs);
     drift_load(drift_of); memcpy(drift_kept, drift_of, sizeof drift_kept);
@@ -272,7 +301,9 @@ static void *player_thread(void *arg)
         long long err = due + llround(rs_lag(&rs) * 1e6 / RATE) - at;
         int fresh = atomic_exchange(&snap_next, 0);
         if (fresh || llabs(err) > SNAP_US) {
-            if (!fresh) { resyncs++; fprintf(stderr, "sendspin: %+.1f ms off the schedule, resynced\n", err / 1000.0); }
+            /* what the output held and how long this thread was away: an output that ran dry (a thread not
+             * scheduled for longer than the queue) against a clock that moved (tf_update says so) */
+            if (!fresh) { resyncs++; fprintf(stderr, "sendspin: %+.1f ms off the schedule, resynced (queued %lld ms, %lld ms since the last write)\n", err / 1000.0, (at - raw_us() - out_latency_us()) / 1000, wrote_at ? (raw_us() - wrote_at) / 1000 : -1); }
             err = due - at;                                                             /* from this chunk's first frame */
             if (err > 0) {
                 /* silence until the chunk is due, 20 ms at a time as it plays, the error read again before each: left
@@ -303,14 +334,18 @@ static void *player_thread(void *arg)
         if (atomic_load(&player_muted)) memset(out, 0, n * FRAME);
         else music_duck(out, n, RATE, &duck_g, duck_active() ? settings_duck_gain() : 1);          /* under the voice assistant, ours or another Echo's (duck.c) */
         musiclight_feed(out, n, CHANNELS, RATE, music_queued_us());   /* the ring's music effects (ringlive.c), as heard */
-        music_write(out, n * FRAME);
+        music_write(out, n * FRAME); wrote_at = raw_us();
         rate_sum += step - 1; rate_n++;
         if (raw_us() - stat_t > 10000000) {
             double e; tf_synced(&e); stat_t = raw_us();
             /* the rate: what the music plays at, the output's clock (the error's share of it besides: the queue's slots
              * read skewed); integral: what was learnt of it, kept */
-            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs\n",
-                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs);
+            /* mixer: how far the queue's model was moved towards the mixer's own count (audio_mixer.c, issue #225):
+             * what the output fell behind (+) or ran ahead since the stream's start, which the error alone never shows */
+            long long st = music_steered_us(); char steer[40] = "";
+            if (st != MUSIC_UNSTEERED) snprintf(steer, sizeof steer, ", mixer %+.2f ms", st / 1000.0);
+            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs%s\n",
+                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs, steer);
             rate_sum = 0; rate_n = 0;
             if (++stats % 60 == 0) { drift_of[routed] = servo.drift; drift_save(drift_of, drift_kept); }      /* 10 min */
         }
@@ -735,8 +770,19 @@ static void *time_thread(void *arg)
          * unavailable (1.0) when the filter was not there yet, then again once it is */
         if (s->player_active && !s->state_sent && ((ok && e < 5000) || raw_us() - s->activated_at > 3000000)) send_state(s);
         else if (s->player_active && !s->available_sent && ok) send_state(s);
-        long long nap = !ok ? 200000 : e < 1000 ? 3000000 : e < 2000 ? 1000000 : e < 5000 ? 500000 : 200000;
-        for (long long t = 0; t < nap && !s->closing; t += 50000) { usleep(50000); art_tick(s); meta_tick(s); }
+        /* The next exchange when the clock will still be within 1 ms (2, 5) at its time, not as it is now: a few
+         * samples 200 ms apart leave the drift unsure, and three seconds of it made the offset unsure by tens of ms.
+         * A reply read late (the receive thread decoding a burst of chunks, or not scheduled) then counts as much as
+         * the prediction it contradicts, and moved the clock by its half delay: in CI's parallel run a drift learnt
+         * with the wrong sign (+6.9 ppm against an output 500 ppm slow), maybe a resync of -104 ms; simulated with
+         * this filter, samples ±0.3-1.5 ms and one reply 50 ms late, up to 26 ms off this way and 1.2 ms by the
+         * predicted error (a few exchanges more at the start: 14 in the first 30 s instead of 11) */
+        static const struct { long long nap; double within; } naps[] = { { 3000000, 1000 }, { 1000000, 2000 }, { 500000, 5000 } };
+        usleep(50000); art_tick(s); meta_tick(s);          /* judged once this exchange's reply is in (a LAN's: ms) */
+        long long nap = 200000, now = raw_us();
+        for (size_t i = 0; tf_synced(NULL) && i < sizeof naps / sizeof naps[0]; i++)
+            if (tf_error_at(now + naps[i].nap) < naps[i].within) { nap = naps[i].nap; break; }
+        for (long long t = 50000; t < nap && !s->closing; t += 50000) { usleep(50000); art_tick(s); meta_tick(s); }
     }
     return NULL;
 }
@@ -916,7 +962,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
     } else if (!strcmp(type, "noise/handshake")) {
         if (rehandshake(s, j)) { fprintf(stderr, "sendspin: re-handshake failed\n"); s->closing = 1; shutdown(s->ws.fd, SHUT_RDWR); }
     } else if (!strcmp(type, "server/hello")) {
-        js_str(j, "name", str, sizeof str); fprintf(stderr, "sendspin: server \"%s\"\n", str);
+        js_str(j, "name", str, sizeof str); log_private("sendspin: server \"%s\"", str);
         /* 1.0: the player's commands go to client/state, the pairing methods are an object keyed by method.  The
          * 9.1.1 shapes are what that library requires, and what marks a client as its dialect for 10.x.  Forced: 9.1.1
          * asks for it again after a re-handshake, before its server/activate (1.0 does not ask).  A model with a screen
@@ -999,7 +1045,7 @@ static void on_json(struct session *s, char *j, long long t_recv)
     } else if (!strcmp(type, "server/pair-finalize")) {
         if (s->pairing) { record_put(s->new_psk, s->server_id); s->pairing = 0; fprintf(stderr, "sendspin: paired, long-term key stored\n"); }
     } else if (!strcmp(type, "pair/abort")) {
-        js_str(j, "reason", str, sizeof str); fprintf(stderr, "sendspin: pairing aborted by the server: %s\n", str); s->pairing = 0;
+        js_str(j, "reason", str, sizeof str); log_private("sendspin: pairing aborted by the server: %s", str); s->pairing = 0;
     } else if (!strcmp(type, "server/unpair")) {
         if (s->psk_cat == PSK_LONGTERM) { fprintf(stderr, "sendspin: unpaired by the server\n"); record_drop(s->server_id); goodbye(s, "unpaired"); }
     } else if (!s->admitted) {
@@ -1367,10 +1413,16 @@ int sendspin_unpaired(int set)
     return set != 0;
 }
 
+/* the action button's two rounds (core.h): Sendspin's press pauses what plays and resumes what it paused in the
+ * first; the second has nothing more for it */
+static int music_button(int resume) { return resume ? 0 : sendspin_button(); }
+static const struct music_source source = { "sendspin", sendspin_pause, sendspin_stop, music_button, sendspin_skip, sendspin_volume_changed, NULL };
+
 int sendspin_start(int p)
 {
     pthread_t t;
     port = p;
+    music_src = music_register(&source);
     load_identity();
     pthread_create(&t, NULL, player_thread, NULL); pthread_detach(t);
     return pthread_create(&t, NULL, listen_thread, NULL) ? -1 : (pthread_detach(t), 0);

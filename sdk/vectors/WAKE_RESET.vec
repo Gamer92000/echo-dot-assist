@@ -1,0 +1,6 @@
+# WAKE_RESET: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message WAKE_RESET 35
+id 65571
+packet 2300000023000100
+refuse short 23000000230001
+refuse trailing 230000002300010000

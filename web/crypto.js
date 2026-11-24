@@ -138,9 +138,25 @@ const hmcrypto = (() => {
     return out;
   }
 
+  // The same for data of any length (web.c seal2): block i keyed over the counter, "\n", NONCE (16 bytes, where
+  // there is one) and i as four bytes (big-endian), EK over PURPOSE: 'hassmic seal 2' for what the page sends (no
+  // nonce), 'hassmic seal back 3' to open what an Echo answers (under the counter of the request it answers and the
+  // nonce the Echo put in front of its answer).  XOR: one call seals and opens
+  function seal2(k, ctr, data, purpose, nonce) {
+    const te = new TextEncoder(), ek = blake2b(32, k, te.encode(purpose)), c = te.encode(`${ctr}\n`), nl = nonce ? nonce.length : 0;
+    const out = new Uint8Array(data.length), msg = new Uint8Array(c.length + nl + 4), at = c.length + nl;
+    msg.set(c); if (nonce) msg.set(nonce, c.length);
+    for (let i = 0; i * 64 < data.length; i++) {
+      msg[at] = (i >>> 24) & 255; msg[at + 1] = (i >>> 16) & 255; msg[at + 2] = (i >>> 8) & 255; msg[at + 3] = i & 255;
+      const ks = blake2b(64, ek, msg);
+      for (let j = 0; j < 64 && i * 64 + j < data.length; j++) out[i * 64 + j] = data[i * 64 + j] ^ ks[j];
+    }
+    return out;
+  }
+
   const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
   const unhex = (s) => new Uint8Array(s.match(/../g).map((x) => parseInt(x, 16)));
-  return { x25519, x25519Public, blake2b, seal, hex, unhex };
+  return { x25519, x25519Public, blake2b, seal, seal2, hex, unhex };
 })();
 
 if (typeof module !== 'undefined') module.exports = hmcrypto;

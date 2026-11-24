@@ -1,0 +1,21 @@
+# CALL_HANGUP: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message CALL_HANGUP 102
+id 65638
+why u8 2
+packet 660000006600010002
+case empty
+id 65638
+why u8 1
+packet 660000006600010001
+case long
+id 65638
+why u8 6
+packet 660000006600010006
+case full
+id 65638
+why u8 1
+packet 660000006600010001
+refuse short 66000000660001
+refuse truncated 6600000066000100
+refuse trailing 66000000660001000200
+refuse enum:why 660000006600010000

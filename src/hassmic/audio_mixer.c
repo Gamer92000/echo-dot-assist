@@ -9,6 +9,7 @@
 #include <time.h>
 #include <unistd.h>
 #include "mixer_api.h"
+#include "mixsteer.h"
 
 static MixerHandle cap, play;
 static int cap_held;
@@ -97,11 +98,13 @@ void play_close(int drain)
     play = NULL;
 }
 
-/* Music streams (Sendspin, Bluetooth speaker).  The mixer's buffer fill is not exposed in a documented way, so the queue
- * is modelled: bytes written minus bytes that real time has consumed since the stream started draining (it drains at
- * exactly the sample rate, and MixerGetBufPlay blocks once its ring is full, which keeps the model honest). */
-struct stream { MixerHandle h; unsigned bps; long long t0, written; atomic_int *gain; float g; };   /* g: the glide's now */
-static struct stream music = { .gain = &music_q16 }, bt = { .gain = &music_q16 }, voip = { .gain = &call_q16 };
+/* Music streams (Sendspin, Bluetooth speaker).  The queue is modelled: bytes written minus bytes that real time has
+ * consumed since the stream started draining (at the sample rate; MixerGetBufPlay blocks once its ring is full).  The
+ * music streams' model is steered towards MixerGetNumBytes (mixsteer.h, issue #225): what the model alone would never
+ * see, an output that drains at a rate of its own or stalls, shows there. */
+struct stream { MixerHandle h; unsigned bps; long long t0, written; atomic_int *gain; float g; int steer; struct mixsteer ms; const char *name; };   /* g: the glide's now */
+static struct stream music = { .gain = &music_q16, .steer = 1, .name = "music" }, bt = { .gain = &music_q16, .steer = 1, .name = "Bluetooth speaker" },
+                     voip = { .gain = &call_q16, .name = "Voip" }, plug = { .gain = &music_q16, .steer = 1, .name = "plugin music" };
 
 static long long raw_us(void)
 {
@@ -119,8 +122,18 @@ static int s_open(struct stream *s, unsigned rate, unsigned channels, const char
 static long long s_queued_us(struct stream *s)
 {
     if (!s->h || !s->t0) return 0;
-    long long q = s->written * 1000000 / s->bps - (raw_us() - s->t0);
-    if (q < 0) { s->t0 = 0; s->written = 0; q = 0; }            /* ran dry: the model restarts with the next write */
+    long long now = raw_us(), q = s->written * 1000000 / s->bps - (now - s->t0);
+    if (q < 0) { s->t0 = 0; s->written = 0; return 0; }         /* ran dry: the model restarts with the next write */
+    if (s->steer && ms_due(&s->ms, now)) {
+        int was = s->ms.locked;
+        long long d = ms_update(&s->ms, (long long)MixerGetNumBytes(s->h) * 1000000 / s->bps, q, now);
+        s->t0 += d; q += d;
+        if (s->ms.locked > 0 && !was)
+            fprintf(stderr, "audio: %s stream: the mixer counts %+.1f ms against the model, its reference\n", s->name, s->ms.base / 1000);
+        else if (s->ms.locked < 0 && !was)
+            fprintf(stderr, "audio: %s stream: the mixer's count never moved, the model alone\n", s->name);
+        if (q < 0) { s->t0 = 0; s->written = 0; return 0; }
+    }
     return q;
 }
 
@@ -129,7 +142,7 @@ static int s_write(struct stream *s, const void *data, size_t len)
     const char *p = data;
     if (!s->h) return -1;
     s_queued_us(s);
-    if (!s->t0) s->t0 = raw_us();
+    if (!s->t0) { s->t0 = raw_us(); ms_reset(&s->ms, s->t0); }
     while (len) {
         int status = 0; unsigned capb = 0;
         char *buf = MixerGetBufPlay(s->h, &status, &capb);
@@ -155,7 +168,13 @@ long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }
 long long music_prime_us(void) { return 0; }                /* the queue is a model at playback speed: no burst */
+long long music_steered_us(void) { return music.h && music.ms.locked > 0 ? music.ms.shift : MUSIC_UNSTEERED; }
 int       bt_open(unsigned rate, unsigned channels) { return s_open(&bt, rate, channels, MIXER_PLAY_MUSIC); }
+/* a music plugin's (plugin.c): a third stream of the music type, as the phone's beside Sendspin's.  Untried on a Dot */
+int       plug_open(unsigned rate, unsigned channels) { return s_open(&plug, rate, channels, MIXER_PLAY_MUSIC); }
+long long plug_queued_us(void) { return s_queued_us(&plug); }
+int       plug_write(const void *data, size_t len) { return s_write(&plug, data, len); }
+void      plug_close(void) { s_close(&plug); }
 long long bt_queued_us(void) { return s_queued_us(&bt); }
 int       bt_write(const void *data, size_t len) { return s_write(&bt, data, len); }
 void      bt_close(void) { s_close(&bt); }

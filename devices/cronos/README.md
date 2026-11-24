@@ -43,6 +43,11 @@ to a group the user is in (`plugdev`, `adbusers`, `sudo` or `wheel`): `uaccess` 
 **Never write lk, preloader, tee1/tee2 (tz) or any other bootloader partition.** This model has no bootrom USB download:
 a brick there is permanent. An install for this model touches `system` and `boot` only.
 
+> **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in Amazon's software,
+> and updates close such holes. Which versions still unlock is not tracked here (the XDA thread may know), and an
+> unlock that does not take can leave the Echo unusable. Never let the Echo update: do not set it up with the Alexa
+> app, and keep it off Wi-Fi until the install puts it there.
+
 ## Install
 
 The guided setup does all of it: `scripts/setup.sh cronos` (`--dry-run` walks the steps without running any). On Linux

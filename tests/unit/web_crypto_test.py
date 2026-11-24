@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, PrivateFormat, NoEncryption
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-cases = {"x": [], "b": [], "s": []}
+cases = {"x": [], "b": [], "s": [], "s2": []}
 for _ in range(20):
     a, b = X25519PrivateKey.generate(), X25519PrivateKey.generate()
     ask = a.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
@@ -25,6 +25,16 @@ for n in [0, 1, 8, 63, 64, 65, 200]:
     k, data, ctr = os.urandom(32), os.urandom(n), 1700000000000000 + n
     cases["s"].append([k.hex(), ctr, data.hex(), seal(k, ctr, data).hex()])
 
+def seal2(k, ctr, data, purpose, nonce=b""):
+    """web.c seal2 (any length: a four-byte block number; the Echo's answers under a nonce of their own), from its
+    description"""
+    ek = hashlib.blake2b(purpose.encode(), key=k, digest_size=32).digest()
+    ks = b"".join(hashlib.blake2b(f"{ctr}\n".encode() + nonce + i.to_bytes(4, "big"), key=ek, digest_size=64).digest() for i in range((len(data) + 63) // 64))
+    return bytes(a ^ b for a, b in zip(data, ks))
+for n, purpose, nonce in ((0, "hassmic seal 2", b""), (65, "hassmic seal 2", b""), (64 * 256 + 7, "hassmic seal 2", b""), (64 * 300, "hassmic seal back 3", os.urandom(16)), (5, "hassmic seal back 3", os.urandom(16))):
+    k, data, ctr = os.urandom(32), os.urandom(n), 1700000000000000 + n
+    cases["s2"].append([k.hex(), ctr, data.hex(), purpose, nonce.hex(), seal2(k, ctr, data, purpose, nonce).hex()])
+
 js = """
 const c = require(process.argv[1]); const t = JSON.parse(require('fs').readFileSync(0, 'utf8')); let bad = 0;
 for (const [sk, pk, pub, shared] of t.x) {
@@ -38,7 +48,10 @@ for (const [d, k, n, want] of t.b) {
 for (const [k, ctr, d, want] of t.s) {
   if (c.hex(c.seal(c.unhex(k), ctr, d ? c.unhex(d) : new Uint8Array(0))) !== want) { bad++; console.log('seal', d.length / 2); }
 }
-console.log(bad ? 'FAIL ' + bad : 'ok   ' + t.x.length + ' X25519, ' + t.b.length + ' BLAKE2b, ' + t.s.length + ' seal'); process.exit(bad ? 1 : 0);
+for (const [k, ctr, d, purpose, nonce, want] of t.s2) {
+  if (c.hex(c.seal2(c.unhex(k), ctr, d ? c.unhex(d) : new Uint8Array(0), purpose, nonce ? c.unhex(nonce) : undefined)) !== want) { bad++; console.log('seal2', d.length / 2, purpose); }
+}
+console.log(bad ? 'FAIL ' + bad : 'ok   ' + t.x.length + ' X25519, ' + t.b.length + ' BLAKE2b, ' + t.s.length + ' seal, ' + t.s2.length + ' seal2 (past 256 blocks)'); process.exit(bad ? 1 : 0);
 """
 r = subprocess.run(["node", "-e", js, os.path.join(ROOT, "web/crypto.js")], input=json.dumps(cases), text=True)
 sys.exit(r.returncode)

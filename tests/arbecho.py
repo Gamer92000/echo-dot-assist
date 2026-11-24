@@ -45,7 +45,8 @@ class Echo:
         self.log = os.path.join(self.state, "log")
         self.api_key = base64.b64encode(os.urandom(32)).decode()
         with open(os.path.join(self.state, "api_key"), "w") as f: f.write(self.api_key + "\n")     # as Home Assistant provisioned it
-        self.env = dict(os.environ, HASSMIC_STATE=self.state, HASSMIC_SETTINGS=os.path.join(self.state, "settings"),
+        self.env = dict(os.environ, HASSMIC_LOGIN_MS="60000:300",     # (browsers log in one after the other here: web.c keeps others back 0.3 s after a press, not 30)
+                                    HASSMIC_STATE=self.state, HASSMIC_SETTINGS=os.path.join(self.state, "settings"),
                         HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(self.state, "play.raw"),
                         HASSMIC_MDNS_FILE=os.path.join(self.state, "none"), HASSMIC_ARB_ADDR=BCAST, HASSMIC_KIOSK_PORT=str(KIOSK),
                         HASSMIC_TEST_SCORE=str(score), HASSMIC_MODELS=os.path.join(self.state, "models"), HASSMIC_ARB_SCALE=str(SCALE))
@@ -108,6 +109,10 @@ class Echo:
         async def handle_stop(abort): self.stops.append((time.monotonic(), abort))
         async def handle_audio(data, *_): self.chunks.append(len(data))
         self.cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio)
+        # a round trip behind the subscriptions (hassmic takes a link's messages in order): back from here, the voice
+        # assistant is subscribed.  Without it a wake word right after (arbitrate()) came between the link and the
+        # subscription: "a client is linked, no voice assistant running, nothing started" (arb-afe on CI, 2026-11-24)
+        await asyncio.wait_for(self.cli.device_info(), 5)
 
     def end_pipeline(self): self.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
 

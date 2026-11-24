@@ -25,6 +25,7 @@
  * to a Bluetooth speaker" below.
  */
 #include "a2dp.h"
+#include "logread.h"
 #include "musiclight.h"
 #include <errno.h>
 #include <math.h>
@@ -635,11 +636,12 @@ static struct { struct link *l; int state, media, rseid, delay, label, sep; unsi
 
 static const struct a2dp_codec *sep_codec(int seid) { return seid >= 1 && seid <= nseps ? &a2dp_codecs[seps[seid - 1]] : NULL; }
 
+static int music_src = -1;              /* our number in the core's table of music sources (a2dp_music_join) */
 static void set_streaming(int on)
 {
     if (atomic_exchange(&streaming, on) == on) return;
     fprintf(stderr, "a2dp: %s\n", on ? "streaming" : "stream stopped");
-    core_music(MUSIC_BLUETOOTH, on);
+    core_music(music_src, on);
 }
 
 static void av_reset(void)
@@ -1021,7 +1023,7 @@ static void speaker_load(void)                  /* address, play on it, latency 
         out.addr = a; out.on = on != 0; out.psrm = 1; atomic_store(&out_enabled, out.on);   /* page scan R1: most devices */
         atomic_store(&out_delay, d >= 0 && d <= 2000 ? d : OUT_DELAY_MS);
         snprintf(out.name, sizeof out.name, "%s", l + n);
-        fprintf(stderr, "a2dp: speaker %012llx \"%s\"%s\n", a, out.name, out.on ? ", playing on it" : "");
+        log_private("a2dp: speaker %012llx \"%s\"%s", a, out.name, out.on ? ", playing on it" : "");
         btout_route(out.on);
     }
     fclose(f);
@@ -1228,7 +1230,7 @@ static void out_found(const unsigned char *r, size_t n, int eir)
         memcpy(name, r + i + 2, k); name[k] = 0;
     }
     if (cand.addr && rssi <= cand.rssi && a != cand.addr) return;
-    if (a != cand.addr) fprintf(stderr, "a2dp: found speaker %012llx \"%s\", %d dBm\n", (unsigned long long)a, name, rssi);
+    if (a != cand.addr) log_private("a2dp: found speaker %012llx \"%s\", %d dBm", (unsigned long long)a, name, rssi);
     cand.addr = a; cand.rssi = rssi; cand.psrm = r[6]; cand.clock = u16(r + 11) | 0x8000;
     if (name[0] || !cand.name[0]) snprintf(cand.name, sizeof cand.name, "%s", name);
 }
@@ -1248,7 +1250,7 @@ static void out_inquiry_done(void)
     key_forget(cand.addr);                              /* in pairing mode: whatever it had with us is gone */
     out.addr = cand.addr; out_name(cand.name); out.on = 1; atomic_store(&out_enabled, 1); btout_route(1);
     out.pairing = 1; out.failures = 0; out.next_page = ms(); out.psrm = cand.psrm; out.clock = cand.clock;
-    fprintf(stderr, "a2dp: pairing with speaker %012llx \"%s\"\n", (unsigned long long)out.addr, cand.name);
+    log_private("a2dp: pairing with speaker %012llx \"%s\"", (unsigned long long)out.addr, cand.name);
     speaker_save();
     search_end();
 }
@@ -1553,7 +1555,7 @@ int a2dp_event(const unsigned char *e, size_t n)
         for (size_t i = 0; i < nl; i++) if ((unsigned char)l->name[i] < 0x20) l->name[i] = ' ';
         if (is_speaker(l) && nl && strcmp(out.name, l->name)) { out_name(l->name); atomic_store(&out_save_req, 1); if (notify) notify(); }
         if (q[0]) fprintf(stderr, "a2dp: %012llx: no name (0x%02x)\n", (unsigned long long)a, q[0]);
-        else fprintf(stderr, "a2dp: %012llx is \"%s\"\n", (unsigned long long)a, l->name);
+        else log_private("a2dp: %012llx is \"%s\"", (unsigned long long)a, l->name);
         l->named = 1;
         maybe_tell(l);
         return 1; }
@@ -1732,6 +1734,9 @@ int a2dp_stop(void)
 }
 
 void a2dp_unyield(void) { if (atomic_exchange(&yielded, 0)) fprintf(stderr, "a2dp: audible again\n"); }
+
+static const struct music_source source = { "bluetooth", a2dp_pause, a2dp_stop, a2dp_button, a2dp_skip, a2dp_volume_changed, a2dp_unyield };
+void a2dp_music_join(void) { if (music_src < 0) music_src = music_register(&source); }
 
 void a2dp_out_search(int on) { atomic_store(&out_search_req, on != 0); hci_poke(); }
 int  a2dp_out_searching(void) { return atomic_load(&out_searching); }

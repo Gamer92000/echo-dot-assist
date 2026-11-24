@@ -21,6 +21,11 @@
  * dir 0 from the caller, 1 from the callee; seq counts frames.  Every frame goes out, silence included (no DTX): the
  * stream is the call's keepalive, LOST_MS without one ends it.  The other side's address comes from its message, then
  * from its authenticated audio (an address that changed mid-call follows).
+ * A packet sent again passes the AEAD as it did the first time (its nonce is in it), and anyone on the LAN can capture
+ * one and send it again from anywhere: so a frame is taken once (a window of the last RX_WIN numbers, as IPsec's,
+ * RFC 4303 3.4.3), and only a frame newer than every other moves the address and keeps the call alive.  Replays had
+ * the Echo play the far side's earlier words, sent this side's room to the replaying host, and kept a call open whose
+ * other Echo had gone (D1 of a review of e8d52b9).  The receiving side's rule alone: the packets are the same as ever
  *
  * The audio itself (codec, gate, echo suppressor, jitter buffer, playout, the call's microphone) is call.c's.
  */
@@ -72,7 +77,11 @@ static struct {
     uint8_t esk[32], epk[32], key[32];
     long long since, sig_at, rx_at, live_at;
     int media;                                          /* call.c's generation while connected, -1 before */
+    /* the frames taken (on_audio): the newest number, and a bit per number RX_WIN back from it (bit 0 the newest) */
+    uint32_t rx_hi, rx_seen; int rx_any;
 } c = { .media = -1 };
+/* call.c's jitter buffer is 32 frames: a frame further back is dropped there all the same */
+#define RX_WIN 32
 static struct { int left; long long at; uint8_t to[8]; uint8_t p[ARB_MSG_MAX]; size_t n; } bye;
 /* Calls that ended: an invite the caller repeated before it heard of the end (a decline, a hang-up while it rang) must
  * not start the call again */
@@ -82,8 +91,13 @@ static uint8_t ended[4][8]; static unsigned ended_n;
  * 20 ms (the other Echo in do not disturb, on the same LAN) went from idle to idle: Home Assistant never saw "calling",
  * and the Echo made no sound.  state -1: a result alone (ringing, or a call refused here: here 1) */
 #define EVQ 16                                          /* a call makes three or four */
-static struct ev { int state, outgoing, result, here, gen; char node[64]; } evq[EVQ];
+static struct ev { int state, outgoing, result, here, gen, late; char node[64]; } evq[EVQ];
 static unsigned ev_in, ev_out;
+/* HASSMIC_DROPIN_LATE_IDLE=<file> (tests): while the file exists, a call's end lets go of the claim at once and the core
+ * hears "idle" LATE_IDLE_MS later, the order before C1's fix (a review of fc43c40): a call begun in between is then kept
+ * shown by core_call's own guard alone, which nothing else reaches since */
+#define LATE_IDLE_MS 800
+static const char *late_idle;
 static int last_result = -1; static unsigned attempts;  /* for the settings page */
 
 static long long now_ms(void)
@@ -96,9 +110,28 @@ static long long now_ms(void)
  * was refused here, before it started) */
 static void ev_push(int state, const char *node, int outgoing, int result, int here)
 {
+    /* Full (the core held up while Home Assistant or the page placed call after call): an event the core has not seen
+     * goes, the oldest result alone first, else the oldest state of a call that is over but the last "idle".  Never the
+     * call's own states (its "calling" sends the first invite: tell_core) nor the last "idle": the oldest went whatever
+     * it was, and with the "idle" the core showed a call that was over (D5 of a review of e8d52b9).  Those are four at
+     * most of EVQ.  Of a finished call's states its "calling"/"live" go before its "idle": without that "idle" the core
+     * went from "live" to the next call's "calling" and never ran what an end does after "live" (music_unyield: a phone
+     * without remote control stayed silent; a review of e10001c) */
+    if (ev_in - ev_out == EVQ) {
+        unsigned drop = ev_in, last_idle = ev_in;
+        for (unsigned i = ev_out; i != ev_in; i++) if (evq[i % EVQ].state == DROPIN_IDLE) last_idle = i;
+        for (int pass = 0; pass < 3 && drop == ev_in; pass++)
+            for (unsigned i = ev_out; i != ev_in; i++) {
+                const struct ev *o = &evq[i % EVQ];
+                int finished = i != last_idle && !(o->state >= 0 && c.state != DROPIN_IDLE && o->gen == c.gen);
+                if (pass == 0 ? o->state < 0 : pass == 1 ? finished && o->state != DROPIN_IDLE : finished) { drop = i; break; }
+            }
+        if (drop == ev_in) drop = ev_out;                /* (cannot be: kept are four at most) */
+        for (unsigned i = drop; i != ev_out; i--) evq[i % EVQ] = evq[(i - 1) % EVQ];      /* the older ones up by one */
+        ev_out++;
+    }
     struct ev *e = &evq[ev_in++ % EVQ];
-    if (ev_in - ev_out > EVQ) ev_out = ev_in - EVQ;     /* never seen: the oldest goes */
-    e->state = state; e->outgoing = outgoing; e->result = result; e->here = here; e->gen = c.gen;
+    e->state = state; e->outgoing = outgoing; e->result = result; e->here = here; e->gen = c.gen; e->late = 0;
     snprintf(e->node, sizeof e->node, "%s", node);
     if (result >= 0) last_result = result;
     atomic_store(&notify, 1);
@@ -165,8 +198,8 @@ static void send_audio(const uint8_t *frame, size_t len, uint32_t seq, void *arg
 static void go_live(long long now)
 {
     ev_push(DROPIN_LIVE, c.node, c.outgoing, c.outgoing ? DROPIN_R_CONNECTED : -1, 0);
-    c.state = DROPIN_LIVE; c.live_at = c.rx_at = now;
-    c.media = call_begin(send_audio, NULL);
+    c.state = DROPIN_LIVE; c.live_at = c.rx_at = now; c.rx_any = 0; c.rx_seen = 0;
+    c.media = call_begin(CALL_DROPIN, CALL_CODEC_OPUS, send_audio, NULL);
     fprintf(stderr, "drop in: connected with %s\n", c.node);
 }
 
@@ -188,6 +221,10 @@ static void end_call(const char *why, int tell, int result)
     }
     memcpy(ended[ended_n++ % 4], c.id, 8);
     c.state = DROPIN_IDLE; c.gen++; c.keyed = 0; c.rang = 0;
+    /* The claim (call.h) stays Drop In's until the core has heard "idle" (tell_core): let go here, a plugin's call
+     * could begin in the 20 ms before the loop tells the core, and this call's "idle" then took the ring, the sounds,
+     * the screen and the music's pause away from it while it rang or heard the room (C1 of a review of fc43c40) */
+    if (late_idle && !access(late_idle, F_OK)) { evq[(ev_in - 1) % EVQ].late = 1; call_release(CALL_DROPIN); }      /* (tests) */
     crypto_wipe(c.esk, sizeof c.esk); crypto_wipe(c.key, sizeof c.key);
 }
 
@@ -209,10 +246,20 @@ static void tell_core(void)
     for (;;) {
         struct ev e;
         pthread_mutex_lock(&dl);
-        if (ev_out == ev_in) { pthread_mutex_unlock(&dl); break; }
+        if (ev_out == ev_in) {
+            /* The core has heard all there is, the last of it "idle" or no call: the claim goes, if it is Drop In's.  Not
+             * at each "idle": a call placed on the claim the last one left (dropin_call, an invite) before that call's
+             * "idle" was told would lose it there, and its own "calling" and "idle" then came from a call without the
+             * claim, which core_call does not show: Home Assistant never saw it and the Echo made no sound (D6 of a
+             * review of e8d52b9).  Under dl, as dropin_call takes it: no call of Drop In's begins in between */
+            if (c.state == DROPIN_IDLE) call_release(CALL_DROPIN);
+            pthread_mutex_unlock(&dl);
+            break;
+        }
         e = evq[ev_out++ % EVQ];
         pthread_mutex_unlock(&dl);
-        if (e.state >= 0) core_dropin(e.state, e.node, e.outgoing);
+        if (e.late) usleep(LATE_IDLE_MS * 1000);
+        if (e.state >= 0) core_call(CALL_DROPIN, e.state, e.node, e.outgoing);
         if (e.result >= 0) core_dropin_result(e.result, e.node, e.here);
         if (e.state == DROPIN_CALLING && e.outgoing) {
             pthread_mutex_lock(&dl);
@@ -271,7 +318,7 @@ int dropin_call(const char *target, char *err, size_t errsz)
     char node[64]; uint8_t id[8]; unsigned ip; int r = -1;
     core_node_of(target, node);
     if (!running) { snprintf(err, errsz, "Drop In is not running on this Echo"); return -1; }       /* no loop to tell */
-    const char *no = core_dropin_refusal(0);
+    const char *no = core_call_refusal(0);
     int self = !strcmp(node, core_node_name()), member = !self && !arb_member(node, id, &ip);
     pthread_mutex_lock(&dl);
     attempts++;
@@ -280,6 +327,8 @@ int dropin_call(const char *target, char *err, size_t errsz)
     else if (!enabled) { snprintf(err, errsz, "Drop In is off on this Echo"); r = DROPIN_R_FAILED; }
     else if (no) { snprintf(err, errsz, "%s", no); r = DROPIN_R_MUTED_HERE; }
     else if (c.state) { snprintf(err, errsz, "already in a Drop In with %s", c.node); r = DROPIN_R_BUSY_HERE; }
+    /* a plugin's call (call.h's claim): last, the claim is this call's from here on */
+    else if (call_claim(CALL_DROPIN)) { snprintf(err, errsz, "already in another call"); r = DROPIN_R_BUSY_HERE; }
     if (r >= 0) { ev_push(-1, node, 1, r, 1); pthread_mutex_unlock(&dl); return -1; }
     fresh_call(id, node, ip, 1);
     ws_random(c.id, 8);
@@ -331,7 +380,7 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
     snprintf(reason, sizeof reason, "%.*s", p[43], (const char *)p + 44);
     for (char *q = reason; *q; q++) if ((unsigned char)*q < 0x20) *q = ' ';
     /* before dl: core_lock comes first */
-    const char *no = kind == M_INVITE ? core_dropin_refusal(1) : NULL;
+    const char *no = kind == M_INVITE ? core_call_refusal(1) : NULL;
     long long now = now_ms();
     pthread_mutex_lock(&dl);
     int same = c.state && !memcmp(c.id, id, 8) && !memcmp(c.peer, from, 8);
@@ -344,15 +393,21 @@ void dropin_message(const unsigned char from[8], const char *node, unsigned ip, 
         }
         { int old = 0; for (int i = 0; i < 4; i++) old |= !memcmp(ended[i], id, 8);
           if (old) break; }                             /* a late copy of an invite for a call that is over */
-        if (!enabled || no || c.state || !port || !node[0]) {
-            const char *why = !enabled ? "Drop In is off there" : no ? no : c.state ? "busy in another Drop In" : "no address";
+        /* A plugin's call has the claim (call.h): busy as for another Drop In, in the words every build with Drop In maps
+         * to "busy" (refusal()); words of its own would be "failed" on the Echos released before.  Drop In's own claim
+         * with no call is the last call's, kept until the core heard its end (tell_core): this call takes it over */
+        { int other = call_claimed() != CALL_NOBODY && call_claimed() != CALL_DROPIN;
+        if (!enabled || no || c.state || !port || !node[0] || other) {
+            const char *why = !enabled ? "Drop In is off there" : no ? no : c.state || other ? "busy in another Drop In" : "no address";
             fprintf(stderr, "drop in: call from %s refused: %s\n", node[0] ? node : "an Echo", why);
             send_to(from, id, M_REFUSE, why);
             break;
-        }
+        } }
         fresh_call(from, node, ip, 0);
         memcpy(c.id, id, 8); c.port = htons((uint16_t)port);
         if (derive(epk)) { send_to(from, id, M_REFUSE, "no key"); c.state = DROPIN_IDLE; break; }
+        /* (taken between the look above and here: refused as busy, as above) */
+        if (call_claim(CALL_DROPIN)) { c.keyed = 0; crypto_wipe(c.key, sizeof c.key); send_to(from, id, M_REFUSE, "busy in another Drop In"); break; }
         if (ask) { c.state = DROPIN_RINGING; ev_push(DROPIN_RINGING, c.node, 0, -1, 0);
                    fprintf(stderr, "drop in: %s calls, ringing until the action button\n", node); send_msg(M_RINGING, NULL); }
         else { fprintf(stderr, "drop in: %s drops in\n", node); answer(); }
@@ -417,8 +472,16 @@ static void on_audio(const uint8_t *p, size_t n, const struct sockaddr_in *from)
     if (c.state != DROPIN_LIVE || !c.keyed || memcmp(p + 4, c.id, 8) || p[12] != (uint8_t)c.outgoing) { pthread_mutex_unlock(&dl); return; }
     memcpy(nonce, p + 4, 13);
     if (crypto_aead_unlock(frame, p + n - 16, c.key, nonce, p, 17, p + 17, n - 17 - 16)) { pthread_mutex_unlock(&dl); return; }
-    c.rx_at = now_ms(); media = c.media;
-    c.ip = from->sin_addr.s_addr; c.port = from->sin_port;     /* authenticated: where it is now */
+    /* taken once (the head's comment): only after the AEAD, so that nothing but the other Echo's own frames moves it */
+    uint32_t ahead = seq - c.rx_hi, back = c.rx_hi - seq;
+    if (!c.rx_any || (int32_t)ahead > 0) {              /* the newest yet: the other Echo is there, and where it sends from */
+        c.rx_seen = !c.rx_any || ahead >= RX_WIN ? 1 : c.rx_seen << ahead | 1;
+        c.rx_hi = seq; c.rx_any = 1;
+        c.rx_at = now_ms();
+        c.ip = from->sin_addr.s_addr; c.port = from->sin_port;
+    } else if (back >= RX_WIN || (c.rx_seen >> back & 1)) { pthread_mutex_unlock(&dl); return; }   /* too old, or taken already */
+    else c.rx_seen |= 1u << back;                       /* late, not seen yet: played if call.c still can */
+    media = c.media;
     pthread_mutex_unlock(&dl);
     call_rx(media, seq, frame, n - 17 - 16);
 }
@@ -471,6 +534,7 @@ int dropin_start(int port)
     const char *times = getenv("HASSMIC_DROPIN_TIMES");
     if (!arb_running()) return -1;
     if (times) sscanf(times, "%d %d", &answer_ms, &lost_ms);
+    late_idle = getenv("HASSMIC_DROPIN_LATE_IDLE");
     arb_self(self_id);
     if ((sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) < 0) { perror("drop in: socket"); return -1; }
     memset(&a, 0, sizeof a); a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(INADDR_ANY);

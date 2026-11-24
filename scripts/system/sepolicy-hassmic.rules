@@ -9,6 +9,16 @@
 # declares it for rules of its own; the repeat there only logs "Type hassmic already exists".
 # This domain is enforcing and may do everything su may, except:
 type hassmic domain
+# The plugins' own domain and the one file type it executes (docs/plugins.md 2.7), declared here so that hassmic's
+# `*` below takes them in (it may do to them what it may do to anything, the denies after it included: no domain
+# change into them, no ptrace of a plugin).  Neither has `domain` or `file_type`: every rule the policy writes for
+# those attributes (any domain may read /proc, reach the property socket, use binder ...) would be theirs, and the
+# plugin's domain is to have no rule but its own below.  An attribute of their own instead, which no rule names:
+# magiskpolicy wants one ("type x" alone leaves the attribute "" and prints "does not exist", which the install
+# takes for a dropped rule)
+attribute hassmic_plugin_type
+type hassmic_plugin hassmic_plugin_type
+type hassmic_plugin_file hassmic_plugin_type
 allow hassmic * * *
 #   set any property (ctl.start and the rest are properties too); it reads them through files, not this
 deny hassmic * property_service *
@@ -27,3 +37,53 @@ deny hassmic * binder { set_context_mgr }
 deny hassmic * security { setenforce load_policy setbool setsecparam setcheckreqprot read_policy }
 # root's services start it (runas -Z: its own context, just before the exec; /data is nosuid)
 allow su hassmic process { dyntransition transition siginh rlimitinh noatsecure }
+
+# ---- The plugins' domain, u:r:hassmic_plugin:s0 (docs/plugins.md 2.3 step 6, 2.7).  The launcher (plugrun, root's, in
+# su: main.sh) writes it into the forked child's own context after the user change, before the filter and the exec;
+# where the policy has no such type it takes hassmic's, else the child stays in su, and READY says which.  The wall
+# for the day the system call filter has a hole: nothing but what follows, enforcing.  Not tried on an Echo yet.
+#   entered from su only (the launcher's child writes /proc/self/attr/current; su is permissive on every model, so
+#   these say what is meant rather than what is checked), and the launcher kills it and reads its CPU time
+allow su su process setcurrent
+allow su hassmic_plugin process { dyntransition sigkill signal signull sigstop }
+allow su hassmic_plugin dir { search getattr }
+allow su hassmic_plugin file { read open getattr }
+#   its own program, the one file of that type: hassmic labels it so before each start (plugin.c program_label,
+#   through the descriptor it hands the launcher), and the exec goes by /proc/self/fd/4 (2.3 step 9): the path's
+#   directories, the magic link, the file opened for the exec and mapped
+allow hassmic_plugin hassmic_plugin_file file { read open getattr map execute execute_no_trans }
+allow hassmic_plugin { rootfs proc } dir search
+allow hassmic_plugin proc lnk_file read
+allow hassmic_plugin hassmic_plugin dir search
+allow hassmic_plugin hassmic_plugin lnk_file read
+#   itself: threads (clone is fork to SELinux), signals within the domain (abort, pthread_kill), its CPU affinity
+#   (Go's start); and the SIGCHLD its end sends the launcher.  The domain is every plugin's, one type for all: these
+#   rules, and `search` of /proc/<pid> and its links above, let any plugin signal another and look into its /proc
+#   directory as far as SELinux goes.  What keeps plugins apart is not SELinux but each slot's own user (6900 + slot:
+#   no signal to another user, its /proc files are that user's) and the filter (tgkill only to its own pid, kill not
+#   at all: sdk/filter.def); a category per slot (MCS) would make it a third wall, and is not built
+allow hassmic_plugin hassmic_plugin process { fork sigkill sigstop signull signal getsched }
+allow hassmic_plugin su process sigchld
+#   the descriptors it was given and nothing it could open: hassmic's control socket, streams and sockets (unix pairs
+#   are unix_stream_socket, SOCK_SEQPACKET too; net.* the TCP and UDP sockets hassmic made), hassmic's stderr pipe,
+#   the launcher's /dev/null on 0 and 1 and its report pipe (a step that fails before the exec), and the read-only
+#   descriptors of the files the owner gave it (`files`: hassmic's, in /data).  read without open: only through a
+#   descriptor handed over.  No create, connect, bind or name_* anywhere: a socket of its own is the filter's to
+#   refuse and refused here again
+allow hassmic_plugin { hassmic su } fd use
+allow hassmic_plugin hassmic unix_stream_socket { read write getattr getopt setopt shutdown }
+allow hassmic_plugin hassmic { tcp_socket udp_socket } { read write getattr getopt setopt shutdown }
+allow hassmic_plugin hassmic fifo_file { write getattr }
+allow hassmic_plugin su fifo_file { write getattr }
+#   and the pipes it makes itself (pipe2, which the filter allows: a self-pipe to wake its own poll, Go's netpoll
+#   break): pipefs labels a pipe with its maker's domain (donut, checkers, athena, cannoli), so without this it could
+#   make one and neither write nor read it
+allow hassmic_plugin hassmic_plugin fifo_file { read write getattr }
+allow hassmic_plugin null_device chr_file { read write getattr }
+allow hassmic_plugin system_data_file file { read getattr }
+#   hassmic gives the program its type: from the one /data gives every file of its own (/data(/.*)? in every model's
+#   file_contexts), to the plugins' and to nothing else (the deny above stays for every other pair), on the filesystem
+#   /data is
+allow hassmic system_data_file file relabelfrom
+allow hassmic hassmic_plugin_file file relabelto
+allow hassmic_plugin_file labeledfs filesystem associate

@@ -1,0 +1,6 @@
+# STOP: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message STOP 8
+id 65544
+packet 0800000008000100
+refuse short 08000000080001
+refuse trailing 080000000800010000

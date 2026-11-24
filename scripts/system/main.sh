@@ -10,6 +10,8 @@
 #   ARGS=""                     optional extra hassmic arguments
 #   MODE=stock-online           optional: stock Alexa with internet, e.g. to let it fetch a wake-word model.  hassmic stays
 #                               off, nothing is stopped or blocked except firmware updates (lockdown.sh ota-only)
+#   PLUGINS=0                   optional: no plugins at all (docs/plugins.md): hassmic starts without their launcher.
+#                               An Echo whose wake word engine is a plugin then listens for Amazon's wake word
 #   ADB_WIFI=1                  optional: leave adb over Wi-Fi open (root shell for the whole network, no password; read
 #                               by lockdown.sh).  Without it: closed, opened for 30 min from the settings page (action button)
 umask 022                                   # init gives us 077; what we create must be readable by the daemon's user
@@ -33,6 +35,21 @@ stamped() { while IFS= read -r l; do echo "$(stamp) $l"; done; }
 # anything else happens (the factory reset empties its state, the firewall rules are loaded from here), svc_stop waits
 # until init says so ("stopping" until it reaped it), 20 s at most; false if it is still there then.
 svc_restart() { setprop ctl.restart $1; }
+# init's stop and restart kill the service's process group with SIGKILL (Android 7.1 and 9: the Dot 3's light ring
+# stayed lit, src/hassmic/ringlive.c): hassmic never sees it, and the plugins' launcher (a session of its own) kills every
+# plugin as hassmic's socket closes.  So before a restart of ours hassmic is asked to end (SIGTERM: it tells its plugins
+# STOP and waits up to 2 s for them to keep what they keep, main.c on_term), and waited for, 3 s at most.  pidof lists
+# its log reader too, which ignores the signal and ends with it
+hm_term() {
+    ps=$(pidof hassmic) i=0
+    [ -n "$ps" ] || return 0
+    kill -TERM $ps 2>/dev/null
+    while [ $i -lt 6 ]; do
+        alive=; for p in $ps; do kill -0 $p 2>/dev/null && alive=1; done
+        [ -n "$alive" ] || return 0
+        sleep 0.5; i=$((i + 1))
+    done
+}
 svc_stop() {
     stop $1
     i=0
@@ -694,7 +711,8 @@ wifi_awake() {
     awake_said=$r
 }
 
-# While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
+# While the settings page switches networks or sets the address (wifi.sh holds its lock), the link is that script's
+# business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
 netwatch() {
@@ -725,6 +743,12 @@ netwatch() {
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         psk_only
+        # a fixed address (issue #191, wifi.sh keep): wifisvc's dhcpcd-wlan0 (a boot, a lost network) gives way to it;
+        # the Dots only (Android's framework keeps it with the network), and only where one is set or still runs.  Not
+        # while wifisvc runs: it starts its dhcpcd again (Dot 2, 2026-11-24: set at boot+34 s, DHCP again, set once
+        # more at boot+50 s once the look above had stopped wifisvc)
+        [ -z "$ANDROID" ] && [ -f $D/wifi.sh ] && { [ -f $WIFI/address ] || [ "$(getprop init.svc.dhcpcd-static)" = running ]; } &&
+            { [ -z "$WIFI_SERVICE" ] || [ "$(getprop init.svc.$WIFI_SERVICE)" != running ]; } && sh $D/wifi.sh keep
         android_tell
         ledc_watch
         alexa_back
@@ -742,6 +766,29 @@ netwatch() {
 # Assistant, update.c).  The release key of the copy that runs wins over the factory copy's: both are root's, written
 # from bundles that verified, and so a new release key can come with an update signed by the old one.
 release_pub() { for k in $D/release.pub $SYS/release.pub; do [ -s $k ] && { echo $k; return; }; done; }
+# A third key (issue #175): the one the settings page's "Sources" named for updates from a server of the owner's, or
+# hassmic's own where the owner chose no signature check there (src/hassmic/sources.c).  hassmic asks for it in
+# state/update-key (its 32 bytes, or an empty file to take it away), only once an approved browser asked for it and
+# the action button was pressed for that very choice (web.c W_SOURCE); root keeps it in a file of its own, read by
+# hassmic to show whether root holds it.  This is the one place where root trusts something hassmic says about what
+# root installs: code that took hassmic over could name its own key here (docs/SECURITY.md "Updates" says so).
+PAGE_PUB=/data/local/hassmic/page-update.pub
+page_pub() {
+    local f n
+    f=$(take update-key) || return 0
+    n=$(wc -c < $f 2>/dev/null | tr -cd 0-9)
+    if [ "$n" = 32 ]; then
+        if cmp -s $f $PAGE_PUB; then :
+        elif cp $f $PAGE_PUB.new && chmod 644 $PAGE_PUB.new && mv -f $PAGE_PUB.new $PAGE_PUB; then
+            say "== update key of the settings page (Sources) trusted beside the release key: $(od -An -tx1 -v $PAGE_PUB | tr -d ' \n' | cut -c1-16)..."
+        else rm -f $PAGE_PUB.new; say "== update key of the settings page: cannot be kept"
+        fi
+    elif [ "$n" = 0 ]; then
+        [ -e $PAGE_PUB ] && { rm -f $PAGE_PUB; say "== update key of the settings page (Sources) no longer trusted"; }
+    else say "== update key of the settings page: not 32 bytes ($n), ignored"
+    fi
+    rm -f $f
+}
 rejected() { say "== update rejected: $1"; rm -rf $new; echo "FAILED $1" > $RES; }
 # The installed update passed its self test (hassmic left state/ota/healthy: started, wake word engine loaded, a second
 # of microphone audio; main.c): it becomes the factory copy on the system partition, bootstrap included, so the Echo
@@ -759,6 +806,54 @@ factory() {
     else echo "$out" | stamped >&2; echo "FAILED $(echo "$out" | tail -1)"
     fi
 }
+# hassmic's word that its self test passed, taken: `healthy` names the build that passed (ota.c ota_healthy, its
+# VERSION as the bundle's), and only the update installed now is promoted.  It said "1", and the update installed in
+# the seconds between a late pass of the build before (main.c selftest_thread asks every 10 s while the wake word
+# plugin holds it) and that build's end was promoted untested at the next look: factory() saw it installed and
+# running (a review of 1d704e9, U1).  A "1" left by a build before this rule names no build and goes.  Taken into
+# root's own folder first and read only as a plain file with one name (take() says why), at most 128 bytes, never
+# said: a file of root's linked there is only compared.  Called at the top of every look, and by the install before
+# it installs: one that came with the request is the build that runs now, the update installed until then
+healthy() {
+    local t=$TAKEN.healthy hv= cv cur
+    [ -e $IN/healthy ] || [ -L $IN/healthy ] || return 0
+    rm -rf $t; mv -f $IN/healthy $t 2>/dev/null || return 0
+    if [ -f $t ] && [ ! -L $t ] && set -- $(ls -ld $t 2>/dev/null) && [ "$2" = 1 ]; then
+        hv=$(dd if=$t bs=128 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9.+-')
+    fi
+    rm -rf $t
+    cur=$(readlink $OTA/current)
+    # every start says so; only an update that is not the factory copy yet has anything to do
+    [ -n "$cur" ] && [ -f $cur/VERSION ] && ! cmp -s $cur/VERSION $SYS/VERSION || return 0
+    cv=$(dd if=$cur/VERSION bs=128 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9.+-')
+    if [ -n "$hv" ] && [ "$hv" = "$cv" ]; then say "== factory copy: $(factory "$(cat $cur/VERSION)")"       # its stderr: the log
+    else say "== factory copy: the self test that passed was another build's than the installed update ${cv:-?}; nothing written"
+    fi
+}
+# The request's nonce (ota.c stage: "1 <32 hex digits>"), printed for the answer's second line, "nonce <hex>":
+# hassmic takes an answer only with its own request's nonce.  Without it, an answer root wrote to a request it took
+# after hassmic had stopped waiting for it (a minute) was read by the handoff that came next as its own: the pusher was
+# told the other's words, the wake word plugin's mark kept for a bundle root then installed (a review of 9bbfd66, W3).
+# Called in hassmic's folder (ota_watch's cd -P), which may hold anything by that name: taken into root's own folder
+# and read only as a plain file with one name (take() says why), 80 bytes, hex digits and spaces kept, never said;
+# printed only as 32 hex digits, else "-" (a request of a hassmic before the nonce: it reads the first line only).
+# The request goes here and nowhere else: ota_watch deleted it again after this, and a request hassmic wrote in between
+# (the next handoff, once it stopped waiting for this one) went with it, its bundle answered under this one's nonce and
+# its own answer never written (a review of 06683b6, X2); only one that cannot be taken is deleted where it is
+ota_nonce() {
+    local t=$TAKEN.request n=
+    rm -rf $t
+    if mv -f request $t 2>/dev/null; then
+        if [ -f $t ] && [ ! -L $t ] && set -- $(ls -ld $t 2>/dev/null) && [ "$2" = 1 ]; then
+            set -- $(dd if=$t bs=80 count=1 2>/dev/null | tr -cd '0-9a-f '); n=$2
+        fi
+    else rm -rf request                                 # (rm never follows a link)
+    fi
+    rm -rf $t
+    case "$n" in *[!0-9a-f]*) n=;; esac
+    [ ${#n} = 32 ] || n=-
+    echo $n
+}
 ota_watch() {
     IN=/data/local/hassmic/state/ota
     # The answer is written and chowned in root's own folder and only then renamed into state/ota: in the daemon's
@@ -771,20 +866,13 @@ ota_watch() {
     # before they are read (no FIFO that holds this loop, nothing swapped between the check and the install).
     RES=$OTA/result.tmp INB=$OTA/in INREAL=$(cd -P /data/local/hassmic/state && pwd -P)/ota inbad=
     while sleep 2; do
-        if [ -f $IN/healthy ]; then
-            rm -f $IN/healthy
-            cur=$(readlink $OTA/current)
-            # every start says so; only an update that is not the factory copy yet has anything to do
-            if [ -n "$cur" ] && [ -f $cur/VERSION ] && ! cmp -s $cur/VERSION $SYS/VERSION; then
-                say "== factory copy: $(factory "$(cat $cur/VERSION)")"       # its stderr: the log
-            fi
-        fi
+        healthy
         # artifacts another Echo's page copied here (src/hassmic/artifacts.c): into the models folders, which are root's
         if [ -f /data/local/hassmic/state/artifacts/request ]; then
             if out=$(DAEMON_USER=$DAEMON_USER READ_AS="$D/runas $DAEMON_USER $DAEMON_GROUPS" \
                      sh $D/artifact-install.sh /data/local/hassmic/state /data/local/hassmic 2>&1); then
                 say "== artifacts installed, restarting hassmic: $(echo $out)"
-                svc_restart hassmic
+                hm_term; svc_restart hassmic
             else say "== artifacts not installed: $(echo $out)"
             fi
         fi
@@ -825,6 +913,7 @@ ota_watch() {
                 [ -f $D/wifi.sh ] && sh $D/wifi.sh forget 2>&1 | stamped
                 st=/data/local/hassmic/state
                 for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
+                rm -f $PAGE_PUB                     # (the settings page's Sources: gone with state/sources)
                 rm -f /data/misc/avahi/services/hassmic.service
                 start hassmic
                 say "== factory reset done, the satellite starts again"
@@ -838,15 +927,16 @@ ota_watch() {
         # before it, too).
         if f=$(take reboot); then
             why=$(dd if=$f bs=40 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9 '); rm -f $f
-            say "== reboot (${why:-asked for})"; sync; setprop sys.powerctl reboot; sleep 30
+            say "== reboot (${why:-asked for})"; hm_term; sync; setprop sys.powerctl reboot; sleep 30
         fi
         # asked for on the settings page: a rename (main.c core_rename; the name is in what the satellite builds at start,
         # mDNS and avahi's host name included) or the wake word moving to or from Home Assistant (core_wake_engine)
         if f=$(take restart); then
             why=$(dd if=$f bs=40 count=1 2>/dev/null | tr -cd 'a-z '); rm -f $f
             say "== ${why:-restart} asked for on the settings page, restarting hassmic"
-            svc_restart hassmic
+            hm_term; svc_restart hassmic
         fi
+        page_pub                                    # (before an update the same look may install)
         [ -f $IN/request ] || continue
         if ! cd -P $IN 2>/dev/null || [ "$(pwd -P)" != "$INREAL" ]; then
             cd /; rm -f $IN 2>/dev/null                 # a link goes (rm without -r never follows one); a folder stays
@@ -854,18 +944,22 @@ ota_watch() {
             inbad=1; continue
         fi
         inbad=
-        rm -rf request result                           # a folder by either name too (rm never follows a link)
+        # the build that runs, before the next is installed (above).  From / in a subshell, as at the top of the look:
+        # factory() runs sysinstall.sh as root, and here the folder it ran in was the daemon's own (a review of 0119caf)
+        (cd /; healthy)
+        nonce=$(ota_nonce)                              # (takes the request; a newer one is the next look's)
+        rm -rf result                                   # a folder by that name too (rm never follows a link)
         rm -rf $INB; mkdir $INB; mv -f bundle bundle.sig $INB/ 2>/dev/null
         odd=; for f in $INB/bundle $INB/bundle.sig; do [ -f $f ] && [ ! -L $f ] || odd=1; done
         new=$OTA/v$(cut -d. -f1 /proc/uptime)-$$
         key=
-        [ -z "$odd" ] && for k in $SYS/update.pub $(release_pub); do
+        [ -z "$odd" ] && for k in $SYS/update.pub $(release_pub) $PAGE_PUB; do
             [ -s $k ] && $SYS/otatool verify $k $INB/bundle $INB/bundle.sig > /dev/null 2>&1 && { key=$k; break; }
         done
         rm -f $RES
         if [ ! -f $SYS/update.pub ]; then echo "FAILED no update key on this device (install-system.sh puts it there)" > $RES
         elif [ -n "$odd" ]; then rejected "the bundle or its signature is missing or not a plain file"
-        elif [ -z "$key" ]; then rejected "the signature verifies against neither the update key nor the release key"
+        elif [ -z "$key" ]; then rejected "the signature verifies against neither the update key, the release key nor the key of the settings page's Sources"
         elif ! ver=$($SYS/otatool install $key $INB/bundle $INB/bundle.sig $new 2>&1); then
             rejected "$(echo "$ver" | tail -1)"
         elif prod=$(. $new/device.conf 2>/dev/null && echo "$PRODUCT"); [ "$prod" != "$(getprop ro.product.device)" ]; then
@@ -890,11 +984,12 @@ ota_watch() {
         fi
         rm -rf $INB
         okv=; grep -q "^OK" $RES && okv=1                # read here, not back from the daemon's folder
+        echo "nonce $nonce" >> $RES                     # (ota_nonce)
         chown $DAEMON_USER $RES; chmod 644 $RES; mv -f $RES result
         cd /
         if [ -n "$okv" ]; then
             sleep 2                                     # let hassmic relay the result to the pusher
-            svc_restart hassmic
+            hm_term; svc_restart hassmic
             exec sh $SYS/boot.sh firewall               # and run the new firewall script as well
         fi
     done
@@ -1107,7 +1202,12 @@ satellite)
         # in its own SELinux domain (scripts/system/sepolicy-hassmic.rules: su, which the unlock makes permissive, lets
         # any process set any property, adb's port and ctl.start included); runas says when the policy has none yet
         # LED_GID: the ring's frame (led_frame above), only where there is one
-        $D/runas -r 3990 -Z u:r:hassmic:s0 $DAEMON_USER $DAEMON_GROUPS${LED_FRAME:+,$LED_GID} \
+        # The plugins' launcher in front (plugrun, docs/plugins.md 2.1): it makes a socketpair, leaves a root process
+        # behind that starts plugins in their sandbox, and becomes runas: hassmic's pid and exit code stay what they
+        # are.  Root opens no file of hassmic's for it: programs and sockets arrive as descriptors.  Without it (a
+        # bundle from before plugins, PLUGINS=0) the line as it always was, and hassmic has no plugins
+        PLUG=; [ "${PLUGINS:-1}" = 0 ] || [ ! -x $D/plugrun ] || PLUG="$D/plugrun -L --"
+        HASSMIC_PLUGINS=${PLUGINS:-1} $PLUG $D/runas -r 3990 -Z u:r:hassmic:s0 $DAEMON_USER $DAEMON_GROUPS${LED_FRAME:+,$LED_GID} \
             $BIN -P ${PROTO:-esphome} $ARGS >> $LOG 2>&1
         say "hassmic exited rc=$?, restart in 3 s" >> $LOG
         # An update whose daemon does not stay up is worse than no update: with hassmic down there is no push port either.

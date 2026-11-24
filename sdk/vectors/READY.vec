@@ -1,0 +1,6 @@
+# READY: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message READY 5
+id 65541
+packet 0500000005000100
+refuse short 05000000050001
+refuse trailing 050000000500010000

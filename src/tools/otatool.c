@@ -7,6 +7,7 @@
  *   otatool install PUBLIC BUNDLE SIG DESTDIR           verify, then unpack into DESTDIR (must not exist yet)
  *   otatool push    HOST PORT BUNDLE SIG                send to a running hassmic, print its answer (exit 0 on "OK ...")
  *   otatool adb     HOST PORT SECRET                    open adb over Wi-Fi on it for 30 min (sign its challenge)
+ *   otatool plugin  HOST PORT SECRET PACKAGE            an official plugin's .hmp to it (scripts/ota-push.sh --plugin)
  *   otatool remount rw|ro PATH                          remount the file system PATH lives on (device, root)
  *   otatool chgrp   GID PATH                            a file's group by number (device, root: main.sh's light ring live)
  *
@@ -21,6 +22,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <stdint.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +33,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "../third_party/monocypher.h"
+#include "../include/edkey.h"
 
 static uint8_t *slurp(const char *path, size_t *len)
 {
@@ -97,6 +100,7 @@ static int verify_install(const char *pubpath, const char *bundle, const char *s
 {
     size_t pl, bl, sl; uint8_t *pk = slurp(pubpath, &pl), *b = slurp(bundle, &bl), *sig = slurp(sigpath, &sl); char version[64] = "";
     if (!pk || !b || !sig || pl != 32 || sl != 64) { fprintf(stderr, "otatool: bad key, bundle or signature file\n"); return 1; }
+    if (ed_key_weak(pk)) { fprintf(stderr, "otatool: %s: a key under which any signature holds (small order): no key, nothing installed\n", pubpath); return 1; }
     if (crypto_eddsa_check(sig, pk, b, bl)) { fprintf(stderr, "otatool: SIGNATURE DOES NOT VERIFY, nothing installed\n"); return 1; }
 
     const char *p = (const char *)b, *end = p + bl;
@@ -127,6 +131,9 @@ static int verify_install(const char *pubpath, const char *bundle, const char *s
 static int connect_to(const char *host, const char *port)
 {
     struct addrinfo hints = { 0 }, *ai;
+    /* an Echo that refuses ("FAILED busy ...") closes while we still send: the write fails, and the line it left is
+     * read all the same (push, challenge) instead of dying of the signal without a word */
+    signal(SIGPIPE, SIG_IGN);
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(host, port, &hints, &ai)) { fprintf(stderr, "otatool: cannot resolve %s\n", host); return -1; }
     int fd = socket(ai->ai_family, SOCK_STREAM, 0);
@@ -149,16 +156,17 @@ static int push(const char *host, const char *port, const char *bundle, const ch
     int fd = connect_to(host, port);
     if (fd < 0) return 1;
     int hl = snprintf(line, sizeof line, "HMOTA-PUSH1 %zu\n", bl);
-    if (write(fd, line, hl) != hl || write(fd, sig, 64) != 64) return 1;
-    for (size_t off = 0; off < bl; ) { ssize_t w = write(fd, b + off, bl - off); if (w <= 0) { fprintf(stderr, "otatool: upload failed\n"); return 1; } off += w; }
+    int sent = write(fd, line, hl) == hl && write(fd, sig, 64) == 64;
+    for (size_t off = 0; sent && off < bl; ) { ssize_t w = write(fd, b + off, bl - off); if (w <= 0) sent = 0; else off += w; }
     size_t n = read_line(fd, line, sizeof line); close(fd);
-    printf("%s\n", n ? line : "FAILED no answer");
+    printf("%s\n", n ? line : sent ? "FAILED no answer" : "FAILED upload failed (the Echo closed the connection without an answer)");
     return strncmp(line, "OK", 2) != 0;
 }
 
 /* Send REQ (one line, with its \n), sign "REQ" + the nonce the Echo answers with, print its verdict.
+ * AFTER (may be NULL): what follows the signature, the package of "plugin".
  * The protocol is described in src/hassmic/ota.c. */
-static int challenge(const char *host, const char *port, const char *secret, const char *req)
+static int challenge(const char *host, const char *port, const char *secret, const char *req, const uint8_t *after, size_t al)
 {
     size_t skl, rl = strlen(req); uint8_t *sk = slurp(secret, &skl), msg[160], sig[64]; char line[300]; unsigned x;
     if (!sk || skl != 64) { fprintf(stderr, "otatool: bad secret key\n"); return 1; }
@@ -172,9 +180,26 @@ static int challenge(const char *host, const char *port, const char *secret, con
     for (int i = 0; i < 32; i++) { if (sscanf(line + 6 + 2 * i, "%2x", &x) != 1) return 1; msg[rl + i] = x; }
     crypto_eddsa_sign(sig, sk, msg, rl + 32);
     if (write(fd, sig, 64) != 64) return 1;
+    if (after) {                                        /* only once the Echo wants it: "SEND", or its refusal */
+        if (!read_line(fd, line, sizeof line) || strcmp(line, "SEND")) { printf("%s\n", line[0] ? line : "FAILED no answer"); return 1; }
+        for (size_t off = 0; off < al; ) { ssize_t w = write(fd, after + off, al - off); if (w <= 0) break; off += w; }      /* (cut off: its answer below says why) */
+    }
     size_t n = read_line(fd, line, sizeof line); close(fd);
     printf("%s\n", n ? line : "FAILED no answer");
     return strncmp(line, "OK", 2) != 0;
+}
+
+/* An official plugin's package to a running hassmic: the update key answers the port's challenge over the package's
+ * digest; what the Echo installs it for is the release key's listing inside it (src/hassmic/ota.c) */
+static int plugin(const char *host, const char *port, const char *secret, const char *package)
+{
+    size_t bl; uint8_t *b = slurp(package, &bl), dg[32]; char req[128]; int n;
+    if (!b) return 1;
+    crypto_blake2b(dg, 32, b, bl);
+    n = snprintf(req, sizeof req, "HMOTA-PLUG1 %zu ", bl);
+    for (int i = 0; i < 32; i++) n += sprintf(req + n, "%02x", dg[i]);
+    req[n++] = '\n'; req[n] = 0;
+    return challenge(host, port, secret, req, b, bl);
 }
 
 /* The system partition is mounted read-only at boot, and toybox cannot remount it: /proc/mounts names the device
@@ -237,9 +262,10 @@ int main(int argc, char **argv)
     if (argc == 5 && !strcmp(argv[1], "verify")) return verify_install(argv[2], argv[3], argv[4], NULL);
     if (argc == 6 && !strcmp(argv[1], "push")) return push(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 6 && !strcmp(argv[1], "install")) return verify_install(argv[2], argv[3], argv[4], argv[5]);
-    if (argc == 5 && !strcmp(argv[1], "adb")) return challenge(argv[2], argv[3], argv[4], "HMOTA-ADB1\n");
+    if (argc == 5 && !strcmp(argv[1], "adb")) return challenge(argv[2], argv[3], argv[4], "HMOTA-ADB1\n", NULL, 0);
+    if (argc == 6 && !strcmp(argv[1], "plugin")) return plugin(argv[2], argv[3], argv[4], argv[5]);
     if (argc == 4 && !strcmp(argv[1], "remount")) return remount(argv[2], argv[3]);
     if (argc == 4 && !strcmp(argv[1], "chgrp")) return chgrp(argv[2], argv[3]);
-    fprintf(stderr, "usage: otatool keygen SECRET PUBLIC | push HOST PORT BUNDLE SIG | adb HOST PORT SECRET | pack SECRET VERSION OUT FILE[:MODE]... | verify PUBLIC BUNDLE SIG | install PUBLIC BUNDLE SIG DESTDIR | remount rw|ro PATH | chgrp GID PATH\n");
+    fprintf(stderr, "usage: otatool keygen SECRET PUBLIC | push HOST PORT BUNDLE SIG | adb HOST PORT SECRET | plugin HOST PORT SECRET PACKAGE | pack SECRET VERSION OUT FILE[:MODE]... | verify PUBLIC BUNDLE SIG | install PUBLIC BUNDLE SIG DESTDIR | remount rw|ro PATH | chgrp GID PATH\n");
     return 2;
 }

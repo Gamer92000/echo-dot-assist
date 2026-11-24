@@ -27,6 +27,13 @@ WorkSource)V.  Output is shaped like wpa_cli's, so scripts/device/wifi.sh can se
     select <id>                     enableNetwork(id, true) and reconnect()
     remove <id>                     removeNetwork(id)
     reassociate                     reconnect()
+    reassoc                         reassociate(): the link made again, its IP configuration read anew
+    ip <id> auto                    the network's IP configuration: DHCP (setIpAssignment DHCP, no static one)
+    ip <id> <a.b.c.d/n> <gw> <dns>...   a fixed address: StaticIpConfiguration with that LinkAddress, gateway
+                                    and DNS servers, setIpAssignment STATIC; the network as getPrivileged-
+                                    ConfiguredNetworks has it (its key whole), through addOrUpdateNetwork,
+                                    which prints the id (-1: refused).  On the network it is on, WifiService
+                                    takes a changed IP configuration at once (ObtainingIpState)
     wifi-on                         setWifiEnabled(null, true)
     name <hex>                      the decoded text, for the shell's messages
     volume-max                      the voice call, system and music streams at their maximum, through
@@ -52,6 +59,8 @@ The Java source it stands for:
             else if (v.equals("select")) select(w, a);
             else if (v.equals("remove")) remove(w, a);
             else if (v.equals("reassociate")) reassociate(w);
+            else if (v.equals("reassoc")) reassoc(w);
+            else if (v.equals("ip")) ipconf(w, a);
             else if (v.equals("wifi-on")) wifion(w);
             else if (v.equals("name")) name(a);
             else { System.err.println("wifictl: unknown " + v); System.exit(2); }
@@ -171,6 +180,30 @@ The Java source it stands for:
             p(Boolean.TRUE.equals(r) ? "OK" : "FAIL");
         }
         static void reassociate(Object w) { os(w, "reconnect"); p("OK"); }
+        static void reassoc(Object w) { os(w, "reassociate"); p("OK"); }
+        static void ipconf(Object w, String[] a) {
+            int id = Integer.parseInt(a[1]);
+            Object c = null;
+            for (Object x : (java.util.List) lst(os(w, "getPrivilegedConfiguredNetworks")))
+                if (((Integer) fget(x, "networkId")).intValue() == id) c = x;
+            if (c == null) { p("FAIL"); return; }
+            String as = "android.net.IpConfiguration$IpAssignment";
+            if (a[2].equals("auto")) {
+                w1(c, "setIpAssignment", as, sinv(as, "valueOf", "java.lang.String", "DHCP"));
+                w1(c, "setStaticIpConfiguration", "android.net.StaticIpConfiguration", null);
+            } else {
+                w1(c, "setIpAssignment", as, sinv(as, "valueOf", "java.lang.String", "STATIC"));
+                Object s = Class.forName("android.net.StaticIpConfiguration").newInstance();
+                fset(s, "ipAddress", Class.forName("android.net.LinkAddress")
+                    .getConstructor(new Class[]{ cls("java.lang.String") }).newInstance(new Object[]{ a[2] }));
+                fset(s, "gateway", sinv("java.net.InetAddress", "getByName", "java.lang.String", a[3]));
+                Object l = fget(s, "dnsServers");
+                for (int i = 4; i < a.length; i++)    // numeric: getByName looks nothing up
+                    w1(l, "add", "java.lang.Object", sinv("java.net.InetAddress", "getByName", "java.lang.String", a[i]));
+                w1(c, "setStaticIpConfiguration", "android.net.StaticIpConfiguration", s);
+            }
+            ps(w1(w, "addOrUpdateNetwork", "android.net.wifi.WifiConfiguration", c));
+        }
         static void wifion(Object w) {
             Object r = w2(w, "setWifiEnabled", "java.lang.String", "boolean", null, Boolean.TRUE);
             p(Boolean.TRUE.equals(r) ? "OK" : "FAIL");
@@ -196,7 +229,7 @@ python3 tools/mkwifictl.py --check    only re-read and check the one in the tree
 
 The assembler, writer, reader and checks are tools/dexasm.py's (shared with tools/mkringbar.py).  What the
 writer guarantees (ART's DexFileVerifier on the Echo is strict): id tables sorted as the format wants (strings
-by content, the rest by their indices), one class LWifictl; with 30 static methods and no fields, no debug info,
+by content, the rest by their indices), one class LWifictl; with 35 static methods and no fields, no debug info,
 no tries.  read() parses the result back, checks checksum and signature, walks the map, decodes every
 instruction and runs a type-flow check over every method (verify(): what ART's method verifier would refuse of
 this subset), before the file is written out.  --framework resolves every class, method and field the dex
@@ -248,6 +281,8 @@ SELF = [
     ("select", (OBJ, STRARR), "V"),
     ("remove", (OBJ, STRARR), "V"),
     ("reassociate", (OBJ,), "V"),
+    ("reassoc", (OBJ,), "V"),
+    ("ipconf", (OBJ, STRARR), "V"),
     ("wifion", (OBJ,), "V"),
     ("name", (STRARR,), "V"),
     ("volmax", (), "V"),
@@ -283,7 +318,7 @@ def emit():
         for verb, name in [("status", "status"), ("list_networks", "list"), ("scan_results", "scanres"),
                            ("keys", "keys"), ("scan", "startscan"), ("add", "add"), ("enable", "enable"),
                            ("select", "select"), ("remove", "remove"), ("reassociate", "reassociate"),
-                           ("wifi-on", "wifion"), ("name", "name")]:
+                           ("wifi-on", "wifion"), ("name", "name"), ("reassoc", "reassoc"), ("ip", "ipconf")]:
             c.const_string(1, verb)
             c.invoke(VIRT, "str.eq", [3, 1]); c.move_result(1)
             c.ifz(IFEQZ, 1, verb)
@@ -793,6 +828,93 @@ def emit():
         c.ret_void()
         m.append(("reassociate", c))
 
+    def reassoc():
+        # w=0 t=1
+        c = Code(2, 1)
+        c.const_string(1, "reassociate"); c.invoke(STATIC, "os", [0, 1])
+        c.const_string(1, "OK"); c.invoke(STATIC, "p", [1])
+        c.ret_void()
+        m.append(("reassoc", c))
+
+    def ipconf():
+        # w=0 a=1 id/i=2 it=3 c=4 x=5 t=6 s=7 u=8 v=9 k=10 n=11
+        AS = "android.net.IpConfiguration$IpAssignment"
+        c = Code(12, 2)
+        c.aget_at(6, 1, 1)
+        c.invoke(STATIC, "int.parse", [6]); c.move_result(2)
+        c.const_4(4, 0)                                       # the network: none found yet
+        c.const_string(6, "getPrivilegedConfiguredNetworks"); c.invoke(STATIC, "os", [0, 6]); c.move_result(3, True)
+        c.invoke(STATIC, "lst", [3]); c.move_result(3, True)
+        c.check_cast(3, LST)
+        c.invoke(IFACE, "list.iter", [3]); c.move_result(3, True)
+        c.label("loop")
+        c.invoke(IFACE, "it.has", [3]); c.move_result(6)
+        c.ifz(IFEQZ, 6, "found")
+        c.invoke(IFACE, "it.next", [3]); c.move_result(5, True)
+        c.const_string(6, "networkId"); c.invoke(STATIC, "fget", [5, 6]); c.move_result(6, True)
+        c.check_cast(6, INTG); c.invoke(VIRT, "int.intval", [6]); c.move_result(6)
+        c.if2(IFNE, 6, 2, "loop")
+        c.move(4, 5, True)
+        c.label("found")
+        c.ifz(IFNEZ, 4, "have")
+        c.const_string(6, "FAIL"); c.invoke(STATIC, "p", [6]); c.ret_void()
+        c.label("have")
+        c.aget_at(5, 1, 2)
+        c.const_string(6, "auto"); c.invoke(VIRT, "str.eq", [5, 6]); c.move_result(6)
+        c.const_string(7, AS); c.const_string(8, "valueOf"); c.const_string(9, "java.lang.String")
+        c.ifz(IFEQZ, 6, "fixed")
+        c.const_string(10, "DHCP")
+        c.invoke(STATIC, "sinv", [7, 8, 9, 10]); c.move_result(10, True)
+        c.const_string(8, "setIpAssignment"); c.invoke(STATIC, "w1", [4, 8, 7, 10])
+        c.const_string(8, "setStaticIpConfiguration"); c.const_string(9, "android.net.StaticIpConfiguration")
+        c.const_4(10, 0); c.invoke(STATIC, "w1", [4, 8, 9, 10]); c.move_result(10, True)
+        c.goto_("save")
+        c.label("fixed")
+        c.const_string(10, "STATIC")
+        c.invoke(STATIC, "sinv", [7, 8, 9, 10]); c.move_result(10, True)
+        c.const_string(8, "setIpAssignment"); c.invoke(STATIC, "w1", [4, 8, 7, 10])
+        c.const_string(7, "android.net.StaticIpConfiguration")
+        c.invoke(STATIC, "cls.forName", [7]); c.move_result(7, True)
+        c.invoke(VIRT, "cls.newi", [7]); c.move_result(7, True)
+        # new LinkAddress(a[2]): "a.b.c.d/n"
+        c.const_string(8, "android.net.LinkAddress")
+        c.invoke(STATIC, "cls.forName", [8]); c.move_result(8, True)
+        c.const_4(9, 1); c.new_array(10, 9, CLSARR)
+        c.const_string(11, "java.lang.String"); c.invoke(STATIC, "cls", [11]); c.move_result(11, True)
+        c.const_4(9, 0); c.aput(11, 10, 9, APUT_OBJ)
+        c.invoke(VIRT, "cls.getc", [8, 10]); c.move_result(8, True)
+        c.const_4(9, 1); c.new_array(10, 9, OBJARR)
+        c.const_4(9, 0); c.aput(5, 10, 9, APUT_OBJ)
+        c.invoke(VIRT, "ctor.newi", [8, 10]); c.move_result(8, True)
+        c.const_string(9, "ipAddress"); c.invoke(STATIC, "fset", [7, 9, 8])
+        # the gateway: InetAddress.getByName(a[3]), numeric
+        c.aget_at(5, 1, 3)
+        c.const_string(8, "java.net.InetAddress"); c.const_string(9, "getByName"); c.const_string(10, "java.lang.String")
+        c.invoke(STATIC, "sinv", [8, 9, 10, 5]); c.move_result(5, True)
+        c.const_string(9, "gateway"); c.invoke(STATIC, "fset", [7, 9, 5])
+        # the DNS servers, a[4] on
+        c.const_string(9, "dnsServers"); c.invoke(STATIC, "fget", [7, 9]); c.move_result(6, True)
+        c.array_length(11, 1)
+        c.const_4(2, 4)
+        c.label("dns")
+        c.if2(IFGE, 2, 11, "dnsdone")
+        c.aget(5, 1, 2, AGET_OBJ)
+        c.const_string(8, "java.net.InetAddress"); c.const_string(9, "getByName"); c.const_string(10, "java.lang.String")
+        c.invoke(STATIC, "sinv", [8, 9, 10, 5]); c.move_result(5, True)
+        c.const_string(9, "add"); c.const_string(10, "java.lang.Object")
+        c.invoke(STATIC, "w1", [6, 9, 10, 5])
+        c.binop_lit8(ADD8, 2, 2, 1)
+        c.goto_("dns")
+        c.label("dnsdone")
+        c.const_string(8, "setStaticIpConfiguration"); c.const_string(9, "android.net.StaticIpConfiguration")
+        c.invoke(STATIC, "w1", [4, 8, 9, 7]); c.move_result(10, True)
+        c.label("save")
+        c.const_string(5, "addOrUpdateNetwork"); c.const_string(6, "android.net.wifi.WifiConfiguration")
+        c.invoke(STATIC, "w1", [0, 5, 6, 4]); c.move_result(5, True)
+        c.invoke(STATIC, "ps", [5])
+        c.ret_void()
+        m.append(("ipconf", c))
+
     def name():
         # a=0 s=1
         c = Code(2, 1)
@@ -846,7 +968,8 @@ def emit():
         m.append(("wifion", c))
 
     for f in (main, wifi, pkg, lst, cls, inv, sinv, w1, w2, iz, os, fget, fset, cat, p, ps, ip, unhex, hex2s,
-              status, list, keys, scanres, startscan, add, enable, select, remove, reassociate, wifion, name, volmax):
+              status, list, keys, scanres, startscan, add, enable, select, remove, reassociate, reassoc, ipconf, wifion,
+              name, volmax):
         f()
     p(err=True)
     return m
@@ -886,6 +1009,16 @@ REFLECTED = [
     ("Landroid/net/wifi/WifiInfo;", "getIpAddress", [], False),
     ("Landroid/net/wifi/WifiInfo;", "getFrequency", [], False),
     ("Landroid/net/wifi/WifiConfiguration;", "<init>", [], False),     # Class.newInstance
+    ("Landroid/net/wifi/IWifiManager;", "reassociate", [], False),
+    ("Landroid/net/wifi/IWifiManager;", "reassociate", ["Ljava/lang/String;"], False),
+    # a fixed address (ip): hidden, the same on Android 7 and 9
+    ("Landroid/net/IpConfiguration$IpAssignment;", "valueOf", ["Ljava/lang/String;"], True),
+    ("Landroid/net/wifi/WifiConfiguration;", "setIpAssignment", ["Landroid/net/IpConfiguration$IpAssignment;"], False),
+    ("Landroid/net/wifi/WifiConfiguration;", "setStaticIpConfiguration", ["Landroid/net/StaticIpConfiguration;"], False),
+    ("Landroid/net/StaticIpConfiguration;", "<init>", [], False),
+    ("Landroid/net/LinkAddress;", "<init>", ["Ljava/lang/String;"], False),
+    ("Ljava/net/InetAddress;", "getByName", ["Ljava/lang/String;"], True),
+    ("Ljava/util/ArrayList;", "add", ["Ljava/lang/Object;"], False),
 ]
 REFLECTED_FIELDS = [
     ("Landroid/net/wifi/WifiConfiguration;", "hiddenSSID", "Z"),
@@ -899,6 +1032,9 @@ REFLECTED_FIELDS = [
     ("Landroid/net/wifi/ScanResult;", "frequency", "I"),
     ("Landroid/net/wifi/ScanResult;", "level", "I"),
     ("Landroid/net/wifi/ScanResult;", "capabilities", "Ljava/lang/String;"),
+    ("Landroid/net/StaticIpConfiguration;", "ipAddress", "Landroid/net/LinkAddress;"),
+    ("Landroid/net/StaticIpConfiguration;", "gateway", "Ljava/net/InetAddress;"),
+    ("Landroid/net/StaticIpConfiguration;", "dnsServers", "Ljava/util/ArrayList;"),
 ]
 CONSTANTS = [("Landroid/net/wifi/WifiConfiguration$KeyMgmt;", "WPA_PSK", KEY_WPA_PSK)]
 
@@ -907,11 +1043,11 @@ API9 = "Landroid/net/wifi/rtt/RangingRequest;"
 ONLY_IF = {}
 for _m, _p in (("getConnectionInfo", ()), ("startScan", ("Landroid/net/wifi/ScanSettings;", "Landroid/os/WorkSource;")),
                ("addOrUpdateNetwork", ("Landroid/net/wifi/WifiConfiguration;",)), ("enableNetwork", ("I", "Z")),
-               ("removeNetwork", ("I",)), ("reconnect", ())):
+               ("removeNetwork", ("I",)), ("reconnect", ()), ("reassociate", ())):
     ONLY_IF[("Landroid/net/wifi/IWifiManager;", _m, _p)] = "!" + API9
 for _m, _p in (("getConnectionInfo", (STR9,)), ("startScan", (STR9,)),
                ("addOrUpdateNetwork", ("Landroid/net/wifi/WifiConfiguration;", STR9)), ("enableNetwork", ("I", "Z", STR9)),
-               ("removeNetwork", ("I", STR9)), ("reconnect", (STR9,))):
+               ("removeNetwork", ("I", STR9)), ("reconnect", (STR9,)), ("reassociate", (STR9,))):
     ONLY_IF[("Landroid/net/wifi/IWifiManager;", _m, _p)] = API9
 
 PROG = Program(ME, SELF, reflected=REFLECTED, reflected_fields=REFLECTED_FIELDS, constants=CONSTANTS, only_if=ONLY_IF)

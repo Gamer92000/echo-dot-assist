@@ -149,7 +149,7 @@ static void *reader(void *arg)
             long long t = now - action_down;
             if (!action_told && t >= SHORT_PRESS_MS) {
                 if (taps) { int n = taps; taps = 0; taps_done(n); }      /* presses, then a hold: the presses first */
-                action_told = 1; if (handler.event) handler.event(BUTTON_ACTION, 1);
+                action_told = 1; if (!(handler.held && handler.held(action_down)) && handler.event) handler.event(BUTTON_ACTION, 1);
             }
             if (handler.hold && held < 2 && t >= (held ? HOLD_RESET_MS : HOLD_WARN_MS)) { held++; handler.hold(held); }
             if (!action_told) next = action_down + SHORT_PRESS_MS;
@@ -175,7 +175,7 @@ static void *reader(void *arg)
                     if (atomic_load(&multi_press) || taps) { taps++; tap_at = now; if (taps >= 3) { taps = 0; taps_done(3); } }
                     else if (handler.action) handler.action();
                 }
-                else if (action_down && !action_told && handler.event) handler.event(BUTTON_ACTION, 1);   /* the event came first */
+                else if (action_down && !action_told && !(handler.held && handler.held(action_down)) && handler.event) handler.event(BUTTON_ACTION, 1);   /* the event came first */
                 if (held == 1 && handler.hold) handler.hold(0);
                 action_down = 0; held = 0;
             }
@@ -207,6 +207,13 @@ static void *reader(void *arg)
                 long long a = vol_down[0], b = vol_down[1];
                 if (board.action_combo && a && b && !combo_done && llabs(a - b) <= CHORD_MS &&
                     now - (a > b ? a : b) < SHORT_PRESS_MS && handler.action) handler.action();
+                /* ... and held longer, let go before the pairing hold: the action button's 1 s hold, for what waits
+                 * for one (handler.held: a copied plugin's note).  No event of its own.  Before COMBO_MS by the
+                 * clock, not by combo_done alone: that is set from the keys' repeats, which come only as acebuttond's
+                 * configuration has them (the comment above), and without them a pair held for five seconds, meant
+                 * for pairing, was "let go before the pairing hold" and took a note off */
+                else if (board.action_combo && a && b && !combo_done && llabs(a - b) <= CHORD_MS &&
+                         now - (a > b ? a : b) >= SHORT_PRESS_MS && now - (a > b ? a : b) < COMBO_MS && handler.held) handler.held(a > b ? a : b);
                 if (vol_down[k] && !vol_told[k]) {
                     int held = now - vol_down[k] >= SHORT_PRESS_MS;     /* the hold's deadline had not run yet */
                     if (!held && handler.volume) handler.volume(k ? -1 : 1);

@@ -3,7 +3,7 @@
  * on), so that the call's microphone below can live beside it.
  *
  * Mic: micAsr, what the pipeline gets.  Playback on the mixer's Voip stream, which puts the front end in its call mode
- * (audio.h).  The front end's listening mode only while this side talks (main.c core_dropin_listen says why): its level
+ * (audio.h).  The front end's listening mode only while this side talks (main.c core_call_listen says why): its level
  * NEAR_DB over the room's floor and, while the far end plays, over the echo to expect; on with the first such frame,
  * off LISTEN_HANG_MS after the last.  What the echo canceller leaves of the far end would come back to the other side
  * as an echo, so an echo suppressor here ducks the mic by SUPPRESS_DB while the far end plays, unless this side is
@@ -15,7 +15,10 @@
  * 30 dB under speech level, and a gain that took the echo's onsets for a talker lifted them by up to 27 dB (2026-10-08).
  *
  * Codec: Opus (the firmware's libopus), 16 kHz mono, 20 ms, inband FEC.  Loss: Opus's FEC from the next packet, its
- * concealment for PLC_FRAMES.
+ * concealment for PLC_FRAMES.  Or none (CALL_CODEC_PCM, a plugin's call, docs/plugins.md 4.8): the same frames after the
+ * gate and the gain go out as they are, s16le, and come in as such; a frame missing is the last one played again,
+ * faded (PCM_FADE a frame, for PLC_FRAMES), where Opus conceals by itself.  G.711, its filter, RTP and SIP are the
+ * plugin's; gate, echo suppressor, call microphone, listening mode and the Voip stream stay these.
  *
  * The call's own microphone (call_mic_source, audio.h callmic_*): on the Dots the mixer's micHfp carries Amazon's call
  * pipeline once the front end is in call mode, which our Voip stream puts it in.  It already has an echo canceller and
@@ -103,15 +106,41 @@ static pthread_mutex_t ml = PTHREAD_MUTEX_INITIALIZER;   /* everything below; ta
 static pthread_cond_t live_cond = PTHREAD_COND_INITIALIZER;
 static atomic_int running;
 static struct {
-    int live, gen;
+    int live, gen, codec, who;          /* who: whose call (call.h's claim) */
     void (*send)(const uint8_t *, size_t, uint32_t, void *); void *arg;
     uint32_t tx_seq;
     struct call_stats st;
     long long arr_at;
 } m;
 static uint32_t play_next;                              /* the playout's next frame, for counting late ones */
-static struct slot { uint32_t seq; int len; uint8_t d[MAXPKT]; } jb[JB];
+/* a frame waiting: Opus's at most MAXPKT, PCM's CALL_PCM_BYTES */
+#define SLOT_MAX (MAXPKT > CALL_PCM_BYTES ? MAXPKT : CALL_PCM_BYTES)
+/* A frame missing from a PCM call: the last one again at this much of its level (-6 dB a frame), PLC_FRAMES times,
+ * then silence.  Repeated at full level a 20 ms frame is a 50 Hz buzz; faded it is a short tail of the last sound */
+#define PCM_FADE    0.5f
+static struct slot { uint32_t seq; int len; uint8_t d[SLOT_MAX]; } jb[JB];
 static uint32_t jb_hi, jb_lo; static int jb_any;      /* the newest frame in, the first of the call */
+/* A plugin's call only: a new numbering.  Frames more than JUMP away from the newest, either way, RESYNC_N of them in a
+ * row each following the one before (within JUMP_STEP), start the jitter buffer anew from there.  One stray number far
+ * ahead became the newest, and every frame after it was "far too old": silence for the rest of the call; a numbering
+ * that starts again (a plugin's 16-bit RTP numbers wrap after 22 minutes) the same (W3 of a review of fc43c40).  A
+ * single stray frame is dropped; the frames of the new numbering before the third are lost (40 ms), and those of the
+ * old one still waiting (~100 ms).  sdk/PROTOCOL.md says the rule.
+ * Never Drop In's: its numbers are hassmic's own from 0 (32 bits, years), and a LAN host that replays packets it
+ * captured passes the AEAD (the nonce is the call id, direction and number), so three old frames in a row started the
+ * buffer anew from them and kept the far side's own frames out for the rest of the call: the Echo played its earlier
+ * words again (D1 of a review of e8d52b9).  There a frame JB behind the newest is dropped, as before W3, and dropin.c
+ * drops replays before they come here */
+#define JUMP        (2 * JB)            /* 1.28 s: past any jitter this buffer holds */
+#define JUMP_STEP   8
+#define RESYNC_N    3
+static uint32_t jump_last; static int jump_n;           /* the run of far frames so far */
+static unsigned jb_epoch;                                /* one more at each new start: the playout starts again */
+/* The line that says so: a plugin that alternates between two numberings resyncs every third packet, ~33 a second, and
+ * one line each beat its own 50 lines a minute and wiped the 2 MB log in ~11 minutes (D2 of a review of e8d52b9).  One
+ * line at once, then at most one per RESYNC_LOG_MS with the count since, and the call's count at its end */
+#define RESYNC_LOG_MS 10000
+static long long resync_said; static unsigned resync_unsaid, resync_calls;
 static struct { long long t; float db; } ref[REF_N];
 static unsigned ref_n;
 static float far_floor;                 /* the quietest the far end has played lately (ml): drops at once, rises 1.5 dB/s */
@@ -135,6 +164,24 @@ static float level_db(const int16_t *s, size_t n)
 
 /* ---------------------------------------------------------------- the call */
 
+/* The claim (call.h): an atomic, so that dropin.c takes it under dl and plugin.c under its own without an order between
+ * them, and the core reads it from any thread */
+static atomic_int claimed;
+
+int call_claim(int who)
+{
+    int none = CALL_NOBODY;
+    return atomic_compare_exchange_strong(&claimed, &none, who) || none == who ? 0 : -1;
+}
+
+void call_release(int who)
+{
+    int mine = who;
+    atomic_compare_exchange_strong(&claimed, &mine, CALL_NOBODY);
+}
+
+int call_claimed(void) { return atomic_load(&claimed); }
+
 int call_mic_source(int set)
 {
     if (set >= 0) atomic_store(&use_hfp, set != 0);
@@ -150,12 +197,14 @@ static int call_gen_is(int gen)
     return r;
 }
 
-int call_begin(void (*send)(const uint8_t *, size_t, uint32_t, void *), void *arg)
+int call_begin(int who, int codec, void (*send)(const uint8_t *, size_t, uint32_t, void *), void *arg)
 {
+    if (who == CALL_NOBODY || call_claimed() != who || (codec != CALL_CODEC_OPUS && codec != CALL_CODEC_PCM)) return -1;    /* (media only for the call that has the claim) */
     pthread_mutex_lock(&ml);
-    m.gen++; m.live = 1; m.send = send; m.arg = arg; m.tx_seq = 0;
+    m.gen++; m.live = 1; m.send = send; m.arg = arg; m.tx_seq = 0; m.codec = codec; m.who = who;
+    resync_said = 0; resync_unsaid = 0; resync_calls = 0;
     memset(&m.st, 0, sizeof m.st); m.arr_at = 0; play_next = 0;
-    memset(jb, 0, sizeof jb); jb_any = 0; ref_n = 0; memset(ref, 0, sizeof ref);
+    memset(jb, 0, sizeof jb); jb_any = 0; jump_n = 0; ref_n = 0; memset(ref, 0, sizeof ref);
     int gen = m.gen;
     pthread_cond_broadcast(&live_cond);
     pthread_mutex_unlock(&ml);
@@ -164,9 +213,11 @@ int call_begin(void (*send)(const uint8_t *, size_t, uint32_t, void *), void *ar
 
 void call_end(int gen)
 {
+    unsigned resyncs = 0;
     pthread_mutex_lock(&ml);
-    if (m.live && m.gen == gen) { m.live = 0; m.gen++; m.send = NULL; pthread_cond_broadcast(&live_cond); }
+    if (m.live && m.gen == gen) { m.live = 0; m.gen++; m.send = NULL; pthread_cond_broadcast(&live_cond); resyncs = resync_calls; }
     pthread_mutex_unlock(&ml);
+    if (resyncs > 1) fprintf(stderr, "call: the far side's frames were numbered anew %u times in this call\n", resyncs);
 }
 
 int call_live(void)
@@ -186,9 +237,29 @@ void call_stats(struct call_stats *s)
 
 void call_rx(int gen, uint32_t seq, const uint8_t *frame, size_t len)
 {
-    if (!len || len > MAXPKT) return;
+    if (!len || len > SLOT_MAX) return;
     pthread_mutex_lock(&ml);
-    if (!m.live || m.gen != gen || (jb_any && (int32_t)(seq - jb_hi) < -JB)) { pthread_mutex_unlock(&ml); return; }   /* far too old */
+    if (!m.live || m.gen != gen) { pthread_mutex_unlock(&ml); return; }
+    if (m.codec == CALL_CODEC_PCM ? len != CALL_PCM_BYTES : len > MAXPKT) { pthread_mutex_unlock(&ml); return; }     /* not a frame of this media */
+    int32_t d = (int32_t)(seq - jb_hi);
+    if (jb_any && m.who >= CALL_PLUGIN && (d > JUMP || d < -JUMP)) {     /* a plugin's, far away: a stray, or a new numbering (JUMP above) */
+        int32_t step = (int32_t)(seq - jump_last);
+        jump_n = jump_n && step > 0 && step <= JUMP_STEP ? jump_n + 1 : 1; jump_last = seq;
+        if (jump_n < RESYNC_N) { pthread_mutex_unlock(&ml); return; }
+        uint32_t hi = jb_hi; long long t = now_ms();
+        memset(jb, 0, sizeof jb); jb_any = 0; jump_n = 0; jb_epoch++; play_next = seq;     /* from this frame on, as at a call's start */
+        resync_calls++;
+        if (!resync_said || t - resync_said >= RESYNC_LOG_MS) {
+            if (resync_unsaid) fprintf(stderr, "call: the far side's frames numbered anew (%u after %u), %u more times since the last line: the jitter buffer starts again\n", seq, hi, resync_unsaid);
+            else fprintf(stderr, "call: the far side's frames numbered anew (%u after %u): the jitter buffer starts again\n", seq, hi);
+            resync_said = t; resync_unsaid = 0;
+        } else resync_unsaid++;
+    } else {
+        jump_n = 0;
+        /* far too old: its slot is a newer frame's.  JB behind is the newest's own slot (seq % JB): "<" let a frame
+         * that late overwrite the newest (W4 of a review of fc43c40) */
+        if (jb_any && d <= -JB) { pthread_mutex_unlock(&ml); return; }
+    }
     struct slot *s = &jb[seq % JB];
     memcpy(s->d, frame, len); s->seq = seq; s->len = (int)len;
     if (!jb_any || (int32_t)(seq - jb_hi) > 0) jb_hi = seq;
@@ -206,16 +277,16 @@ void call_rx(int gen, uint32_t seq, const uint8_t *frame, size_t len)
  * callmic_thread's), under tx_mu for the moment the two hand over */
 static pthread_mutex_t tx_mu = PTHREAD_MUTEX_INITIALIZER;
 static OpusEncoder *enc;
-static int enc_gen = -1, enc_hfp = -1;
+static int enc_gen = -1, enc_hfp = -1;    /* the media and the source the encoder, the gain and the suppressor are of */
 static struct micgain gain;
 static float es_c, es_g;                /* echo against what we play, dB (peak held); the gain applied, linear */
 static int dt_n;                        /* frames in a row over the echo estimate */
 static float far_hold;                  /* what we play, held: falls FAR_FALL dB a frame */
 static float floor_db;                  /* the room in micAsr */
 static long long near_until;            /* this side talked until then (+ LISTEN_HANG_MS) */
-static int listen_on;                   /* what we last asked of core_dropin_listen */
+static int listen_on;                   /* what we last asked of core_call_listen */
 static long long listen_at;
-static int16_t mic[FRAME]; static size_t mic_n;
+static int16_t mic[FRAME]; static size_t mic_n; static int mic_gen = -1;   /* the capture thread's: a frame filling, of which call */
 
 static float far_db(long long now)       /* ml held: the loudest we played that can still be in the mic stream */
 {
@@ -256,10 +327,10 @@ static void send_frame(const int16_t *pcm, int own, int hfp)
 
 static void send_frame_locked(const int16_t *pcm, int own, int hfp)
 {
-    uint8_t op[MAXPKT]; int gen; void (*send)(const uint8_t *, size_t, uint32_t, void *); void *arg;
+    uint8_t op[MAXPKT]; int gen, codec; void (*send)(const uint8_t *, size_t, uint32_t, void *); void *arg;
     pthread_mutex_lock(&ml);
     if (!m.live || !m.send) { pthread_mutex_unlock(&ml); return; }
-    gen = m.gen; send = m.send; arg = m.arg;
+    gen = m.gen; send = m.send; arg = m.arg; codec = m.codec;
     float far = far_db(now_ms()), ffloor = far_floor;
     uint32_t seq = m.tx_seq++;
     pthread_mutex_unlock(&ml);
@@ -271,11 +342,13 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
     if (enc_gen != gen || enc_hfp != hfp) {
         int e = 0;
         if (enc) { opus_encoder_destroy(enc); enc = NULL; }
-        enc = opus_encoder_create(RATE, 1, OPUS_APPLICATION_VOIP, &e);
-        if (!enc) { fprintf(stderr, "call: no Opus encoder (%d)\n", e); return; }
-        opus_encoder_ctl(enc, OPUS_SET_BITRATE, BITRATE); opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC, 1);
-        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
-        opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
+        if (codec == CALL_CODEC_OPUS) {                 /* (PCM: none; the gate and the gain are the same) */
+            enc = opus_encoder_create(RATE, 1, OPUS_APPLICATION_VOIP, &e);
+            if (!enc) { fprintf(stderr, "call: no Opus encoder (%d)\n", e); return; }
+            opus_encoder_ctl(enc, OPUS_SET_BITRATE, BITRATE); opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC, 1);
+            opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
+            opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
+        }
         micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, 1);
         es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = hfp ? -40 : -70;
         enc_gen = gen; enc_hfp = hfp;
@@ -309,19 +382,27 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
     for (int i = 0; i < FRAME; i++) { if ((step < 0 && es_g > target) || (step > 0 && es_g < target)) es_g += step; f[i] = (int16_t)(f[i] * es_g); }
     if (near) near_until = now + LISTEN_HANG_MS;
     int want = now < near_until;
-    if (want != listen_on && now - listen_at >= 250) { listen_on = want; listen_at = now; core_dropin_listen(want); }
+    if (want != listen_on && now - listen_at >= 250) { listen_on = want; listen_at = now; core_call_listen(want); }
     /* HASSMIC_DROPIN_TRACE=<file>: the gate's inputs and decisions per frame, for tuning on a device (export it in
      * hassmic.conf): ms, mic dB, far dB, echo estimate, floor, this side talks, own sound, double talk run, gate, gain,
      * the call pipeline's microphone (1) or micAsr (0) */
     { static FILE *tr; if (!tr && getenv("HASSMIC_DROPIN_TRACE")) tr = fopen(getenv("HASSMIC_DROPIN_TRACE"), "w");
       if (tr) { fprintf(tr, "%lld %.1f %.1f %.1f %.1f %d %d %d %.2f %.1f %d\n", now, lv, far, es_c, floor_db, near, own, dt_n, target, hfp ? 0.0f : gain.gain_db, hfp); fflush(tr); } }
+    /* PCM: the samples as they are in memory, which is s16le on every Echo (ARMv7 little-endian) and on the PC */
+    if (codec == CALL_CODEC_PCM) { send((const uint8_t *)f, sizeof f, seq, arg); return; }
     int32_t len = enc ? opus_encode(enc, f, FRAME, op, sizeof op) : -1;
     if (len > 0) send(op, (size_t)len, seq, arg);
 }
 
 void call_mic(const int16_t *pcm, size_t n, int own)
 {
-    if (!atomic_load(&running) || !call_live()) { mic_n = 0; return; }
+    int gen;
+    pthread_mutex_lock(&ml); gen = m.live ? m.gen : -1; pthread_mutex_unlock(&ml);
+    if (!atomic_load(&running) || gen < 0) { mic_n = 0; return; }
+    /* what was left of a 20 ms frame belongs to the call it came in: a call that ended without a call_mic after it
+     * (the capture thread feeds only while one is live) left its last 10 ms to start the next one with, another
+     * party's (W5 of a review of fc43c40) */
+    if (gen != mic_gen) { mic_n = 0; mic_gen = gen; }
     if (atomic_load(&src_hfp) && now_ms() - atomic_load(&hfp_at) < HFP_STALE_MS) { mic_n = 0; return; }   /* micHfp goes out */
     while (n) {
         size_t k = FRAME - mic_n < n ? FRAME - mic_n : n;
@@ -394,27 +475,30 @@ static void *playout(void *arg)
     for (;;) {
         pthread_mutex_lock(&ml);
         while (!m.live) pthread_cond_wait(&live_cond, &ml);
-        int gen = m.gen; long long t0 = now_ms();
+        int gen = m.gen, pcm_codec = m.codec == CALL_CODEC_PCM; long long t0 = now_ms(); unsigned epoch = jb_epoch;
         far_floor = -70;
         pthread_mutex_unlock(&ml);
         int e = 0, open = voip_open(RATE, 1) == 0, started = 0, missing = 0, skipped = 0, stretched = 0;
-        OpusDecoder *dec = opus_decoder_create(RATE, 1, &e);
+        OpusDecoder *dec = pcm_codec ? NULL : opus_decoder_create(RATE, 1, &e);
+        int16_t last[FRAME]; float fade = 0;           /* PCM: the frame played last, and its level for a concealment */
         if (!open) fprintf(stderr, "call: cannot open the Voip stream\n");
         else atomic_store(&voip_gen, gen);              /* call mode on: callmic_thread may open micHfp */
-        if (!dec) fprintf(stderr, "call: no Opus decoder (%d)\n", e);
+        if (!dec && !pcm_codec) fprintf(stderr, "call: no Opus decoder (%d)\n", e);
+        memset(last, 0, sizeof last);
         uint32_t next = 0;
         for (;;) {
-            uint8_t pkt[MAXPKT]; int len = 0, fec = 0; int16_t pcm[FRAME];
+            uint8_t pkt[SLOT_MAX]; int len = 0, fec = 0; int16_t pcm[FRAME];
             while (open && voip_queued_us() > QUEUE_US) usleep(4000);
             pthread_mutex_lock(&ml);
             if (!m.live || m.gen != gen) { pthread_mutex_unlock(&ml); break; }
+            if (epoch != jb_epoch) { epoch = jb_epoch; started = 0; t0 = now_ms(); }    /* numbered anew (call_rx): from its first frame */
             if (!started && jb_any && (jb_hi - jb_lo >= PREBUF - 1 || now_ms() - t0 > 300)) { started = 1; next = jb_lo; }
             if (started && (int32_t)(jb_hi - next) > MAXBUF) { next = jb_hi - (PREBUF - 1); skipped++; }
             if (started) {
                 struct slot *s = &jb[next % JB], *s1 = &jb[(next + 1) % JB];
                 if (s->len && s->seq == next) { len = s->len; memcpy(pkt, s->d, (size_t)len); }
                 else if ((int32_t)(jb_hi - next) <= 0) stretched++;         /* nothing newer yet: wait, concealing */
-                else if (s1->len && s1->seq == next + 1) { len = s1->len; memcpy(pkt, s1->d, (size_t)len); fec = 1; }
+                else if (!pcm_codec && s1->len && s1->seq == next + 1) { len = s1->len; memcpy(pkt, s1->d, (size_t)len); fec = 1; }   /* (Opus's FEC: PCM has none) */
                 if (len || (int32_t)(jb_hi - next) > 0) {                  /* played, or lost for good: on to the next */
                     if (!len || fec) m.st.lost++;
                     s->len = 0;
@@ -423,7 +507,14 @@ static void *playout(void *arg)
             }
             pthread_mutex_unlock(&ml);
             int got = 0;
-            if (dec && len) got = opus_decode(dec, pkt, len, pcm, FRAME, fec);
+            if (pcm_codec && len == CALL_PCM_BYTES) { memcpy(pcm, pkt, sizeof pcm); memcpy(last, pcm, sizeof last); fade = 1; got = FRAME; }
+            else if (pcm_codec && started && missing < PLC_FRAMES) {
+                /* the last frame again, its level falling from where the one before left it to PCM_FADE of that */
+                float to = fade * PCM_FADE;
+                for (int i = 0; i < FRAME; i++) pcm[i] = (int16_t)(last[i] * (fade + (to - fade) * (float)i / FRAME));
+                fade = to; got = FRAME;
+            }
+            else if (dec && len) got = opus_decode(dec, pkt, len, pcm, FRAME, fec);
             else if (dec && started && missing < PLC_FRAMES) got = opus_decode(dec, NULL, 0, pcm, FRAME, 0);
             missing = len ? 0 : missing + 1;
             if (got != FRAME) memset(pcm, 0, sizeof pcm);

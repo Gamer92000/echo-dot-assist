@@ -9,10 +9,13 @@
 # devices/<codename>/stubs/, tools/mkstubs.sh), which gives the same binaries byte for byte.  Bundles are signed with the
 # release key (secret RELEASE_SIGNING_KEY: base64 of secrets/release.key); Echos check them against keys/release.pub.
 # A fork with releases of its own (scripts/fork-release.sh) has the variable RELEASE_PUBLIC_KEY: its key and repository
-# then go into its builds instead (secrets/fork.conf).
+# then go into its builds instead (secrets/fork.conf), and one with a plugin index of its own has PLUGIN_INDEX_URL,
+# PLUGINS_PUBLIC_KEY (PLUGINS_PUBLIC_KEY2) for its index's address and key(s).
 # The key is a secret of the environment "release", which only main and release may use: only the release job names
 # it, so builds of pull requests and other branches never run with it, and their bundles are signed with a throwaway key.
 # Under nektos/act everything runs except the publishing itself, which only says what it would do.
+# Every action is pinned by its commit (the tag it was in a comment beside it): a tag moved in the action's own
+# repository changes nothing that runs here, in the job that holds the signing key least of all.  Raised by hand.
 name: build
 
 on:
@@ -41,7 +44,7 @@ jobs:
       prerelease: ${{ steps.v.outputs.prerelease }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0                # earlier tags
       - id: v
@@ -96,13 +99,16 @@ jobs:
             ksrc: linux-5.4.86
             kcc: arm-eabi-4.8
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0                # git describe, compiled in
       # a fork's own release key and repository (scripts/fork-release.sh), compiled in and packed: as the release job's
       - name: Fork
         env:
           RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+          PLUGIN_INDEX_URL: ${{ vars.PLUGIN_INDEX_URL }}
+          PLUGINS_PUBLIC_KEY: ${{ vars.PLUGINS_PUBLIC_KEY }}
+          PLUGINS_PUBLIC_KEY2: ${{ vars.PLUGINS_PUBLIC_KEY2 }}
         run: scripts/fork-release.sh ci
 
       # Under act the toolchains are on a volume shared by the jobs (DEVELOPMENT.md): that is the cache there, and a
@@ -110,7 +116,7 @@ jobs:
       - name: NDK cache
         if: ${{ !env.ACT }}
         id: ndk
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: toolchain/android-ndk-r21e
           key: ndk-r21e
@@ -135,7 +141,7 @@ jobs:
       - name: Kernel cache
         if: matrix.ksrc && !env.ACT
         id: kernel
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: |
             toolchain/${{ matrix.ksrc }}
@@ -172,7 +178,7 @@ jobs:
         run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}.content-id
       # beside build/<device>/, not in it: the artifact's root is then build/ and it holds <device>/ itself, which the
       # release job needs (download-artifact puts a lone artifact's files straight into its path, without its name)
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: build-${{ matrix.device }}
           path: |
@@ -180,6 +186,7 @@ jobs:
             build/${{ matrix.device }}.bundle-sha256
             build/${{ matrix.device }}/hassmic
             build/${{ matrix.device }}/runas
+            build/${{ matrix.device }}/plugrun
             build/${{ matrix.device }}/otatool
             build/${{ matrix.device }}/latency
             build/${{ matrix.device }}/mixcap
@@ -194,12 +201,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30                 # apt has hung for over 20 minutes: fail instead of waiting out the 6 h default
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
       # uv fetches Python and installs the wheels in parallel.  No cache: setup-uv prunes downloaded wheels from it in
       # CI anyway, since PyPI is as fast as restoring them.
-      - uses: astral-sh/setup-uv@v10.2.0       # no major-version tags (v10) exist: the full version
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0 (no major-version tags (v10) exist)
         with:
           python-version: '3.13'
       # No ffmpeg (hundreds of packages; the one MP3 a test needs is testdata/sine440_24k.mp3), no recommends, and no
@@ -214,8 +221,17 @@ jobs:
       - name: Python packages
         timeout-minutes: 5
         run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock
+      # sdk/scopes.lock and messages.def keep every scope version any release carried (every tag v*: main's betas
+      # and release's releases, which each lack what the other has) exactly as it carried it, nothing taken out or
+      # added; one missing only where no release this commit descends from carried it.  --released fails where it
+      # cannot ask: no tags, a shallow clone (git cannot tell which tags this commit descends from past its
+      # boundary), a tag whose sdk/scopes.lock is no file; fetch-depth 0 above brings the whole history and every
+      # tag.  make unit-plugmsg on a PC says it skipped (a shallow clone: skipped as a whole) or names the tag.
+      # The release job asks again right before it publishes (main and release run at once)
+      - name: Plugin protocol against every release
+        run: python3 tools/mkplugmsg.py --released && python3 tools/mkplugmsg.py --check
       - name: Build
-        run: make -j"$(nproc)" build/hassmic-host build/hassmic-host-screen build/otatool-host
+        run: make -j"$(nproc)" host-tests     # make host without the ARM build for qemu (no NDK, no firmware here)
       # tests/run.py starts every test at once, each in a network namespace of its own (unshare -rn: the tests' ports
       # and hassmic's defaults would collide); they mostly wait on audio at real time and on hassmic's timers, so the
       # job takes about as long as the slowest one; one that fails under that load runs again alone (a warning if it
@@ -227,7 +243,7 @@ jobs:
         run: .venv/bin/python tests/run.py
       - name: Test logs
         if: failure() || hashFiles('build/test-logs/*.first.log') != ''      # failed, or flaky (tests/run.py)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: test-logs
           path: build/test-logs/
@@ -239,10 +255,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0                # the released build is built from its tag
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           python-version: '3.13'        # .venv; Home Assistant's own venv asks for 3.14 (--setup)
       - name: Packages
@@ -281,10 +297,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8
         with:
           path: build
           pattern: build-*
@@ -292,6 +308,9 @@ jobs:
       - name: Fork
         env:
           RELEASE_PUBLIC_KEY: ${{ vars.RELEASE_PUBLIC_KEY }}
+          PLUGIN_INDEX_URL: ${{ vars.PLUGIN_INDEX_URL }}
+          PLUGINS_PUBLIC_KEY: ${{ vars.PLUGINS_PUBLIC_KEY }}
+          PLUGINS_PUBLIC_KEY2: ${{ vars.PLUGINS_PUBLIC_KEY2 }}
         run: scripts/fork-release.sh ci
       - name: Sign
         env:
@@ -368,6 +387,16 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
+          # The plugin protocol against every release once more, the tags as they are now (finding 6 of a review of
+          # 4c55b54): a push to main and one to release build at once (concurrency is per branch), and each test
+          # job's --released ran before the other's tag existed.  Both could add one scope version, each its own
+          # way, and both publish: from then on every build fails ("releases ... carried ... otherwise") until one
+          # release and its tag are deleted (DEVELOPMENT.md "CI and releases").  Asked here, the second to publish
+          # sees the first's tag and stops; what is left is the seconds between this and gh release create.  Tags
+          # deleted on GitHub go here too (--prune --prune-tags, finding 5 of a review of 61e3d8e): the way out of two
+          # releases that carried a version otherwise is to delete one, and a checkout that kept it fails as before
+          git fetch --prune --prune-tags --tags --force origin
+          python3 tools/mkplugmsg.py --released
           if [ "$PRERELEASE" = true ]; then flags="--prerelease --latest=false" title="$VERSION (beta)"; else flags="--latest" title=$VERSION; fi
           gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$title" --notes-file notes.md $flags
       - name: Publish (act, dry run)

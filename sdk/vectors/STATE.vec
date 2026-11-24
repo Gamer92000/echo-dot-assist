@@ -1,0 +1,29 @@
+# STATE: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message STATE 80
+id 65616
+state u8 1
+muted u8 246
+volume u8 215
+packet 500000005000010001f6d7
+case empty
+id 65616
+state u8 0
+muted u8 0
+volume u8 0
+packet 5000000050000100000000
+case long
+id 65616
+state u8 3
+muted u8 255
+volume u8 255
+packet 500000005000010003ffff
+case full
+id 65616
+state u8 1
+muted u8 1
+volume u8 1
+packet 5000000050000100010101
+refuse short 50000000500001
+refuse truncated 500000005000010001f6
+refuse trailing 500000005000010001f6d700
+refuse enum:state 500000005000010004f6d7

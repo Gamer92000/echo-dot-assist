@@ -35,7 +35,7 @@
 #include <string.h>
 #include <time.h>
 
-#define M_RING   0x41               /* the messages' kinds (duck.c has 0x40): { M_RING, 1 on / 0 off } */
+#define M_RING   0x41               /* the messages' kinds (duck.c has 0x40, plugin_fetch.c 0x43): { M_RING, 1 on / 0 off } */
 #define M_STOP   0x42               /* { M_STOP, id (4 bytes, little endian) } */
 #define KEEP_MS  2000               /* "on" again this often while it rings */
 #define HOLD_MS  6500               /* a member rings this long past its last "on": three in a row lost */

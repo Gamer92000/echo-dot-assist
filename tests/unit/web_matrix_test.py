@@ -51,6 +51,19 @@ const grp = (t, on) => m.groups(cols(t), [...new Set(Object.values(t).flatMap(Ob
   const no = (r, c) => c.key !== 'c'; out.modelNo = ch(t, p, [], no); }
 { const t = { a: { x: 1 }, b: { x: 2 }, c: { x: 2 }, d: { x: 2 }, e: { x: 3 } };
   out.rank = [...m.rank('x', cols(t), val(t))]; out.distinct = m.distinct('x', cols(t), val(t)); }
+{ // "Copy plugins": rows that build on each other.  a has the plugin with a setting and two items, b has the plugin and
+  // one of the items (the same digest), c has nothing of it; another plugin q is on a only and is not picked
+  const t = { a: { 'pkg p': 'v2 m1', 'set p': 's1', 'item p x': 'd1', 'item p y': 'd2', 'pkg q': 'v1 m9', 'set q': 's9' },
+              b: { 'pkg p': 'v1 m0', 'set p': 's0', 'item p x': 'd1' }, c: {} }, p = new Map();
+  const stage = (r) => ['pkg', 'set', 'item'].indexOf(r.split(' ')[0]), of = (r) => r.split(' ')[1], has = (id, c) => t[c.key]['pkg ' + id] !== undefined;
+  const any = () => true, sh = (l) => l.map((c) => `${c.row}>${c.to.key}`);
+  for (const r of ['item p y', 'item p x', 'set p', 'pkg p']) m.pick(p, r, 'a');   // picked last row first
+  let s = m.steps(m.changes(p, cols(t), val(t), any), stage, of, has);
+  out.steps = sh(s.run); out.stepsLeft = sh(s.left);
+  p.delete('pkg p'); s = m.steps(m.changes(p, cols(t), val(t), any), stage, of, has);   // without the package: c cannot take the rest
+  out.noPkg = sh(s.run); out.noPkgLeft = sh(s.left);
+  p.clear(); m.pick(p, 'set q', 'a'); m.pick(p, 'pkg p', 'a'); s = m.steps(m.changes(p, cols(t), val(t), any), stage, of, has);
+  out.otherPlugin = [sh(s.run), sh(s.left)]; }                                     // p's package brings nothing of q's
 console.log(JSON.stringify(out));
 """
 bad = n = 0
@@ -99,6 +112,13 @@ check(o["model"] == [["v", "a", "b", "d2"], ["v", "a", "c", "d2"]], f"a model go
 check(o["modelNo"] == [["v", "a", "b", "d2"]], f"... where it can take it: {o['modelNo']}")
 check(o["rank"] == [[2, 0], [1, 1], [3, 2]], f"values by how many have them: {o['rank']}")
 check(o["distinct"] == 3, "distinct values of a row")
+
+check(o["steps"] == ["pkg p>b", "set p>b", "item p y>b", "pkg p>c", "set p>c", "item p y>c", "item p x>c"],
+      f"plugins: per Echo the package first, then the settings, then the files; an item both have is not sent again: {o['steps']}")
+check(o["stepsLeft"] == [], "... and nothing is left out")
+check(o["noPkg"] == ["set p>b", "item p y>b"] and sorted(o["noPkgLeft"]) == ["item p x>c", "item p y>c", "set p>c"],
+      f"plugins: without its package picked, settings and files go only where the plugin is: {o['noPkg']} / {o['noPkgLeft']}")
+check(o["otherPlugin"] == [["pkg p>b", "pkg p>c"], ["set q>b", "set q>c"]], f"plugins: one plugin's package brings nothing of another's: {o['otherPlugin']}")
 
 print(f"web matrix: {n - bad}/{n} ok")
 sys.exit(1 if bad else 0)

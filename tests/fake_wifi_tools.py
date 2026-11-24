@@ -5,7 +5,10 @@ networks on the air with their password, DHCP and router, and dhcpcd's lease.  A
 starts disabled, select_network disables the others, nothing reaches the saved configuration before save_config, SSIDs
 print with printf_encode.  As the Dot 2 does (2026-10-07): dhcpcd runs with -K, so the lease, the address on wlan0 and
 the old router's ARP entry stay through any change of network until "dhcpcd -n" asks again; its hook writes the
-dhcp.wlan0.* properties then.  For tests/fake_web_wifi.py."""
+dhcp.wlan0.* properties then.  A fixed address as on the Dot 2 (2026-11-24): init's dhcpcd-static takes the
+dhcp.wlan0.* properties at its start, its address alone on wlan0, reason STATIC; on Android as on checkers: the
+network's IP configuration is stored at once and taken at the next association (wifictl reassoc).  Addresses another
+device has (world "taken") answer a ping's ARP.  For tests/fake_web_wifi.py."""
 import fcntl, hashlib, json, os, sys
 
 WORLD = os.environ["FAKE_WIFI_WORLD"]
@@ -75,7 +78,9 @@ def wpa(w, args):
         n, air = connected(w)
         lines = [f"bssid={air['bss'][0][0]}", f"freq={air['bss'][0][1]}", f"ssid={esc(bytes.fromhex(n['ssid']))}", f"id={n['id']}",
                  "mode=station", "wpa_state=COMPLETED"]
-        if air.get("dhcp", True): lines.append(f"ip_address={air['ip']}")
+        if "addrs" in w and "svc" in w:            # wpa_cli reads the interface's address (init's dhcpcd world)
+            if w["addrs"]: lines.append(f"ip_address={w['addrs'][0]}")
+        elif air.get("dhcp", True): lines.append(f"ip_address={air['ip']}")
         return "\n".join(lines + ["address=02:00:00:00:00:01"])
     if cmd == "list_networks":
         rows = ["network id / ssid / bssid / flags"]
@@ -101,6 +106,7 @@ def wpa(w, args):
         n = net(a[0])
         if not n: return "FAIL"
         if a[1] == "ssid":
+            if w.get("ssid_fails"): return "FAIL"            # wpa_cli not answering as it should
             b = bytes.fromhex(n["ssid"])
             return f'"{b.decode()}"' if all(0x20 <= c < 0x7f for c in b) else n["ssid"]
         if a[1] == "psk": return "*"
@@ -144,6 +150,8 @@ def wifictl(w, args):
     if verb == "name": return bytes.fromhex(args[1]).decode() if len(args) > 1 else ""
     if verb == "scan": return "OK"
     if verb in ("status", "list_networks", "scan_results"):
+        if verb == "status" and w.get("reassoc_off"):          # a look off the network while it reassociates
+            w["reassoc_off"] -= 1; return "wpa_state=DISCONNECTED\nid=-1"
         if verb == "status":
             st = associate(w)
             n, air = connected(w)
@@ -154,7 +162,8 @@ def wifictl(w, args):
                             f"wlan0\t00000000\t{gwhex}\t0003\t0\t0\t0\t00000000\t0\t0\t0\n")
             if st != "COMPLETED": return "wpa_state=%s\nid=-1" % st
             lines = ["wpa_state=COMPLETED", "id=%d" % n["id"], 'ssid="%s"' % esc(bytes.fromhex(n["ssid"]))]
-            if air.get("dhcp", True) and air["ip"] not in ("", "0"):
+            if (n.get("ipconf_on") or {}).get("ip"): lines.append("ip_address=%s" % n["ipconf_on"]["ip"])
+            elif air.get("dhcp", True) and air["ip"] not in ("", "0"):
                 lines.append("ip_address=%s" % air["ip"])
             return "\n".join(lines)
         return wpa(w, args)
@@ -183,6 +192,7 @@ def wifictl(w, args):
     if verb == "select":
         n = next((n for n in w["networks"] if str(n["id"]) == args[1]), None)
         if not n or not may(n): return "FAIL"
+        n["ipconf_on"] = n.get("ipconf")
         for n in w["networks"]:
             if n["disabled"] != 2: n["disabled"] = 0 if str(n["id"]) == args[1] else 1
         w["current"] = None; w["target"] = int(args[1]); w["settle"] = 2; w["saved"] = json.loads(json.dumps(w["networks"])); return "OK"
@@ -201,6 +211,18 @@ def wifictl(w, args):
         if w.get("current") == n["id"] or w.get("target") == n["id"]: w["current"] = w["target"] = None
         w["saved"] = json.loads(json.dumps(w["networks"])); return "OK"
     if verb == "reassociate": w["current"] = w["target"] = None; return "OK"
+    if verb == "reassoc":                                       # the link made again: each network's IP configuration taken
+        w["current"] = w["target"] = None; w["reassoc_off"] = 1
+        for n in w["networks"]: n["ipconf_on"] = n.get("ipconf")
+        return "OK"
+    if verb == "ip":                                            # stored, not taken until the network is joined again
+        n = next((n for n in w["networks"] if str(n["id"]) == args[1]), None)
+        if not n or not may(n): return "-1"
+        if args[2] == "auto": n.pop("ipconf", None)
+        else:
+            a, pre = args[2].split("/")
+            n["ipconf"] = {"ip": a, "prefix": int(pre), "gw": args[3], "dns": args[4:]}
+        w["saved"] = json.loads(json.dumps(w["networks"])); return str(n["id"])
     return "FAIL"
 
 
@@ -218,16 +240,19 @@ def main():
         elif tool == "app_process":
             out = wifictl(w, args)
         elif tool == "ifconfig":                    # the lease's address, whatever network the Echo is on now
-            ip = w["lease"]["ip"]
+            ip = w["lease"]["ip"]; mask = "255.255.255.0"
             if "svc" in w:                          # init's dhcpcd: the interface's own addresses, the first shown
                 addrs = w.setdefault("addrs", [ip] if ip else [])
                 if args[1:2] == ["0.0.0.0"]: addrs[:1] = []
                 ip = addrs[0] if addrs else ""
+                if w["svc"].get("dhcpcd-static") == "running" and ip == w["props"].get("ipaddress"): mask = w["props"].get("mask", mask)
             if os.environ.get("ANDROID"):
                 n, air = connected(w)               # Android's DHCP: the address comes with its network
                 ip = air["ip"] if n and air and air.get("dhcp", True) and air["ip"] not in ("", "0") else ""
-            out = "wlan0     Link encap:Ethernet  HWaddr 02:00:00:00:00:01"
-            if ip: out += f"\n          inet addr:{ip}  Bcast:{ip.rsplit('.', 1)[0]}.255  Mask:255.255.255.0"
+                fx = (n or {}).get("ipconf_on")
+                if fx: ip = fx["ip"]; mask = ".".join(str((0xffffffff << (32 - fx["prefix"]) & 0xffffffff) >> k & 255) for k in (24, 16, 8, 0))
+            out = "wlan0     Link encap:Ethernet  HWaddr 02:00:00:00:00:01" if len(args) <= 1 else ""   # setting prints nothing
+            if ip and out: out += f"\n          inet addr:{ip}  Bcast:{ip.rsplit('.', 1)[0]}.255  Mask:{mask}"
         elif tool == "getprop":
             k = args[0] if args else ""
             if k.startswith("dhcp.wlan0."):
@@ -237,8 +262,18 @@ def main():
                 out = "stopped" if "svc" not in w else w["svc"].get(k[len("init.svc."):], "")
         elif tool == "setprop":
             if args[0].startswith("dhcp.wlan0."): w["props"][args[0][len("dhcp.wlan0."):]] = args[1]
-        elif tool == "stop" and args[:1] == ["dhcpcd-wlan0"] and "svc" in w:
-            w["svc"]["dhcpcd-wlan0"] = "stopped"
+        elif tool == "stop" and args[:1] in (["dhcpcd-wlan0"], ["dhcpcd-static"]) and "svc" in w:
+            if args[0] in w["svc"]: w["svc"][args[0]] = "stopped"
+        elif tool == "start" and args[:1] == ["dhcpcd-static"] and "svc" in w:
+            # dhcpcd_static.sh: the properties as they are now; the address on wlan0 at once, reason STATIC
+            n, air = connected(w)
+            w["svc"]["dhcpcd-static"] = "running"; pr = w["props"]
+            w.setdefault("static_starts", []).append([pr.get("ipaddress"), pr.get("mask"), pr.get("gateway"), pr.get("dns1"), pr.get("dns2")])
+            addrs = w.setdefault("addrs", [])
+            if n and pr.get("ipaddress") and pr["ipaddress"] not in addrs: addrs.append(pr["ipaddress"])
+            pr.update(result="ok", reason="STATIC")
+        elif tool == "ip":                          # Android's route tables: what the world says (none here)
+            out = w.get("ip_route", "")
         elif tool == "dhcpcd" or (tool == "start" and args[:1] == ["dhcpcd-wlan0"]):   # -n: ask again, or init's service
             n, air = connected(w)                   # starting: a lease only from a network that has DHCP
             if tool == "start" and "svc" in w:      # init's -K: the carrier is read once, at its start
@@ -259,6 +294,8 @@ def main():
             arp = {l.split()[0]: l for l in open(w["arp_file"]).read().splitlines()[1:] if l.strip()} if os.path.exists(w["arp_file"]) else {}
             if n and air.get("arp", True) and air["gw"] == args[-1]:
                 arp[air["gw"]] = f"{air['gw']:<16} 0x1         0x2         aa:bb:cc:dd:ee:ff     *        wlan0"; rc = 0
+            elif n and args[-1] in w.get("taken", []):  # another device has that address
+                arp[args[-1]] = f"{args[-1]:<16} 0x1         0x2         aa:bb:cc:dd:ee:09     *        wlan0"; rc = 0
             with open(w["arp_file"], "w") as a:
                 a.write("IP address       HW type     Flags       HW address            Mask     Device\n" + "".join(l + "\n" for l in arp.values()))
         # stop, start (other services): nothing to say

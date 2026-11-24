@@ -10,6 +10,15 @@
 #ifndef BUILD
 #define BUILD "dev"            /* the Makefile passes git describe */
 #endif
+/* What this build reports and what its bundle is called (`make version`, scripts/bundle.sh, the bundle's VERSION):
+ * the bare version for a build CI published (Makefile RELEASE), else VERSION+BUILD.  Online updates compare it with
+ * the releases (update.c), and the self test names it to root (ota.c ota_healthy), which promotes only the build
+ * installed now (main.sh healthy) */
+#ifdef RELEASE
+#define VERSION_NAME VERSION
+#else
+#define VERSION_NAME VERSION "+" BUILD
+#endif
 #ifndef BUILD_TIME
 #define BUILD_TIME __DATE__ " " __TIME__   /* the Makefile passes the commit's time: builds repeat byte for byte */
 #endif
@@ -52,6 +61,14 @@ struct proto {
                                                  * the server goes on with what it has (stop() aborts the run) */
     void (*reply_cut)(void);                    /* may be NULL: the reply playing is cut (flush) while the run goes on: stop
                                                  * fetching it now, not at the server's next chunk */
+    int (*plugin)(const char *event);           /* may be NULL: a plugin came or went on this Echo (core_plugin_events).
+                                                 * How many of Home Assistant's own links it went out on: subscribed,
+                                                 * and holding the device key where one is set (core_plugin_event) */
+    void (*plugin_entity)(unsigned key, const char *type);  /* may be NULL: a plugin's entity's state (TYPE NULL), or its
+                                                 * event (core_plugin_entity) */
+    void (*music_changed)(void);                /* may be NULL: a plugin's music plays, pauses or ends: the media player */
+    int (*keyed)(void);                         /* may be NULL (no such thing: Wyoming): 1 once Home Assistant set the
+                                                 * device key (only its keyed link sets a plugin's entities), else 0 */
 };
 extern const struct proto proto_wyoming, proto_esphome;
 
@@ -146,11 +163,30 @@ const char *core_wake_phrase(void);              /* the name of the one that sta
 /* The engine (lock held): Amazon's (the model's own), microWakeWord (models in state/mww, mww.h), or Home Assistant's
  * (the mic streams, it listens: needs a restart either way, asked for here); the wake word list is the engine's.  -1
  * reads; microWakeWord without a model, or a change while hassmic.conf says -w remote, is refused (the engine stays) */
-enum { WAKE_AMAZON, WAKE_MWW, WAKE_HA };       /* WAKE_HA: Home Assistant listens in the stream (-w remote) */
+enum { WAKE_AMAZON, WAKE_MWW, WAKE_HA,         /* WAKE_HA: Home Assistant listens in the stream (-w remote) */
+       WAKE_PLUGIN };                           /* and on: the wake plugins installed, in core_wake_engines' order */
 int  core_wake_engine(int set);
+int  core_wake_engine_forced(void);              /* -w remote on the command line: the setting reads Home Assistant's, not the owner's */
+/* lock held: the engine setting's values: "amazon", "microwakeword", "homeassistant", then "plugin:<id>" for every
+ * plugin installed that can be one, and for the one chosen whether it is here or not (the setting keeps what the
+ * owner chose: docs/plugins.md 4.13).  The count */
+int  core_wake_engines(const char *const **names);
+/* lock held: the same list read anew, the plugin store's scanned first: a value not in core_wake_engines' list may be a
+ * plugin installed a moment ago, whose list the broker has not told the core of yet (settings_set) */
+void core_wake_engines_fresh(void);
+/* not the lock: the chosen engine is a plugin that does not listen.  0: all is well; 1: the plugin is missing and
+ * Amazon's wake word stands in; 2: it is installed and down, and nothing listens for a wake word.  why: for the page */
+int  core_wake_problem(char *why, size_t cap);
+int  core_ha_keyed(void);                       /* proto->keyed, takes the lock: 1 keyed, 0 not yet, -1 no such thing */
+int  core_wake_plugin(char *id, size_t cap);           /* the engine is a plugin: 1 and which; no lock held */
+int  core_wake_problem_held(char *why, size_t cap);     /* the same with the lock held */
 const char *core_wake_refused(void);             /* lock held: why the last core_wake_engine(set) did not take */
 void core_remote_wake(void);                     /* lock held: Home Assistant heard the wake word (WAKE_HA) */
 void core_wake_models_changed(void);         /* not the lock: a model was added, changed or deleted (mww_store.c) */
+/* lock held: ENGINE (a value of the wake_engine setting with words of its own: "microwakeword", "plugin:<id>") with
+ * IDS (1 or 2) as its wake words, in their slots: that engine's pick written first, then the setting (saved, told to
+ * Home Assistant).  0, or -1 and why (the engine stays) */
+int  core_wake_switch(const char *engine, char (*ids)[64], int n, char *err, size_t cap);
 int  core_eq(int band);                          /* speaker equalizer, 0 bass / 1 mid / 2 treble: -6..+6 dB */
 void core_set_eq(int band, int db);              /* the mixer keeps it across reboots */
 int  core_led_auto(int set);                     /* LED ring follows the light sensor (stock's own engine, the default); -1 reads */
@@ -170,6 +206,25 @@ extern const int core_button_nevents;
  * another Echo, nothing said after it */
 extern const char *const core_wake_events[];
 extern const int core_wake_nevents;
+/* Plugins for Home Assistant's "Plugin" event entity (docs/plugins.md 5.4): one came, a newer version of one, one
+ * went, one came from another Echo on a voucher, without this Echo's button.  The types are a promise to the
+ * automations: these four stay, another kind of thing is another type.
+ * core_plugin_event: any thread, no lock held (not the core's, the store's or the broker's); ID for the log, the
+ * event carries its type only, as every ESPHome event.
+ * `synced` is the announcement that stands in for a press, so it is not left to whether a link happened to be up:
+ * one that reached no link of Home Assistant's own (proto->plugin 0: none subscribed, none with the device key, or
+ * the "Plugin" entity not listed) is held, PLUGIN_HELD of them (as many as web.c keeps notes, standing and
+ * dismissed-but-untold together: every note's event has a place), and sent when such a link subscribes
+ * (core_plugin_held_flush, the protocol's, lock held).  Within the run: what is held is in memory.  Over a restart
+ * the settings page's note carries it (web.c: a note Home Assistant has not heard of is given to core_plugin_event
+ * again at start; core_plugin_told hands web.c the ids that went out, one a call, 0 none; any thread, no lock held) */
+enum { PLUGIN_INSTALLED, PLUGIN_UPDATED, PLUGIN_REMOVED, PLUGIN_SYNCED };
+#define PLUGIN_HELD 32
+extern const char *const core_plugin_events[];
+extern const int core_plugin_nevents;
+void core_plugin_event(int what, const char *id);
+void core_plugin_held_flush(void);
+int  core_plugin_told(char *id, size_t cap);
 
 /* no lock needed */
 /* lock held for this one: switches to SPEAKING.  media: Home Assistant's media, which plays at the main volume (not a
@@ -215,19 +270,61 @@ enum { TIMER_SOUND_TIMER, TIMER_SOUND_ALARM, TIMER_SOUND_BEEP, TIMER_SOUND_CUSTO
 int    core_timer_sound(int set);
 void   core_timer_sound_default(void);
 void   core_timer_sound_preview(void);                      /* not the lock: one ring of it, 10 s at most (the page's "Play") */
-enum { MUSIC_SENDSPIN = 1, MUSIC_BLUETOOTH = 2 };
-void   core_music(int source, int on);                      /* a music stream runs: the wake word threshold follows */
+/* The music sources (docs/plugins.md 4.7): Sendspin, a phone over Bluetooth, and any that comes (a plugin's).  Each says
+ * what it does when the core needs it to, and the core keeps "the newest source wins" in one place (main.c) instead
+ * of a call to each source at every place that needed one (nine of them, before).  The table's order is the action
+ * button's: Bluetooth first (a phone is closest at hand), then Sendspin, then the rest in the order they came.
+ * Every function may be NULL; any thread, as the places that call them (core_lock held for stop and volume_changed,
+ * as for Sendspin's before: its adm_lock nests inside core_lock; never for the rest).
+ *   pause           another source started, or a call: pause what plays (no automatic resume after)
+ *   stop            "<wake word>, stop": pause what plays; 1 = something played and is paused (the button resumes it)
+ *   button          the action button, in two rounds: RESUME 0 pauses what plays, RESUME 1 resumes what the button or
+ *                   a stop paused; 1 = taken (a single press goes to the first source that takes it, in both rounds)
+ *   skip            pressed twice (+1: next) or three times (-1: previous): 1 = sent
+ *   volume_changed  the Echo's volume moved (from wherever): tell the source's remote
+ *   unyield         every other source is off again: a source made silent for another one is heard again */
+struct music_source {
+    const char *id;
+    void (*pause)(void);
+    int  (*stop)(void);
+    int  (*button)(int resume);
+    int  (*skip)(int dir);
+    void (*volume_changed)(int percent);
+    void (*unyield)(void);
+};
+#define MUSIC_SOURCES 14              /* Sendspin, Bluetooth, the PC's stand-in (HASSMIC_FAKE_SOURCE), plugin.c's LANES
+                                         * (a lane for each plugin that may run and two more), one spare */
+/* a source joins the table (before it plays): its number, -1 when the table is full.  Never left: a source that goes
+ * away says through its own functions that nothing plays */
+int    music_register(const struct music_source *s);
+void   core_music(int source, int on);                      /* source N's stream runs: the others pause, the wake word's
+                                                               threshold follows */
+/* Plugins in Home Assistant (plugin.c, docs/plugins.md 4.10), no lock held: an entity's state changed (TYPE NULL) or an
+ * event entity fired TYPE; something listed came or went (the links close, as for a feature); a plugin's music
+ * changed (the media player's state) */
+void   core_plugin_entity(unsigned key, const char *type);
+void   core_plugin_entities_changed(void);
+void   core_plugin_music_changed(void);
 void   core_bt_device(const char *name, int on);            /* a Bluetooth speaker source connected / went (not the lock) */
 void   core_bt_pairing(int on);                             /* the Bluetooth speaker's pairing window opened / closed (not the lock) */
-/* Drop In (dropin.c), not the lock.  core_dropin: the call's state changed (DROPIN_*; peer: the other Echo's node;
- * outgoing: this Echo called): ring, sounds, the front end's listening mode, Home Assistant.  core_dropin_result: what
- * came of a call this Echo made (DROPIN_R_*; here: refused before it started, nothing else told).  core_dropin_refusal:
- * why a call cannot run right now (muted; incoming: do not disturb too), NULL if it can */
-void   core_dropin(int state, const char *peer, int outgoing);
+/* Calls (call.h: Drop In's and a plugin's, one at a time by call.c's claim), not the lock.  core_call: the call WHO
+ * carries changed state (CALL_*; peer: what the log and the screen name the other side by, a node for Drop In; outgoing:
+ * this Echo called): ring, sounds, the LED patterns, the front end's listening mode, the music paused; Home Assistant's
+ * "Drop In" sensors for Drop In's alone (a plugin's calls are its own entities', docs/plugins.md 4.8).
+ * core_dropin_result: what came of a Drop In call this Echo made (DROPIN_R_*; here: refused before it started, nothing
+ * else told).  core_call_refusal: why a call cannot run right now (muted; incoming: do not disturb too), NULL if it can.
+ * What a person here does to the call that runs, whoever carries it: core_call_button (the action button: answers a
+ * ringing one, ends any other; 1 if there was one), core_call_answer (the screen's Answer: a ringing one only),
+ * core_call_hangup (a "stop", "hang up", the screen; 1 if there was one).  core_call_status: the state shown, PEER */
+void   core_call(int who, int state, const char *peer, int outgoing);
 void   core_dropin_result(int result, const char *peer, int here);
-void   core_dropin_listen(int on);                          /* the front end's listening mode: this side of a call talks */
+void   core_call_listen(int on);                            /* the front end's listening mode: this side of a call talks */
 int    core_own_sound(void);                                /* our sounds or a reply play (or are still in the mic): any thread */
-const char *core_dropin_refusal(int incoming);
+const char *core_call_refusal(int incoming);
+int    core_call_button(void);
+int    core_call_answer(void);
+int    core_call_hangup(const char *why);
+int    core_call_status(char *peer, size_t cap);
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
                                                                stdout, which lands in out, or 20 s have passed (then it is

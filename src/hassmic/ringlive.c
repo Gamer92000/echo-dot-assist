@@ -140,19 +140,33 @@ int ringlive_table(const char *s, size_t n, int capcolor, float out[101])
 
 /* ---------------------------------------------------------------- the frame file */
 
+/* One frame onto the driver's file; async-signal-safe (on_term).  The driver's sysfs file takes a frame in one write:
+ * nobody ever reads it half written.  The PC's stand-in (HASSMIC_FAKE_FRAME) is a plain file, where O_TRUNC and the
+ * write are two steps: a kill between them (the tests' "init's stop" while an effect moves, CI 2026-11-24) left it
+ * empty, which the next start takes for a ring that is not 12 x RRGGBB.  So there it goes in whole by a rename, as on
+ * the device.  -1 (errno set) or the bytes written */
+static int frame_fake;                  /* frame_path is the stand-in (written by rename) */
+static char frame_tmp[272];
+static ssize_t frame_put(const char *t, size_t n)
+{
+    int fd = frame_fake ? open(frame_tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644)
+                        : open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
+    if (fd < 0) return -1;
+    ssize_t k = write(fd, t, n);
+    int e = k >= 0 && k != (ssize_t)n ? EIO : errno;    /* a short write sets no errno of its own */
+    close(fd);
+    if (frame_fake && k == (ssize_t)n && rename(frame_tmp, frame_path)) { k = -1; e = errno; }
+    errno = e;
+    return k;
+}
+
 static int frame_write(const char *t, int lit)
 {
     if (acs) { ring_live_show(lit); return 0; }        /* its frame went in before (frame_write_guarded) */
-    int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
-    if (fd < 0) return -1;
     size_t n = strlen(t);
-    ssize_t k = write(fd, t, n);
-    int rc = k == (ssize_t)n ? 0 : -1;                  /* sysfs takes a frame in one write */
-    writes++;
-    int e = k >= 0 && rc ? EIO : errno;                 /* a short write sets no errno of its own */
-    close(fd);
-    errno = e;
-    return rc;
+    ssize_t k = frame_put(t, n);
+    writes++;                                           /* every try: the tests count what the guards let through */
+    return k == (ssize_t)n ? 0 : -1;
 }
 
 /* A frame write that never lands after ledcontroller's for a pattern being set (ringlive_yield): read yield_gen,
@@ -590,6 +604,11 @@ static void *writer(void *arg)
                  * Only the write itself is under the lock (no other lock taken there): yield waits ~15 ms at most */
                 int yg2 = atomic_load(&yield_gen), wrc = 0, werr = 0;
                 if (need && hold_fn && hold_fn()) need = 0;     /* the Echo's own came meanwhile: its frame wins */
+                /* The marker before the first frame of ours, not after it: statefile_write's fsyncs take a while
+                 * (hundreds of ms on a busy flash), and a kill in between left our picture lit with nothing to say so
+                 * (CI 2026-11-24: the frame there, the marker not yet).  A marker whose frame never landed only has the
+                 * next start write dark over a ring that is dark anyway (the Echo's own patterns are hold_fn's) */
+                if (need && content && !marked) { marker_write(); marked = 1; }     /* once a run (see marker_write) */
                 if (need && (wrc = frame_write_guarded(want, content, yg2, &werr)) == -2) { need = 0; next = 5; }
                 if (need && !wrc) atomic_store(&owned_gen, yg2);
                 if (need) {
@@ -607,7 +626,6 @@ static void *writer(void *arg)
                         snprintf(text, sizeof text, "%s", want);
                         if (frame_read(seen_back, sizeof seen_back)) seen_back[0] = 0;
                         if (content && !owned) fprintf(stderr, "light ring live: on the ring (level %d)\n", lvl);
-                        if (content && !marked) { marker_write(); marked = 1; }     /* once a run (see marker_write) */
                         if (!content) {
                             fprintf(stderr, "light ring live: dark, the ring is ledcontroller's again\n"); text[0] = 0;
                             if (quit) { unlink(marker_path); marked = 0; }      /* a clean end: nothing left */
@@ -665,8 +683,7 @@ static void on_term(int sig)
     /* Not under write_lock (an async handler may not wait): a writer's write already past its guard can still land
      * after this one, and leave ours lit with the marker gone; one write's window, ~15 ms */
     if (!acs && owned_now && !atomic_load(&yielding) && atomic_load(&yield_gen) == atomic_load(&owned_gen) && getpid() == our_pid) {
-        int fd = open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
-        if (fd >= 0) { if (write(fd, dark_text, strlen(dark_text)) == (ssize_t)strlen(dark_text)) unlink(marker_path); close(fd); }
+        if (frame_put(dark_text, strlen(dark_text)) == (ssize_t)strlen(dark_text)) unlink(marker_path);
     }
     signal(sig, SIG_DFL);
     raise(sig);
@@ -701,6 +718,7 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
     }
     if (!p || !*p) return -1;                                       /* not on this model (yet): nothing to say */
     snprintf(frame_path, sizeof frame_path, "%s", p);
+    frame_fake = fake != NULL; snprintf(frame_tmp, sizeof frame_tmp, "%s.new", frame_path);
     if (leds < 2 || leds > MAX_LEDS) why = "not a ring of LEDs";
     else if (access(frame_path, W_OK)) why = "hassmic may not write the ring's frame (root's main.sh gives it at the satellite's start; an older one does not)";
     else if (frame_read(t, sizeof t) || strlen(t) != (size_t)leds * 6 + 1 || strspn(t, "0123456789abcdefABCDEF") != (size_t)leds * 6)

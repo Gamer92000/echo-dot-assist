@@ -30,6 +30,11 @@ XDA thread with the full instructions: [UNLOCK][ROOT][TWRP][UNBRICK] Amazon Echo
 `firmware/radar/` (not in git); the unlock's and the root's own files (`boot-root.zip`) are the thread's: it says
 which, kept current with its procedure, and nothing here downloads or reads them.
 
+> **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in Amazon's software,
+> and updates close such holes. Which versions still unlock is not tracked here (the XDA thread may know), and an
+> unlock that does not take can leave the Echo unusable. Never let the Echo update: do not set it up with the Alexa
+> app, and keep it off Wi-Fi until the install puts it there.
+
 | File | Source | sha256 |
 |---|---|---|
 | `update-kindle-radar_puffin-NS6572_user_6436_0012718777476.bin` | [FTVDB](https://ftvdb.com/echo/firmware/com.amazon.radar.android.os/17af64ecc5b8f0303daf4e2a37c75b1a-12718777476-fire-os-6-5-7-2-ns6572-6436-2026-03-21/) (build the thread pins) | `976e2761c5bb9e5d3d9a2b1b9bc2f2296b89a5b37057ab1780743aa075f2df48` |

@@ -1,0 +1,20 @@
+# WAKE_READY: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message WAKE_READY 32
+id 65568
+slot u8 133
+packet 200000002000010085
+case empty
+id 65568
+slot u8 0
+packet 200000002000010000
+case long
+id 65568
+slot u8 255
+packet 2000000020000100ff
+case full
+id 65568
+slot u8 1
+packet 200000002000010001
+refuse short 20000000200001
+refuse truncated 2000000020000100
+refuse trailing 20000000200001008500

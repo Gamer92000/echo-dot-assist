@@ -1,0 +1,36 @@
+# What each version of each scope of the plugin protocol had (sdk/PROTOCOL.md "Versions"): written by
+# tools/mkplugmsg.py the first time messages.def declares a version, never by it again.  `make unit-plugmsg` fails
+# where messages.def makes a recorded version otherwise (that would change a version a plugin may have been built
+# for), and where a version that any release carried (any git tag v*, betas and releases, on main or on release) is
+# not here exactly as that release's lock had it: nothing taken out, nothing added, whether messages.def or this file
+# has it.  A version that no release carried may be deleted, by hand, to record it anew.  A version a release that
+# this tree descends from carried may not go at all; one only a release elsewhere carried (a release branch's newer
+# tag, a beta of main the release branch lacks) may be missing here, and is held to that release where it is here.
+# Two releases that carried one version otherwise fail too (tools/mkplugmsg.py --released; CI runs it).  These lines
+# are tools/mkplugmsg.py's LOCK_HEAD, held word for word; a note of the lock's own goes below them, after a blank line.
+#   <scope> <version> const NAME VALUE | enum NAME A=1 B=2>A C=3>- ... | cap NAME=BIT | key CONTEXT NAME
+#                     | version N widens|within | msg NAME NUMBER DIR [drop] <type:name[:max][=ENUM]> ...
+core 1 const MAX_PACKET 32768
+core 1 msg HELLO 1 > u32:sdk
+demo 1 cap DEMO=0
+demo 1 const LIM 10
+demo 1 enum KIND A=1 C=3
+demo 1 key demo.entry kind
+demo 1 key demo.entry name
+demo 1 msg BOTH 12 > u8:k
+demo 1 msg PICK 14 < drop u8:kind=KIND
+demo 1 msg PUT 10 < drop u8:a=KIND str:s:16 list:items:4(u8:x=KIND)
+other 1 cap OTHER=1
+other 1 msg BOTH 12 > u8:k
+demo 2 cap DEMO=0
+demo 2 const LIM 10
+demo 2 const MORE 20
+demo 2 enum KIND A=1 C=3 B=2>A D=4>-
+demo 2 key demo.entry extra
+demo 2 key demo.entry kind
+demo 2 key demo.entry name
+demo 2 msg BOTH 12 > u8:k
+demo 2 msg NEW 11 < u8:z
+demo 2 msg PICK 14 < drop u8:kind=KIND
+demo 2 msg PUT 10 < drop u8:a=KIND str:s:16 list:items:4(u8:x=KIND u16:y) u16:b
+demo 2 version 2 widens

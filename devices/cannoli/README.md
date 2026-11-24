@@ -21,8 +21,11 @@ unlock](#reference-the-boot-chain-and-the-unlock).
 
 ## Read this first
 
-- **Keep the Echo off Wi-Fi until the install is done.** An Amazon update would move it off build
-  8349, which everything here is pinned against.
+- **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in
+  Amazon's software, and updates close such holes. Which versions still unlock is not tracked here,
+  and an unlock that does not take can leave the Echo unusable. Never let the Echo update: do not
+  set it up with the Alexa app, and keep it off Wi-Fi until the install is done (an update would
+  also move it off build 8349, which everything here is pinned against).
 - **Never connect +5 V to the test pads.** The Dot keeps running on its own 15 V adapter; the USB
   wires carry data and ground only.
 - **Do not use TWRP's generic wipe, format or ZIP-install menus** on this Dot's NAND — only the
@@ -30,8 +33,9 @@ unlock](#reference-the-boot-chain-and-the-unlock).
 - **Keep the wires soldered, the OS bundle (`work/bundle`) and the install backup
   (`backups/cannoli-original`) safe.** They are the only way back if both system slots are ever
   broken ([why](#reference-the-boot-chain-and-the-unlock)).
-- A factory-fresh Dot needs one **one-way step** in the troubleshooting below (an anti-rollback
-  fuse, the same one an Amazon update would burn) — [details](#troubleshooting).
+- A Dot on any build older than 8349 — every factory-fresh one, and not only those — needs one
+  **one-way step** in the troubleshooting below (an anti-rollback fuse, the same one an Amazon
+  update would burn) — [details](#troubleshooting).
 
 ## What you need
 
@@ -42,7 +46,9 @@ Besides the [general requirements](../../README.md#requirements) of the project:
 - An x86-64 Linux host with ~35 GB free — the TWRP source tree alone is 26 GB, the builder's
   verified inputs 6 GB — plus `adb`/`fastboot` (platform-tools), `uv`, Python 3.10+,
   `squashfs-tools`, and `qemu-user` (or a static `qemu-arm` to hand the builder)
-- Four checkouts as sibling folders — every `../<repo>` path below assumes exactly that:
+- Four checkouts as sibling folders — every `../<repo>` path below assumes exactly that. Each
+  command block below starts with the `cd` into the checkout it runs in; the paths in it count
+  from there.
 
 ```sh
 git clone https://github.com/Gamer92000/echo-dot-assist
@@ -51,9 +57,12 @@ git clone https://github.com/Gamer92000/cannoli-os-builder
 git clone https://github.com/Gamer92000/twrp_device_amazon_cannoli
 ```
 
-Once, from the firebreak checkout: `uv sync`, then
+Once, in the firebreak checkout (always run it from there as `uv run firebreak`: the `firebreak`
+on PyPI has no cannoli yet, whatever its "outdated" notice says):
 
 ```sh
+cd firebreak
+uv sync
 sudo install -m 644 contrib/73-cannoli.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 sudo usermod -aG plugdev,dialout "$USER"
@@ -69,6 +78,7 @@ In the cannoli-os-builder checkout (from its README — it downloads the pinned 
 through FTVDB and verifies every hash; the package list is its Debian/Ubuntu one):
 
 ```sh
+cd ../cannoli-os-builder
 python3 -m cannoli_os.prepare "$PWD/work/inputs"
 ```
 
@@ -82,7 +92,7 @@ recovery packaging, the inputs for the OS bundle.
   <img src="../../docs/img/cannoli-pads-light.svg" alt="Wiring diagram, the board as printed with FLEX SIDE at the top: the 3×3 test-pad matrix in a silkscreen outline between the two large gold screw holes, a round pad above it. GND on the centre pad (cross-hatched, as the pad right of it); D− straight below GND, D+ the corner pad left of D−. The three pads are coloured as the USB wires they take; the +5 V wire stays unconnected.">
 </picture>
 
-Peel the rubber foot off the base with a thin knife or spudger: the pad matrix sits in a recess right behind it.
+Peel the rubber foot off the base (it comes off by hand; a spudger helps start it): the pad matrix sits in a recess right behind it.
 Undo the four T8 Torx screws underneath for good access to the board. Hold the board as the
 diagram draws it — `FLEX SIDE` printed at the top, a round pad just above the matrix, the matrix between the two
 large gold screw holes, its centre pad and the one right of it cross-hatched — and solder three wires:
@@ -104,14 +114,17 @@ Hold the **action button** (the circle) while powering on → fastboot; `fastboo
 
 ### 4. Build the recovery
 
-In the TWRP checkout, build the pinned recovery as its README says — the source sync is 26 GB and
-the build can take several hours on a typical PC (about 8 minutes on 32 cores). Before running
-its `build.sh`, point it at the verified stock images from step 1 instead of its own download:
-`export STOCK_IMAGES=../cannoli-os-builder/work/inputs/images`. Then package the recovery for
-your serial:
+In the TWRP checkout, build the pinned recovery (its README has the packages and the WSL notes)
+from the verified stock images of step 1 instead of its own download, then package it for your
+serial. The source sync is 26 GB and the build can take several hours on a typical PC (about 8
+minutes on 32 cores; `JOBS` is how many jobs run at once, 4 unless set: lower it if the build
+runs out of memory):
 
 ```sh
-python3 -m cannoli_twrp.pack --images ../cannoli-os-builder/work/inputs/images \
+cd ../twrp_device_amazon_cannoli
+export STOCK_IMAGES="$(realpath ../cannoli-os-builder/work/inputs/images)"
+JOBS=$(nproc) bash build.sh
+python3 -m cannoli_twrp.pack --images "$STOCK_IMAGES" \
   --ramdisk work/twrp/out/target/product/cannoli/ramdisk-recovery.img \
   --graphics work/twrp/out/target/product/cannoli/system/lib/libminuitwrp.so \
   --serial <serial> --output work/recovery
@@ -119,12 +132,13 @@ python3 -m cannoli_twrp.pack --images ../cannoli-os-builder/work/inputs/images \
 
 ### 5. Build this port's update bundle
 
-In this checkout — right before the OS bundle in the next step, so it cannot go stale: a stale
-`build/cannoli/hassmic.bundle` bakes a stale port, and the builder cannot tell. `STUBS=1` links
-against stand-ins for Amazon's libraries (the binaries come out byte-identical; CI builds this
-way, no firmware unpacking needed), and `NDK=` reuses the toolchain step 1 downloaded:
+In this checkout (echo-dot-assist) — right before the OS bundle in the next step, so it cannot go
+stale: a stale `build/cannoli/hassmic.bundle` bakes a stale port, and the builder cannot tell.
+`STUBS=1` links against stand-ins for Amazon's libraries (the binaries come out byte-identical; CI
+builds this way, no firmware unpacking needed), and `NDK=` reuses the toolchain step 1 downloaded:
 
 ```sh
+cd ../echo-dot-assist
 make kernel-tools DEVICE=cannoli    # optional: the Wi-Fi motion kernel module
 NDK=../cannoli-os-builder/work/inputs/android-ndk-r21e DEVICE=cannoli STUBS=1 make all
 mkdir -p secrets
@@ -139,6 +153,7 @@ Back `secrets/update.key` up somewhere safe: it signs every future update and op
 In the OS-builder checkout, with the port baked in:
 
 ```sh
+cd ../cannoli-os-builder
 sudo python3 -m cannoli_os.build \
   --images work/inputs/images --recovery ../twrp_device_amazon_cannoli/work/recovery \
   --adbd work/inputs/adbd --policy work/inputs/magiskpolicy32 \
@@ -159,6 +174,7 @@ The Dot keeps two system slots: A runs Fire OS, B holds the recovery this instal
 the firebreak checkout:
 
 ```sh
+cd ../firebreak
 uv run firebreak unlock --device cannoli \
   --bundle ../cannoli-os-builder/work/bundle --serial <serial> \
   --backup backups/cannoli-original
@@ -194,6 +210,7 @@ and rerun the install.
 ## Going back to stock
 
 ```sh
+cd ../firebreak
 uv run firebreak restore backups/cannoli-original --device cannoli \
   --bundle ../cannoli-os-builder/work/bundle --serial <serial>
 ```
@@ -204,31 +221,43 @@ which is why the wires and the bundle stay the real safety net.
 
 ## Troubleshooting
 
-Both items below affect factory-fresh units (2022 launch firmware) only. Skip them if the install
-above ran clean and the ring behaves.
+Two separate problems, each with its own fix; skip both if the install above ran clean and the ring
+behaves. The first comes with any firmware older than 8349: the 2022 launch firmware, but later
+builds too (a Dot on NS6573/7577N from June 2026 needed it, [#216][i216]). The second comes with
+the 2022 launch boot loader only, and a Dot that needed the first need not need it (that one's ring
+worked without): look at the ring after the install.
 
 ### The install stops at `Unsupported firmware prerequisite:`
 
-Your Dot predates build 8349, and its protected volumes differ from the 8349 set everything here
-is pinned against. The installer has already put the recovery in slot B at that point (Volume Up
-at power-on), so the fix is to upgrade the stock volumes from that recovery and then rerun the
-install. Unpack the pinned 8349 OTA first (in this checkout):
+Your Dot runs a build older than 8349, and a protected volume (`tee1`, `tee2`, `scp_a`, `mcupm_a`;
+the message names the first that differs) is not the 8349 one everything here is pinned against.
+The installer has already put the recovery in slot B at that point, so the fix is to upgrade the
+stock volumes from that recovery and then rerun the install.
+
+First unpack the pinned 8349 OTA into its parts. Step 1 left it in the builder's inputs as
+`stock.zip` (or use the file you gave the preparer's `--ota`); `payload_dump.py` reads the
+`payload.bin` inside it in place:
 
 ```sh
-cd firmware/cannoli
-python3 ../../tools/payload_dump.py update-kindle-cannoli-NS6575_user_8349_0013323246980.bin unpack
+cd ../echo-dot-assist
+python3 tools/payload_dump.py ../cannoli-os-builder/work/inputs/stock.zip firmware/cannoli/unpack/parts
 ```
 
-Then, from the firebreak checkout:
+That writes one image per partition (`tee1.img`, `scp.img`, `mcupm.img`, `boot.img`, `uboot.img`,
+`system.img`, `brhgptlk_0.img`, …). Then, with the Dot in the recovery (where the stopped install
+leaves it, else hold Volume Up at power-on; `adb devices` lists it as `recovery`):
 
 ```sh
+cd ../firebreak
 uv run firebreak cannoli-upgrade --device cannoli \
   --bundle ../cannoli-os-builder/work/bundle --serial <serial> \
-  --ota-parts /absolute/path/to/echo-dot-assist/firmware/cannoli/unpack/parts
+  --ota-parts "$(realpath ../echo-dot-assist/firmware/cannoli/unpack/parts)"
 ```
 
 It verifies every part against the installer's pins, refuses a Dot already on 8349, and writes
-with readback verification ([firebreak's guide][firebreak-guide] has the section).
+with readback verification ([firebreak's guide][firebreak-guide] has the section); with `--check`
+it only says which volumes differ and writes nothing. Then rerun step 7's command unchanged (same
+bundle, same backup directory).
 
 The first boot of the 8349 TEE raises the anti-rollback eFuse — a one-way step, but the same one
 any Amazon update to 8349 would make.
@@ -238,24 +267,25 @@ any Amazon update to 8349 would make.
 The 2022 launch boot loader (BL2) never starts the 8349 LED co-processor, so nothing ever owns the
 ring: dark on the satellite port, an endless boot swirl on rooted stock. The fix flashes the four
 `brhgptlk_0..3` partitions with the 8349 image — unlike everything above they are **raw MTD
-partitions, not UBI**. First unpack the OTA into parts (in this checkout):
+partitions, not UBI**. It takes the OTA's parts from the step above (unpack them as it says if you
+skipped it) and the Dot in the recovery: hold Volume Up at power-on, `adb devices` lists it as
+`recovery`. Before rerunning the install or any time after, both work.
+
+Per partition, 0 to 3: back the launch copy up to the PC first, flash, and verify before moving to
+the next. Run the block with `N=0`, compare the two hashes, then again with `N=1`, `N=2`, `N=3`;
+stop where they differ (the launch copy you pulled is the way back):
 
 ```sh
-cd firmware/cannoli
-python3 ../../tools/payload_dump.py update-kindle-cannoli-NS6575_user_8349_0013323246980.bin unpack
-```
-
-Then, per partition N of 0, 1, 2, 3 — back the launch copy up to the PC first, flash, and verify
-before moving to the next:
-
-```sh
-adb push unpack/parts/brhgptlk_0.img /tmp/
-adb shell dump_image brhgptlk_0 /tmp/before
-adb pull /tmp/before lk-launch-backup/brhgptlk_0-launch.bin
-adb shell flash_image brhgptlk_0 /tmp/brhgptlk_0.img
-adb shell dump_image brhgptlk_0 /tmp/after
-adb shell 'head -c 249856 /tmp/after | sha256sum'   # must equal the next line
-sha256sum unpack/parts/brhgptlk_0.img               # 86e7da8927151fd5…
+cd ../echo-dot-assist
+mkdir -p firmware/cannoli/lk-launch-backup
+N=0
+adb push firmware/cannoli/unpack/parts/brhgptlk_$N.img /tmp/
+adb shell dump_image brhgptlk_$N /tmp/before
+adb pull /tmp/before firmware/cannoli/lk-launch-backup/brhgptlk_$N-launch.bin
+adb shell flash_image brhgptlk_$N /tmp/brhgptlk_$N.img
+adb shell dump_image brhgptlk_$N /tmp/after
+adb shell 'head -c 249856 /tmp/after | sha256sum'    # must equal the next line
+sha256sum firmware/cannoli/unpack/parts/brhgptlk_$N.img   # 86e7da8927151fd5…
 ```
 
 Hash only the image's 249856 bytes: `flash_image` zero-fills the rest of the last erase block of
@@ -319,6 +349,7 @@ the recovery. The pinned OTA is the one [FTVDB's 8349 record][firmware] names
 
 [firebreak]: https://github.com/Gamer92000/firebreak
 [firebreak-guide]: https://github.com/Gamer92000/firebreak/blob/main/docs/cannoli.md
+[i216]: https://github.com/Gamer92000/echo-dot-assist/issues/216
 [firmware]: https://ftvdb.com/echo/firmware/com.amazon.cannoli.android.os/0bf96b3cd8fca30fdd12f61208e44d76-13323246980-fire-os-6-5-7-5-ns6575-8349-2026-10-27/
 [cannoli-os-builder]: https://github.com/Gamer92000/cannoli-os-builder
 [twrp_device_amazon_cannoli]: https://github.com/Gamer92000/twrp_device_amazon_cannoli

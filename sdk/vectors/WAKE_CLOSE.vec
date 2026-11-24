@@ -1,0 +1,20 @@
+# WAKE_CLOSE: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message WAKE_CLOSE 34
+id 65570
+slot u8 139
+packet 22000000220001008b
+case empty
+id 65570
+slot u8 0
+packet 220000002200010000
+case long
+id 65570
+slot u8 255
+packet 2200000022000100ff
+case full
+id 65570
+slot u8 1
+packet 220000002200010001
+refuse short 22000000220001
+refuse truncated 2200000022000100
+refuse trailing 22000000220001008b00

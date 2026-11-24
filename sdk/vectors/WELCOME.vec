@@ -1,0 +1,567 @@
+# WELCOME: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message WELCOME 2
+id 65538
+clock_set u32 286331152
+model str 6d6f64656c2d322dc3a9  # 'model-2-é'
+node str 6e6f64652d322dc3a9  # 'node-2-é'
+name str 6e616d652d322dc3a9  # 'name-2-é'
+zone str 7a6f6e652d322dc3a9  # 'zone-2-é'
+scopes list 2
+scopes[0].name str 6e616d652d372dc3a9  # 'name-7-é'
+scopes[0].version u16 44560
+scopes[1].name str 6e616d652d382dc3a9  # 'name-8-é'
+scopes[1].version u16 20384
+packet 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+case empty
+id 65538
+clock_set u32 0
+model str -  # ''
+node str -  # ''
+name str -  # ''
+zone str -  # ''
+scopes list 0
+packet 02000000020001000000000000000000000000000000
+case long
+id 65538
+clock_set u32 4294967295
+model str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééééééééééé'
+node str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééééééééééééééééééé'
+name str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééééééééééééééééééé'
+zone str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééééééééééééééééééééééé'
+scopes list 1
+scopes[0].name str c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9  # 'éééééééééééé'
+scopes[0].version u16 65535
+packet 0200000002000100ffffffff3000c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a94000c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a94000c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a94000c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a901001800c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9c3a9ffff
+case full
+id 65538
+clock_set u32 1
+model str -  # ''
+node str -  # ''
+name str -  # ''
+zone str -  # ''
+scopes list 255
+scopes[0].name str -  # ''
+scopes[0].version u16 1
+scopes[1].name str -  # ''
+scopes[1].version u16 1
+scopes[2].name str -  # ''
+scopes[2].version u16 1
+scopes[3].name str -  # ''
+scopes[3].version u16 1
+scopes[4].name str -  # ''
+scopes[4].version u16 1
+scopes[5].name str -  # ''
+scopes[5].version u16 1
+scopes[6].name str -  # ''
+scopes[6].version u16 1
+scopes[7].name str -  # ''
+scopes[7].version u16 1
+scopes[8].name str -  # ''
+scopes[8].version u16 1
+scopes[9].name str -  # ''
+scopes[9].version u16 1
+scopes[10].name str -  # ''
+scopes[10].version u16 1
+scopes[11].name str -  # ''
+scopes[11].version u16 1
+scopes[12].name str -  # ''
+scopes[12].version u16 1
+scopes[13].name str -  # ''
+scopes[13].version u16 1
+scopes[14].name str -  # ''
+scopes[14].version u16 1
+scopes[15].name str -  # ''
+scopes[15].version u16 1
+scopes[16].name str -  # ''
+scopes[16].version u16 1
+scopes[17].name str -  # ''
+scopes[17].version u16 1
+scopes[18].name str -  # ''
+scopes[18].version u16 1
+scopes[19].name str -  # ''
+scopes[19].version u16 1
+scopes[20].name str -  # ''
+scopes[20].version u16 1
+scopes[21].name str -  # ''
+scopes[21].version u16 1
+scopes[22].name str -  # ''
+scopes[22].version u16 1
+scopes[23].name str -  # ''
+scopes[23].version u16 1
+scopes[24].name str -  # ''
+scopes[24].version u16 1
+scopes[25].name str -  # ''
+scopes[25].version u16 1
+scopes[26].name str -  # ''
+scopes[26].version u16 1
+scopes[27].name str -  # ''
+scopes[27].version u16 1
+scopes[28].name str -  # ''
+scopes[28].version u16 1
+scopes[29].name str -  # ''
+scopes[29].version u16 1
+scopes[30].name str -  # ''
+scopes[30].version u16 1
+scopes[31].name str -  # ''
+scopes[31].version u16 1
+scopes[32].name str -  # ''
+scopes[32].version u16 1
+scopes[33].name str -  # ''
+scopes[33].version u16 1
+scopes[34].name str -  # ''
+scopes[34].version u16 1
+scopes[35].name str -  # ''
+scopes[35].version u16 1
+scopes[36].name str -  # ''
+scopes[36].version u16 1
+scopes[37].name str -  # ''
+scopes[37].version u16 1
+scopes[38].name str -  # ''
+scopes[38].version u16 1
+scopes[39].name str -  # ''
+scopes[39].version u16 1
+scopes[40].name str -  # ''
+scopes[40].version u16 1
+scopes[41].name str -  # ''
+scopes[41].version u16 1
+scopes[42].name str -  # ''
+scopes[42].version u16 1
+scopes[43].name str -  # ''
+scopes[43].version u16 1
+scopes[44].name str -  # ''
+scopes[44].version u16 1
+scopes[45].name str -  # ''
+scopes[45].version u16 1
+scopes[46].name str -  # ''
+scopes[46].version u16 1
+scopes[47].name str -  # ''
+scopes[47].version u16 1
+scopes[48].name str -  # ''
+scopes[48].version u16 1
+scopes[49].name str -  # ''
+scopes[49].version u16 1
+scopes[50].name str -  # ''
+scopes[50].version u16 1
+scopes[51].name str -  # ''
+scopes[51].version u16 1
+scopes[52].name str -  # ''
+scopes[52].version u16 1
+scopes[53].name str -  # ''
+scopes[53].version u16 1
+scopes[54].name str -  # ''
+scopes[54].version u16 1
+scopes[55].name str -  # ''
+scopes[55].version u16 1
+scopes[56].name str -  # ''
+scopes[56].version u16 1
+scopes[57].name str -  # ''
+scopes[57].version u16 1
+scopes[58].name str -  # ''
+scopes[58].version u16 1
+scopes[59].name str -  # ''
+scopes[59].version u16 1
+scopes[60].name str -  # ''
+scopes[60].version u16 1
+scopes[61].name str -  # ''
+scopes[61].version u16 1
+scopes[62].name str -  # ''
+scopes[62].version u16 1
+scopes[63].name str -  # ''
+scopes[63].version u16 1
+scopes[64].name str -  # ''
+scopes[64].version u16 1
+scopes[65].name str -  # ''
+scopes[65].version u16 1
+scopes[66].name str -  # ''
+scopes[66].version u16 1
+scopes[67].name str -  # ''
+scopes[67].version u16 1
+scopes[68].name str -  # ''
+scopes[68].version u16 1
+scopes[69].name str -  # ''
+scopes[69].version u16 1
+scopes[70].name str -  # ''
+scopes[70].version u16 1
+scopes[71].name str -  # ''
+scopes[71].version u16 1
+scopes[72].name str -  # ''
+scopes[72].version u16 1
+scopes[73].name str -  # ''
+scopes[73].version u16 1
+scopes[74].name str -  # ''
+scopes[74].version u16 1
+scopes[75].name str -  # ''
+scopes[75].version u16 1
+scopes[76].name str -  # ''
+scopes[76].version u16 1
+scopes[77].name str -  # ''
+scopes[77].version u16 1
+scopes[78].name str -  # ''
+scopes[78].version u16 1
+scopes[79].name str -  # ''
+scopes[79].version u16 1
+scopes[80].name str -  # ''
+scopes[80].version u16 1
+scopes[81].name str -  # ''
+scopes[81].version u16 1
+scopes[82].name str -  # ''
+scopes[82].version u16 1
+scopes[83].name str -  # ''
+scopes[83].version u16 1
+scopes[84].name str -  # ''
+scopes[84].version u16 1
+scopes[85].name str -  # ''
+scopes[85].version u16 1
+scopes[86].name str -  # ''
+scopes[86].version u16 1
+scopes[87].name str -  # ''
+scopes[87].version u16 1
+scopes[88].name str -  # ''
+scopes[88].version u16 1
+scopes[89].name str -  # ''
+scopes[89].version u16 1
+scopes[90].name str -  # ''
+scopes[90].version u16 1
+scopes[91].name str -  # ''
+scopes[91].version u16 1
+scopes[92].name str -  # ''
+scopes[92].version u16 1
+scopes[93].name str -  # ''
+scopes[93].version u16 1
+scopes[94].name str -  # ''
+scopes[94].version u16 1
+scopes[95].name str -  # ''
+scopes[95].version u16 1
+scopes[96].name str -  # ''
+scopes[96].version u16 1
+scopes[97].name str -  # ''
+scopes[97].version u16 1
+scopes[98].name str -  # ''
+scopes[98].version u16 1
+scopes[99].name str -  # ''
+scopes[99].version u16 1
+scopes[100].name str -  # ''
+scopes[100].version u16 1
+scopes[101].name str -  # ''
+scopes[101].version u16 1
+scopes[102].name str -  # ''
+scopes[102].version u16 1
+scopes[103].name str -  # ''
+scopes[103].version u16 1
+scopes[104].name str -  # ''
+scopes[104].version u16 1
+scopes[105].name str -  # ''
+scopes[105].version u16 1
+scopes[106].name str -  # ''
+scopes[106].version u16 1
+scopes[107].name str -  # ''
+scopes[107].version u16 1
+scopes[108].name str -  # ''
+scopes[108].version u16 1
+scopes[109].name str -  # ''
+scopes[109].version u16 1
+scopes[110].name str -  # ''
+scopes[110].version u16 1
+scopes[111].name str -  # ''
+scopes[111].version u16 1
+scopes[112].name str -  # ''
+scopes[112].version u16 1
+scopes[113].name str -  # ''
+scopes[113].version u16 1
+scopes[114].name str -  # ''
+scopes[114].version u16 1
+scopes[115].name str -  # ''
+scopes[115].version u16 1
+scopes[116].name str -  # ''
+scopes[116].version u16 1
+scopes[117].name str -  # ''
+scopes[117].version u16 1
+scopes[118].name str -  # ''
+scopes[118].version u16 1
+scopes[119].name str -  # ''
+scopes[119].version u16 1
+scopes[120].name str -  # ''
+scopes[120].version u16 1
+scopes[121].name str -  # ''
+scopes[121].version u16 1
+scopes[122].name str -  # ''
+scopes[122].version u16 1
+scopes[123].name str -  # ''
+scopes[123].version u16 1
+scopes[124].name str -  # ''
+scopes[124].version u16 1
+scopes[125].name str -  # ''
+scopes[125].version u16 1
+scopes[126].name str -  # ''
+scopes[126].version u16 1
+scopes[127].name str -  # ''
+scopes[127].version u16 1
+scopes[128].name str -  # ''
+scopes[128].version u16 1
+scopes[129].name str -  # ''
+scopes[129].version u16 1
+scopes[130].name str -  # ''
+scopes[130].version u16 1
+scopes[131].name str -  # ''
+scopes[131].version u16 1
+scopes[132].name str -  # ''
+scopes[132].version u16 1
+scopes[133].name str -  # ''
+scopes[133].version u16 1
+scopes[134].name str -  # ''
+scopes[134].version u16 1
+scopes[135].name str -  # ''
+scopes[135].version u16 1
+scopes[136].name str -  # ''
+scopes[136].version u16 1
+scopes[137].name str -  # ''
+scopes[137].version u16 1
+scopes[138].name str -  # ''
+scopes[138].version u16 1
+scopes[139].name str -  # ''
+scopes[139].version u16 1
+scopes[140].name str -  # ''
+scopes[140].version u16 1
+scopes[141].name str -  # ''
+scopes[141].version u16 1
+scopes[142].name str -  # ''
+scopes[142].version u16 1
+scopes[143].name str -  # ''
+scopes[143].version u16 1
+scopes[144].name str -  # ''
+scopes[144].version u16 1
+scopes[145].name str -  # ''
+scopes[145].version u16 1
+scopes[146].name str -  # ''
+scopes[146].version u16 1
+scopes[147].name str -  # ''
+scopes[147].version u16 1
+scopes[148].name str -  # ''
+scopes[148].version u16 1
+scopes[149].name str -  # ''
+scopes[149].version u16 1
+scopes[150].name str -  # ''
+scopes[150].version u16 1
+scopes[151].name str -  # ''
+scopes[151].version u16 1
+scopes[152].name str -  # ''
+scopes[152].version u16 1
+scopes[153].name str -  # ''
+scopes[153].version u16 1
+scopes[154].name str -  # ''
+scopes[154].version u16 1
+scopes[155].name str -  # ''
+scopes[155].version u16 1
+scopes[156].name str -  # ''
+scopes[156].version u16 1
+scopes[157].name str -  # ''
+scopes[157].version u16 1
+scopes[158].name str -  # ''
+scopes[158].version u16 1
+scopes[159].name str -  # ''
+scopes[159].version u16 1
+scopes[160].name str -  # ''
+scopes[160].version u16 1
+scopes[161].name str -  # ''
+scopes[161].version u16 1
+scopes[162].name str -  # ''
+scopes[162].version u16 1
+scopes[163].name str -  # ''
+scopes[163].version u16 1
+scopes[164].name str -  # ''
+scopes[164].version u16 1
+scopes[165].name str -  # ''
+scopes[165].version u16 1
+scopes[166].name str -  # ''
+scopes[166].version u16 1
+scopes[167].name str -  # ''
+scopes[167].version u16 1
+scopes[168].name str -  # ''
+scopes[168].version u16 1
+scopes[169].name str -  # ''
+scopes[169].version u16 1
+scopes[170].name str -  # ''
+scopes[170].version u16 1
+scopes[171].name str -  # ''
+scopes[171].version u16 1
+scopes[172].name str -  # ''
+scopes[172].version u16 1
+scopes[173].name str -  # ''
+scopes[173].version u16 1
+scopes[174].name str -  # ''
+scopes[174].version u16 1
+scopes[175].name str -  # ''
+scopes[175].version u16 1
+scopes[176].name str -  # ''
+scopes[176].version u16 1
+scopes[177].name str -  # ''
+scopes[177].version u16 1
+scopes[178].name str -  # ''
+scopes[178].version u16 1
+scopes[179].name str -  # ''
+scopes[179].version u16 1
+scopes[180].name str -  # ''
+scopes[180].version u16 1
+scopes[181].name str -  # ''
+scopes[181].version u16 1
+scopes[182].name str -  # ''
+scopes[182].version u16 1
+scopes[183].name str -  # ''
+scopes[183].version u16 1
+scopes[184].name str -  # ''
+scopes[184].version u16 1
+scopes[185].name str -  # ''
+scopes[185].version u16 1
+scopes[186].name str -  # ''
+scopes[186].version u16 1
+scopes[187].name str -  # ''
+scopes[187].version u16 1
+scopes[188].name str -  # ''
+scopes[188].version u16 1
+scopes[189].name str -  # ''
+scopes[189].version u16 1
+scopes[190].name str -  # ''
+scopes[190].version u16 1
+scopes[191].name str -  # ''
+scopes[191].version u16 1
+scopes[192].name str -  # ''
+scopes[192].version u16 1
+scopes[193].name str -  # ''
+scopes[193].version u16 1
+scopes[194].name str -  # ''
+scopes[194].version u16 1
+scopes[195].name str -  # ''
+scopes[195].version u16 1
+scopes[196].name str -  # ''
+scopes[196].version u16 1
+scopes[197].name str -  # ''
+scopes[197].version u16 1
+scopes[198].name str -  # ''
+scopes[198].version u16 1
+scopes[199].name str -  # ''
+scopes[199].version u16 1
+scopes[200].name str -  # ''
+scopes[200].version u16 1
+scopes[201].name str -  # ''
+scopes[201].version u16 1
+scopes[202].name str -  # ''
+scopes[202].version u16 1
+scopes[203].name str -  # ''
+scopes[203].version u16 1
+scopes[204].name str -  # ''
+scopes[204].version u16 1
+scopes[205].name str -  # ''
+scopes[205].version u16 1
+scopes[206].name str -  # ''
+scopes[206].version u16 1
+scopes[207].name str -  # ''
+scopes[207].version u16 1
+scopes[208].name str -  # ''
+scopes[208].version u16 1
+scopes[209].name str -  # ''
+scopes[209].version u16 1
+scopes[210].name str -  # ''
+scopes[210].version u16 1
+scopes[211].name str -  # ''
+scopes[211].version u16 1
+scopes[212].name str -  # ''
+scopes[212].version u16 1
+scopes[213].name str -  # ''
+scopes[213].version u16 1
+scopes[214].name str -  # ''
+scopes[214].version u16 1
+scopes[215].name str -  # ''
+scopes[215].version u16 1
+scopes[216].name str -  # ''
+scopes[216].version u16 1
+scopes[217].name str -  # ''
+scopes[217].version u16 1
+scopes[218].name str -  # ''
+scopes[218].version u16 1
+scopes[219].name str -  # ''
+scopes[219].version u16 1
+scopes[220].name str -  # ''
+scopes[220].version u16 1
+scopes[221].name str -  # ''
+scopes[221].version u16 1
+scopes[222].name str -  # ''
+scopes[222].version u16 1
+scopes[223].name str -  # ''
+scopes[223].version u16 1
+scopes[224].name str -  # ''
+scopes[224].version u16 1
+scopes[225].name str -  # ''
+scopes[225].version u16 1
+scopes[226].name str -  # ''
+scopes[226].version u16 1
+scopes[227].name str -  # ''
+scopes[227].version u16 1
+scopes[228].name str -  # ''
+scopes[228].version u16 1
+scopes[229].name str -  # ''
+scopes[229].version u16 1
+scopes[230].name str -  # ''
+scopes[230].version u16 1
+scopes[231].name str -  # ''
+scopes[231].version u16 1
+scopes[232].name str -  # ''
+scopes[232].version u16 1
+scopes[233].name str -  # ''
+scopes[233].version u16 1
+scopes[234].name str -  # ''
+scopes[234].version u16 1
+scopes[235].name str -  # ''
+scopes[235].version u16 1
+scopes[236].name str -  # ''
+scopes[236].version u16 1
+scopes[237].name str -  # ''
+scopes[237].version u16 1
+scopes[238].name str -  # ''
+scopes[238].version u16 1
+scopes[239].name str -  # ''
+scopes[239].version u16 1
+scopes[240].name str -  # ''
+scopes[240].version u16 1
+scopes[241].name str -  # ''
+scopes[241].version u16 1
+scopes[242].name str -  # ''
+scopes[242].version u16 1
+scopes[243].name str -  # ''
+scopes[243].version u16 1
+scopes[244].name str -  # ''
+scopes[244].version u16 1
+scopes[245].name str -  # ''
+scopes[245].version u16 1
+scopes[246].name str -  # ''
+scopes[246].version u16 1
+scopes[247].name str -  # ''
+scopes[247].version u16 1
+scopes[248].name str -  # ''
+scopes[248].version u16 1
+scopes[249].name str -  # ''
+scopes[249].version u16 1
+scopes[250].name str -  # ''
+scopes[250].version u16 1
+scopes[251].name str -  # ''
+scopes[251].version u16 1
+scopes[252].name str -  # ''
+scopes[252].version u16 1
+scopes[253].name str -  # ''
+scopes[253].version u16 1
+scopes[254].name str -  # ''
+scopes[254].version u16 1
+packet 0200000002000100010000000000000000000000ff00000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100
+refuse short 02000000020001
+refuse truncated 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a0
+refuse trailing 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f00
+refuse over:model 02000000020001001011111131006161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616109006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse nul:model 020000000200010010111111030061006209006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse over:node 0200000002000100101111110a006d6f64656c2d322dc3a94100616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616109006e616d652d322dc3a909007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse nul:node 0200000002000100101111110a006d6f64656c2d322dc3a9030061006209006e616d652d322dc3a909007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse over:name 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a94100616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616109007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse nul:name 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a9030061006209007a6f6e652d322dc3a9020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse over:zone 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a941006161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse nul:zone 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a90300610062020009006e616d652d372dc3a910ae09006e616d652d382dc3a9a04f
+refuse count:scopes 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a9000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+refuse over:scopes[0].name 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a9020019006161616161616161616161616161616161616161616161616110ae09006e616d652d382dc3a9a04f
+refuse nul:scopes[0].name 0200000002000100101111110a006d6f64656c2d322dc3a909006e6f64652d322dc3a909006e616d652d322dc3a909007a6f6e652d322dc3a90200030061006210ae09006e616d652d382dc3a9a04f

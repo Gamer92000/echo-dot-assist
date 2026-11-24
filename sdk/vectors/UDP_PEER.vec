@@ -1,0 +1,28 @@
+# UDP_PEER: a sample and its packet, made by tools/mkplugmsg.py from sdk/messages.def (sdk/PROTOCOL.md, Test vectors)
+message UDP_PEER 63
+id 65599
+handle u8 226
+address u32 2958755216
+port u16 31424
+packet 3f0000003f000100e290055bb0c07a
+case empty
+id 65599
+handle u8 0
+address u32 0
+port u16 0
+packet 3f0000003f00010000000000000000
+case long
+id 65599
+handle u8 255
+address u32 4294967295
+port u16 65535
+packet 3f0000003f000100ffffffffffffff
+case full
+id 65599
+handle u8 1
+address u32 1
+port u16 1
+packet 3f0000003f00010001010000000100
+refuse short 3f0000003f0001
+refuse truncated 3f0000003f000100e290055bb0c0
+refuse trailing 3f0000003f000100e290055bb0c07a00
