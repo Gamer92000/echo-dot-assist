@@ -2,6 +2,19 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Updates and plugins from a server of your own
+
+- **Online updates and the plugin index can come from a server of your own** (issue #175). The System page has a new
+  card, "Where software comes from": updates from another repository on GitHub, Forgejo or Gitea (a mirror on your
+  network for an Echo kept off the internet, or a fork's own releases), and plugins from another plugin index. A
+  server alone changes nothing of what is trusted: updates are still checked against the project's release key and
+  your update key, plugin lists against the project's index key. For a server of your own you can also name a signing
+  key of yours, trusted beside the project's, or switch the signature check off; either needs the Echo's action
+  button. While anything here is not the project's, every page of the settings says so: yellow for a server of your
+  own, red for a key of your own or no check, which let whoever holds that key (or controls that server) install
+  anything on the Echo. Not in exports or Home Assistant; a factory reset goes back to the project's. Until now this
+  only worked through test settings in `hassmic.conf`, which could change without notice.
+
 ## 2026-11-24 — Dots and Echo 2: Sendspin sees its own output fall behind
 
 - **A Sendspin group of Echos with Amazon's mixer (Dots, Echo 2) can no longer drift apart unseen** (issue #225). On

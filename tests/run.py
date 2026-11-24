@@ -68,6 +68,7 @@ TESTS = [
     ("mww-migrate", [PY, "tests/fake_mww_migrate.py"]),
     ("web", [PY, "tests/fake_web.py"]),
     ("update", [PY, "tests/fake_ha_update.py"]),
+    ("sources", [PY, "tests/fake_ha_sources.py"]),
     ("wakesound", [PY, "tests/fake_ha_wakesound.py"]),
     ("remote-bargein", [PY, "tests/fake_ha_remote_bargein.py"]),
     ("remote-followup", [PY, "tests/fake_ha_remote_followup.py"]),

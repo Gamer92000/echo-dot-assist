@@ -759,6 +759,29 @@ netwatch() {
 # Assistant, update.c).  The release key of the copy that runs wins over the factory copy's: both are root's, written
 # from bundles that verified, and so a new release key can come with an update signed by the old one.
 release_pub() { for k in $D/release.pub $SYS/release.pub; do [ -s $k ] && { echo $k; return; }; done; }
+# A third key (issue #175): the one the settings page's "Sources" named for updates from a server of the owner's, or
+# hassmic's own where the owner chose no signature check there (src/hassmic/sources.c).  hassmic asks for it in
+# state/update-key (its 32 bytes, or an empty file to take it away), only once an approved browser asked for it and
+# the action button was pressed for that very choice (web.c W_SOURCE); root keeps it in a file of its own, read by
+# hassmic to show whether root holds it.  This is the one place where root trusts something hassmic says about what
+# root installs: code that took hassmic over could name its own key here (docs/SECURITY.md "Updates" says so).
+PAGE_PUB=/data/local/hassmic/page-update.pub
+page_pub() {
+    local f n
+    f=$(take update-key) || return 0
+    n=$(wc -c < $f 2>/dev/null | tr -cd 0-9)
+    if [ "$n" = 32 ]; then
+        if cmp -s $f $PAGE_PUB; then :
+        elif cp $f $PAGE_PUB.new && chmod 644 $PAGE_PUB.new && mv -f $PAGE_PUB.new $PAGE_PUB; then
+            say "== update key of the settings page (Sources) trusted beside the release key: $(od -An -tx1 -v $PAGE_PUB | tr -d ' \n' | cut -c1-16)..."
+        else rm -f $PAGE_PUB.new; say "== update key of the settings page: cannot be kept"
+        fi
+    elif [ "$n" = 0 ]; then
+        [ -e $PAGE_PUB ] && { rm -f $PAGE_PUB; say "== update key of the settings page (Sources) no longer trusted"; }
+    else say "== update key of the settings page: not 32 bytes ($n), ignored"
+    fi
+    rm -f $f
+}
 rejected() { say "== update rejected: $1"; rm -rf $new; echo "FAILED $1" > $RES; }
 # The installed update passed its self test (hassmic left state/ota/healthy: started, wake word engine loaded, a second
 # of microphone audio; main.c): it becomes the factory copy on the system partition, bootstrap included, so the Echo
@@ -883,6 +906,7 @@ ota_watch() {
                 [ -f $D/wifi.sh ] && sh $D/wifi.sh forget 2>&1 | stamped
                 st=/data/local/hassmic/state
                 for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
+                rm -f $PAGE_PUB                     # (the settings page's Sources: gone with state/sources)
                 rm -f /data/misc/avahi/services/hassmic.service
                 start hassmic
                 say "== factory reset done, the satellite starts again"
@@ -905,6 +929,7 @@ ota_watch() {
             say "== ${why:-restart} asked for on the settings page, restarting hassmic"
             hm_term; svc_restart hassmic
         fi
+        page_pub                                    # (before an update the same look may install)
         [ -f $IN/request ] || continue
         if ! cd -P $IN 2>/dev/null || [ "$(pwd -P)" != "$INREAL" ]; then
             cd /; rm -f $IN 2>/dev/null                 # a link goes (rm without -r never follows one); a folder stays
@@ -921,13 +946,13 @@ ota_watch() {
         odd=; for f in $INB/bundle $INB/bundle.sig; do [ -f $f ] && [ ! -L $f ] || odd=1; done
         new=$OTA/v$(cut -d. -f1 /proc/uptime)-$$
         key=
-        [ -z "$odd" ] && for k in $SYS/update.pub $(release_pub); do
+        [ -z "$odd" ] && for k in $SYS/update.pub $(release_pub) $PAGE_PUB; do
             [ -s $k ] && $SYS/otatool verify $k $INB/bundle $INB/bundle.sig > /dev/null 2>&1 && { key=$k; break; }
         done
         rm -f $RES
         if [ ! -f $SYS/update.pub ]; then echo "FAILED no update key on this device (install-system.sh puts it there)" > $RES
         elif [ -n "$odd" ]; then rejected "the bundle or its signature is missing or not a plain file"
-        elif [ -z "$key" ]; then rejected "the signature verifies against neither the update key nor the release key"
+        elif [ -z "$key" ]; then rejected "the signature verifies against neither the update key, the release key nor the key of the settings page's Sources"
         elif ! ver=$($SYS/otatool install $key $INB/bundle $INB/bundle.sig $new 2>&1); then
             rejected "$(echo "$ver" | tail -1)"
         elif prod=$(. $new/device.conf 2>/dev/null && echo "$PRODUCT"); [ "$prod" != "$(getprop ro.product.device)" ]; then

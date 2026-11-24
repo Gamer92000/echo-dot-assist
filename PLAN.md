@@ -2103,6 +2103,36 @@ Run in this order. Each step says what it proves.
       Monocypher's, BLAKE2b): same keys and byte-identical signatures as the C one (tests/otatool_test.sh, 9 checks), the
       real release bundle verifies, one flipped byte does not; ota_push_test and fake_ha_update pass with it.
       probe.sh: devices/<codename>/probe.md5 from the pinned firmware (all three firmwares' sha256 match their pins).
+      - [x] Sources: the update server and the plugin index of the owner's (2026-11-24, issue #175: an Echo on a fork's
+        own release key without internet, updated from a Forgejo on its LAN through the test hooks
+        `HASSMIC_UPDATE_API`/`_DOWNLOAD`, which hassmic.conf exported).  `sources.c`, the System page's card "Where
+        software comes from", state/sources (not exported, not in HA).  Updates: a repository URL, github.com's form
+        or Forgejo's/Gitea's (`<root>/api/v1/repos/<o>/<r>`, assets at `<root>/<o>/<r>/releases/download/<tag>/`),
+        told apart by the host.  A server alone is applied at once: root still checks the release key and update.pub.
+        A key of the owner's (trusted BESIDE the project's) or no signature check, per source, only for a server of the
+        owner's, and only with the action button (web.c `W_SOURCE`, the maintainer's decision: page + button, root
+        trusting a key hassmic names, said in docs/SECURITY.md); taking either away or going back is at once.  Root:
+        `state/update-key` (32 bytes or empty) -> main.sh `page_pub` -> `/data/local/hassmic/page-update.pub`, a third
+        key in ota_watch's loop, gone with a factory reset; no check = hassmic's own key (`state/update-own.key`, 0600)
+        signs what update.c downloads (no .sig fetched), which works with every installed otatool (no new mode).  The
+        push port still takes update.pub only.  Plugin index: `pi_source` (plugin_index.c, before any plugin thread),
+        the owner's key after the built-in ones (`PI_KEYS` 3; 5.2's relist rule counts `pi_keys_builtin`), no check:
+        `pi_signer` takes any 64 bytes as the owner's and a missing .sig as 64 zeros (`get_sig`); least serials 0 with a
+        key or no check for the index's own lists, never for a package's listing (`*purpose`: a file would pass for
+        official); a change of what
+        is trusted forgets `.serial`, `.revoked`, `.revoked-at`, `.listed` (a mirror keeps them: no older list of the
+        project's replayed; forgotten at the next start, mark `state/sources-forget`, not under the running process),
+        any change restarts hassmic (state/restart "plugin index"); members' revocation lists neither told nor taken
+        with a key or no check (`pi_source_trusts`; a mirror as ever); a listing of a built-in key never relisted to
+        the owner's (`relist_better`, any tier); a listing by a built-in key keeps the build's least under any index
+        (`pi_least_listing`); no `@` in addresses (a password would show in the log and the page).  A second review of
+        the fixed state found the least, the mark, the tier and the docs' claim on keyless indexes.  Root is asked for the update key at every change (a request for a
+        key taken away may still wait for root's look), and a press is put in force only over what it was armed
+        against (`sources_apply`'s `expect`, under `sl`).  Review of the first cut (2026-11-24) found those.  Page: yellow callout on every page for a server, red for a key or no check;
+        `/api/state` `sources`.  Tests: `tests/fake_ha_sources.py` (56 checks: a stand-in Forgejo and root, the press,
+        a change between arming and press, no check without .sig, the owner's index with its key and without
+        signatures); fake_ha_update, plugins-fetch, plugins, plugins-sync, web, plugins-selftest, unit plugin_index,
+        plugin_store, plugin_broker and hassmic-plugins' `make check` pass.  Not tried on an Echo yet.
 - [~] microWakeWord as a second wake word engine (2026-10-07, user request: a switch on the page, Amazon's engine the
       default, what is lost said plainly, the models managed on the page).  No TensorFlow on the Echo: `mww_features.c`
       ports TFLite Micro's microfrontend with microWakeWord's settings (30/10 ms, 40 channels 125-7500 Hz, noise

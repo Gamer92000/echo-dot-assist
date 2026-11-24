@@ -80,6 +80,7 @@
 #include "sounds.h"
 #include "soundpack.h"
 #include "update.h"
+#include "sources.h"
 #include "wifi.h"
 #include "ws.h"
 #include "statefile.h"
@@ -149,7 +150,8 @@ static int nclients;
  * approved browser was told "busy" for this login */
 enum { W_LOGIN = 1, W_ADB, W_PLUGIN,         /* W_PLUGIN: an install waits for the owner to accept what the plugin may do */
        W_NOTE,                               /* the owner is to say at the Echo, by holding the button a second, that he read what was copied here without a press (sync) */
-       W_ANYWAY };                           /* a plugin the index withdrew is to run anyway (the press, below) */
+       W_ANYWAY,                             /* a plugin the index withdrew is to run anyway (the press, below) */
+       W_SOURCE };                           /* a key of the owner's or no signature check for updates or plugins (Sources, below) */
 static int plugin_install_now(const char *how, unsigned gen, const uint8_t digest[32], int press, int stay, char *why, size_t cap);
 static void plugin_withdraw(const char *why);
 static int plugin_accepted(unsigned *gen, uint8_t digest[32], int *press);
@@ -159,6 +161,9 @@ static void note_withdraw(const char *why);
 static void anyway_withdraw(const char *why);
 /* lk: what the armed press (login, W_ANYWAY) lets run: that plugin, for that revocation list */
 static struct { char id[PS_ID_MAX]; long long serial; } anyway_press;
+/* lk: what the armed press (login, W_SOURCE) puts in force (sources.c), over what was in force when it was armed */
+static struct sources source_press, source_from;
+static void source_withdraw(const char *why);
 #define SYN_MAX 16              /* notes of copied plugins that stand at a time (sync, below) */
 struct syn_ids { unsigned long n[SYN_MAX]; int k; };
 static struct syn_ids syn_press;    /* lk: the notes the armed hold (login, W_NOTE) takes off */
@@ -352,9 +357,10 @@ static int voucher(uint8_t out[16], const uint8_t target[32], const uint8_t brow
 }
 
 /* ---- what waits for the action button.
- * One button answers five questions, four by a press and one by being held for a second: let this browser in
+ * One button answers six questions, five by a press and one by being held for a second: let this browser in
  * (a login), open adb (W_ADB), accept what this plugin may do (W_PLUGIN), run a plugin the index withdrew anyway
- * (W_ANYWAY, below); held, take the note of a plugin copied here without a press off the pages (W_NOTE, below).
+ * (W_ANYWAY, below), trust a key of Sources (W_SOURCE, below); held, take the note of a plugin copied here without a
+ * press off the pages (W_NOTE, below).
  * (Community plugins, docs/plugins.md 2.7, are no question of the button's: their switch is a setting of the
  * page's as any, from an approved browser, and every one of them is still installed with W_PLUGIN's press.)
  * Whoever stands at the Echo sees a ring and has a page that told him to press; he cannot see whom the press will
@@ -527,6 +533,13 @@ static int voucher(uint8_t out[16], const uint8_t target[32], const uint8_t brow
  *    the press does is fixed when it is armed: that plugin, for the revocation list this Echo had then
  *    (anyway_press); the mark it writes holds for that list alone, so a newer list, taken between the arming and
  *    the press or after it, stops the plugin again and asks anew.  The ring shows the plugins' pattern (2).
+ *  - W_SOURCE (issue #175: Sources, a key of the owner's or no signature check for updates or the plugin index).  A
+ *    wait as adb's: armed by an approved browser's signed POST /api/sources that trusts more than what is in force
+ *    (sources_widens), only while nothing else is armed, ended by the press, its time, the asker's "cancel" or its
+ *    revoke; I1 and I2 through wait_arm and wait_over.  What the press puts in force is fixed when it is armed
+ *    (source_press), and only over what was in force then (source_from): a change made meanwhile (another browser
+ *    took a key away, which needs no press) and the press puts nothing in force, its browser told.  The login's
+ *    pattern (1), as adb's: what it lets in is of adb's weight (root installs what that key signs).
  * What the Echo shows is what the button will do: hooks->attention(1) while a login or adb is armed, (2) for a
  * plugin, a plugin run anyway or a note (a pattern of its own), (0) when nothing is, a contested login included; on an Echo with a
  * screen the face draws the same patterns.  And the page that armed a wait is told at every poll what the Echo
@@ -556,7 +569,7 @@ static int voucher(uint8_t out[16], const uint8_t target[32], const uint8_t brow
 static const char *holds_word(void)     /* lk held: what the press would serve now */
 {
     return login.state != 1 ? "none" : login.kind == W_ADB ? "adb" : login.kind == W_PLUGIN ? "plugin" : login.kind == W_NOTE ? "note" : login.kind == W_ANYWAY ? "anyway"
-         : "login";
+         : login.kind == W_SOURCE ? "sources" : "login";
 }
 
 /* lk held: the armed wait has ended; every such end comes through here but a login's turning contested, which
@@ -602,7 +615,7 @@ static void login_expire(long long now)     /* lk held; first in everything that
     if (login.state == 1 && now - login.at > LOGIN_MS) {
         login.state = 3; login.end = now; login.why = "timeout";
         fprintf(stderr, "web: %s ran out without the button\n", login.kind == W_ADB ? "adb request" : login.kind == W_PLUGIN ? "plugin install" : login.kind == W_NOTE ? "the wait to take a copied plugin's note off"
-                : login.kind == W_ANYWAY ? "the wait to run a withdrawn plugin anyway" : "login");
+                : login.kind == W_ANYWAY ? "the wait to run a withdrawn plugin anyway" : login.kind == W_SOURCE ? "the wait to trust a key of Sources" : "login");
         wait_over(now, 0, login.kind == W_LOGIN ? login.pub : NULL);
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(0);
@@ -622,6 +635,7 @@ static void adb_withdraw(const char *why)
 int web_approve(void)
 {
     int r = 0, phone, ppress = PS_PRESSED; unsigned pgen = 0; uint8_t pdigest[32]; long long now = now_ms(); char anyway_id[PS_ID_MAX] = ""; long long anyway_serial = -1;
+    struct sources src_to, src_from;
     pthread_mutex_lock(&lk);
     /* Whether a phone waits for this press: read before the mark of such a wait's end is taken (login_ask says
      * why that order).  1: a login armed beside it is not approved, below, also where the wait ended in this
@@ -666,6 +680,25 @@ int web_approve(void)
         fprintf(stderr, "web: %s is to run though the plugin index withdrew it: accepted with the button\n", anyway_id);
         if (hooks->attention) hooks->attention(0);
         if (hooks->approved) hooks->approved(1);
+    } else if (login.state == 1 && login.kind == W_SOURCE && !client_of(login.pub)) {
+        source_withdraw("its browser is no longer let in");
+        if (hooks->approved) hooks->approved(0);
+    } else if (login.state == 1 && login.kind == W_SOURCE) {
+        /* only over what was in force when it was armed: a change since (needs no press when it trusts less) and
+         * this press is not for what stands now; it puts nothing in force and goes on as one after a wait that ran
+         * out (the page asks again) */
+        struct sources now_src; sources_get(&now_src);
+        if (!sources_equal(&now_src, &source_from)) {
+            login.state = 3; login.end = now; login.why = "busy"; wait_over(now, 1, NULL);
+            fprintf(stderr, "web: the press came for Sources that changed since it was asked: nothing put in force\n");
+            if (hooks->attention) hooks->attention(0);
+            if (hooks->approved) hooks->approved(0);
+        } else {
+            login.state = 2; r = 5; wait_over(now, 1, NULL); src_to = source_press; src_from = source_from;
+            fprintf(stderr, "web: Sources (a key of the owner's or no signature check) accepted with the button\n");
+            if (hooks->attention) hooks->attention(0);
+            if (hooks->approved) hooks->approved(1);
+        }
     } else if (login.state == 1 && login.kind == W_ADB) {
         login.state = 2; r = 2; wait_over(now, 1, NULL);
         fprintf(stderr, "web: adb over Wi-Fi approved with the button\n");
@@ -708,6 +741,13 @@ int web_approve(void)
     if (r == 4) {
         if (ps_anyway(anyway_id, anyway_serial)) fprintf(stderr, "web: cannot write that %s is to run anyway\n", anyway_id);
         plugin_withdrawn_changed();
+        r = 1;
+    }
+    if (r == 5) {
+        char err[200];
+        if (sources_apply(&src_from, &src_to, err, sizeof err)) fprintf(stderr, "web: Sources not put in force: %s\n", err);
+        else if (err[0]) fprintf(stderr, "web: Sources: %s\n", err);
+        update_check();
         r = 1;
     }
     return r;
@@ -1001,6 +1041,58 @@ static const char *anyway_ask(const uint8_t pub[32], const char *id, int run, co
         snprintf(anyway_press.id, sizeof anyway_press.id, "%s", id); anyway_press.serial = serial;
         r = "waiting"; *holds = "anyway";
         fprintf(stderr, "web: %s, withdrawn by the plugin index, is to run anyway once the action button is pressed\n", id);
+    }
+    pthread_mutex_unlock(&lk);
+    hold_flush(!strcmp(r, "waiting"));
+    return r;
+}
+
+/* lk held: a wait to trust a key of Sources that no longer counts */
+static void source_withdraw(const char *why)
+{
+    if (!(login.state == 1 && login.kind == W_SOURCE)) return;
+    login.state = 3; login.end = now_ms(); login.why = "busy"; wait_over(login.end, 0, NULL);
+    fprintf(stderr, "web: the wait to trust a key of Sources withdrawn (%s)\n", why);
+    if (hooks->attention) hooks->attention(0);
+}
+
+/* Sources (sources.c) for an approved browser: BODY the page's lines, or "cancel".  "applied" (in force: it trusts no
+ * more than before), "waiting" (for the button: a key or no check), "busy" (something else waits: *HOLDS says
+ * what), "refused" (WHY says why), "cancelled".  WHY may also carry a word beside "applied" */
+static const char *source_ask(const uint8_t pub[32], const char *body, const char **holds, char *why, size_t cap)
+{
+    struct sources from, to; const char *r, *h; long long now = now_ms();
+    *holds = "none"; why[0] = 0;
+    if (!strncmp(body, "cancel", 6)) {
+        pthread_mutex_lock(&lk);
+        if (login.state == 1 && login.kind == W_SOURCE && !memcmp(login.pub, pub, 32)) source_withdraw("cancelled");
+        pthread_mutex_unlock(&lk);
+        return "cancelled";
+    }
+    sources_get(&from);
+    if (sources_parse(body, &from, &to, why, cap)) return "refused";
+    if (!sources_widens(&from, &to)) {
+        /* trusts no more than before: in force at once.  A wait this browser armed for another choice goes: the page
+         * asked for this one since */
+        pthread_mutex_lock(&lk);
+        login_expire(now);
+        if (login.state == 1 && login.kind == W_SOURCE && !memcmp(login.pub, pub, 32)) source_withdraw("another choice asked for");
+        pthread_mutex_unlock(&lk);
+        if (sources_apply(&from, &to, why, cap)) return "refused";
+        update_check();
+        return "applied";
+    }
+    pthread_mutex_lock(&lk);
+    login_expire(now);
+    if (login.state == 1 && login.kind == W_SOURCE && !memcmp(login.pub, pub, 32) && sources_equal(&source_press, &to) && sources_equal(&source_from, &from)) { r = "waiting"; *holds = "sources"; }
+    else {
+        if (login.state == 1 && login.kind == W_SOURCE && !memcmp(login.pub, pub, 32)) source_withdraw("another choice asked for");
+        if ((h = wait_arm(pub, W_SOURCE, "Sources", now))) { r = "busy"; *holds = h; }
+        else {
+            source_press = to; source_from = from;
+            r = "waiting"; *holds = "sources";
+            fprintf(stderr, "web: Sources: a key of the owner's or no signature check waits for the action button\n");
+        }
     }
     pthread_mutex_unlock(&lk);
     hold_flush(!strcmp(r, "waiting"));
@@ -1393,8 +1485,10 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
     int adb_wait = login.state == 1 && login.kind == W_ADB, mine = login.state == 1 && !memcmp(login.pub, me, 32);
     const char *holds = holds_word(); long long left = login.state == 1 ? (login.at + LOGIN_MS - now_ms() + 999) / 1000 : 0;
     pthread_mutex_unlock(&lk);
-    n = app(o, n, cap, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"button\":{\"holds\":\"%s\",\"mine\":%s,\"left_s\":%lld},\"diag\":{\"soc_temp\":",
+    n = app(o, n, cap, "],\"adb\":{\"open\":%s,\"waiting\":%s},\"button\":{\"holds\":\"%s\",\"mine\":%s,\"left_s\":%lld},",
             adbwifi_open() ? "true" : "false", adb_wait ? "true" : "false", holds, mine ? "true" : "false", left < 0 ? 0 : left);
+    /* where updates and plugins come from (Sources, issue #175): the page's warning on every page while not the project's */
+    { char sj[1400]; sources_json(sj, sizeof sj); n = app(o, n, cap, "\"sources\":%s,\"diag\":{\"soc_temp\":", sj); }
     n = isnan(t) ? app(o, n, cap, "null") : app(o, n, cap, "%.1f", t);
     n = app(o, n, cap, ",\"cpu\":");
     n = isnan(cpu) ? app(o, n, cap, "null") : app(o, n, cap, "%.0f", cpu);
@@ -3889,7 +3983,8 @@ static void handle(int fd)
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         updates_gate(r.body, why, sizeof why);
         pthread_mutex_lock(&core_lock); applied = settings_apply_text(r.body, err, sizeof err); pthread_mutex_unlock(&core_lock);
-        if (why[0]) { size_t n = strlen(err); snprintf(err + n, sizeof err - n, "online_updates: GitHub cannot be reached from this Echo (%s), so they stay off\n", why); }
+        if (why[0]) { size_t n = strlen(err); snprintf(err + n, sizeof err - n, "online_updates: %s cannot be reached from this Echo (%s), so they stay off\n",
+                                                 sources_update_urls(NULL, 0, NULL, 0) ? "the update server (Sources)" : "GitHub", why); }
         jesc(ej, sizeof ej, err); jesc(wj, sizeof wj, why);
         /* github_unreachable: the page's warning under "Online updates" */
         snprintf(o, sizeof o, "{\"applied\":%d,\"errors\":\"%s\",\"github_unreachable\":\"%s\"}", applied, ej, wj);
@@ -3937,6 +4032,16 @@ static void handle(int fd)
         snprintf(o, sizeof o, "{\"adb\":\"%s\",\"holds\":\"%s\"}", word, holds);
         respond_sjson(fd, &r, 200, o);
     }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/sources")) {
+        /* Sources (sources.c): the page's lines, or "cancel"; an approved browser's, and a key or no check also the
+         * action button's (source_ask) */
+        char why[400], wj[480], o[640]; const char *holds, *word;
+        if (!signed_ok(&r, 1) || unhex(pub, r.pub, 32)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        word = source_ask(pub, r.body, &holds, why, sizeof why);
+        jesc(wj, sizeof wj, why);
+        snprintf(o, sizeof o, "{\"sources\":\"%s\",\"holds\":\"%s\",\"why\":\"%s\"}", word, holds, wj);
+        respond_sjson(fd, &r, 200, o);
+    }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/revoke")) {
         uint8_t who[32]; int found = 0;
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
@@ -3954,6 +4059,7 @@ static void handle(int fd)
         if (login.state == 1 && login.kind == W_PLUGIN && !memcmp(login.pub, who, 32)) plugin_withdraw("its browser's login was revoked");
         if (login.state == 1 && login.kind == W_NOTE && !memcmp(login.pub, who, 32)) note_withdraw("its browser's login was revoked");
         if (login.state == 1 && login.kind == W_ANYWAY && !memcmp(login.pub, who, 32)) anyway_withdraw("its browser's login was revoked");
+        if (login.state == 1 && login.kind == W_SOURCE && !memcmp(login.pub, who, 32)) source_withdraw("its browser's login was revoked");
         pthread_mutex_unlock(&lk);
         fprintf(stderr, "web: a browser's login %s\n", found ? "revoked" : "to revoke not found");
         respond_sjson(fd, &r, 200, found ? "{\"revoked\":true}" : "{\"revoked\":false}");

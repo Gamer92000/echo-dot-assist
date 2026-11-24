@@ -79,17 +79,39 @@ struct pi_index {
 struct pi_revocation { char id[PS_ID_MAX]; long upto; uint8_t key[32]; int by_key; char reason[PI_REASON_MAX + 1]; };    /* upto 0: every version */
 struct pi_revoked { long long serial; int n; struct pi_revocation *r; };
 
-/* the index's base address, "https://.../" (PLUGIN_INDEX, HASSMIC_PLUGIN_INDEX for the tests) */
+/* the index's base address, "https://.../" (the owner's own index where pi_source named one; else PLUGIN_INDEX,
+ * HASSMIC_PLUGIN_INDEX for the tests) */
 const char *pi_base(void);
-/* the index's public keys, the first and, where one is built in or the tests name one, the second: how many (1, 2),
- * or -1 where a test's file cannot be read or one of them is a key under which any signature holds (edkey.h: then
- * nothing is taken as signed) */
-#define PI_KEYS 2
+/* ... the one this build has without the owner's (the page shows it beside a custom one) */
+const char *pi_base_builtin(void);
+/* The owner's own plugin index (sources.c, issue #175: the settings page's "Sources", taken with the action button
+ * where it brings a key or no check), set once in main() before anything of the plugins runs: BASE ("" none: the
+ * built-in one), KEY (NULL none) read beside the built-in keys, UNCHECKED 1: every signature taken as the owner's
+ * key's (no check at all).  With a key of the owner's or no check the build's least serials are not this index's
+ * (another serial space): pi_least_* are 0 */
+void pi_source(const char *base, const uint8_t *key, int unchecked);
+/* 1 where pi_source brought a key or no check (the page's red warning); _unchecked: no check */
+int  pi_source_trusts(void);
+int  pi_source_unchecked(void);
+/* 1 where the index is the owner's own site (any) */
+int  pi_source_custom(void);
+/* the least serial a package's listing by key BY (pi_signer's) is held to: the build's (pi_least_index's without
+ * Sources) for a built-in key's, whatever the index is now, 0 for the owner's own key or no check (its serials) */
+long long pi_least_listing(int by);
+/* "first", "second" (a built-in key's place) or "own (Sources)": for the log */
+const char *pi_key_name(int by);
+/* the index's public keys, the first and, where one is built in or the tests name one, the second, then the owner's
+ * own (pi_source): how many (1 to 3), or -1 where a test's file cannot be read or one of them is a key under which
+ * any signature holds (edkey.h: then nothing is taken as signed) */
+#define PI_KEYS 3
 int  pi_keys(uint8_t pk[PI_KEYS][32]);
-/* SIG (64 bytes) by an index key (either of pi_keys) over PURPOSE + DATA: 1 */
+/* how many of those are the build's own (1, 2): 5.2's move to a second key is about those alone */
+int  pi_keys_builtin(void);
+/* SIG (64 bytes) by an index key (any of pi_keys) over PURPOSE + DATA: 1.  With no check (pi_source) any 64 bytes */
 int  pi_signed(const char *purpose, const void *data, size_t len, const uint8_t *sig, size_t siglen);
-/* the same, and which key: 0 the first, 1 the second, -1 neither (a listing's key against the index's, for 5.2's
- * move of listings to a new key: plugin_store.c ps_relist) */
+/* the same, and which key: 0 the first, 1 the second, then the owner's (with no check: its place, whatever the
+ * signature), -1 none (a listing's key against the index's, for 5.2's move of listings to a new key:
+ * plugin_store.c ps_relist) */
 int  pi_signer(const char *purpose, const void *data, size_t len, const uint8_t *sig, size_t siglen);
 
 /* ---- the serials (docs/plugins.md 5.5).  Both lists' serials are times.  This build takes neither list under its

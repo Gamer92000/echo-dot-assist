@@ -187,6 +187,31 @@ static void second_key(const char *dir)
     ok(pi_keys(got) == 2 && got[0][0] == 0xc2 && !memcmp(got[1], pk2, 32), "HASSMIC_PLUGINS_PUB2 alone: beside the key built in");
     unsetenv("HASSMIC_PLUGINS_PUB2"); setenv("HASSMIC_PLUGINS_PUB", first, 1);
 }
+/* Sources (issue #175): the owner's own index (pi_source).  A key of the owner's beside the project's, after it; no
+ * check takes the two lists' signatures as the owner's but never a package's listing (purpose ""); the build's least
+ * for a listing by a built-in key whatever the index, 0 for the owner's */
+static void owner_source(void)
+{
+    uint8_t osk[64], opk[32], os[32] = { 11 }, got[PI_KEYS][32], zero[64] = { 0 }; const char *t = "{\"index\": 1}";
+    crypto_eddsa_key_pair(osk, opk, os);
+    setenv("HASSMIC_PLUGINS_LEAST", "500:400", 1);
+    ok(!signed_by(osk, PI_SIGN_INDEX, t) && pi_least_index() == 500 && pi_least_listing(0) == 500, "no Sources: the owner's key is none, the build's least");
+    pi_source("http://own/", opk, 0);
+    ok(pi_keys(got) == 2 && !memcmp(got[1], opk, 32) && pi_keys_builtin() == 1, "the owner's key after the built-in one");
+    ok(signed_by(osk, PI_SIGN_INDEX, t) && signed_by(sk, PI_SIGN_INDEX, t), "lists by either taken");
+    ok(pi_signer(PI_SIGN_INDEX, t, strlen(t), zero, 64) == -1 && pi_signer("", t, strlen(t), zero, 64) == -1, "no signature: none");
+    ok(pi_least_index() == 0 && pi_least_revoked() == 0 && pi_least_listing(0) == 500 && pi_least_listing(1) == 0,
+       "the owner's serials: least 0 for its lists and its key's listings, the build's for the project key's listings");
+    ok(!strcmp(pi_base(), "http://own/") && !strcmp(pi_key_name(1), "own (Sources)") && !strcmp(pi_key_name(0), "first"), "its base, its key named so");
+    pi_source("http://own/", NULL, 1);
+    ok(pi_signer(PI_SIGN_INDEX, t, strlen(t), zero, 64) == 1 && pi_signer(PI_SIGN_REVOKED, t, strlen(t), zero, 64) == 1, "no check: the lists' signatures taken, as the owner's place");
+    ok(pi_signer("", t, strlen(t), zero, 64) == -1, "... never a package's listing (a file would pass for official)");
+    ok(signed_by(sk, "", t) && signed_by(osk, "", t) == 0, "a listing signed by the project's key still holds, by no key none (with no check and no owner key)");
+    pi_source("", NULL, 0);
+    ok(!pi_source_custom() && !pi_source_trusts() && pi_least_index() == 500 && pi_keys(got) == 1, "back to the project's: as before");
+    unsetenv("HASSMIC_PLUGINS_LEAST");
+}
+
 /* Keys under which any signature holds (edkey.h, K3 of a review of a30d6ed): the eight points of small order, and the
  * identity once more in a non-canonical encoding (y = p + 1; Monocypher takes those).  Each as the second key and as
  * the first: no key at all, and the null signature (R the identity, s = 0) taken for nothing */
@@ -270,6 +295,7 @@ int main(void)
     snprintf(path, sizeof path, "%s/index.pub", dir); f = fopen(path, "wb"); fwrite(pk, 1, 32, f); fclose(f); setenv("HASSMIC_PLUGINS_PUB", path, 1);
     ok(pi_keys(got) == 1 && !memcmp(got[0], pk, 32), "HASSMIC_PLUGINS_PUB: the tests' key");
     second_key(dir);
+    owner_source();
     weak_keys(dir);
     { const char *t = "{\"index\": 1}"; uint8_t msg[200]; size_t hl = strlen(PI_SIGN_INDEX);
       memcpy(msg, PI_SIGN_INDEX, hl); memcpy(msg + hl, t, strlen(t)); crypto_eddsa_sign(sig, sk, msg, hl + strlen(t));

@@ -36,6 +36,7 @@
 #include "net.h"
 #include "ota.h"
 #include "plugin.h"
+#include "sources.h"
 
 #define CURRENT VERSION_NAME            /* (core.h) */
 /* The Makefile passes UPDATE_REPO (keys/release.conf, or a fork's secrets/fork.conf); this, as keys/release.conf, only
@@ -49,9 +50,22 @@
 
 const char *const update_channels[3] = { "off", "beta", "release" };
 
-/* tests point these at a local server */
-static const char *api_base(void) { const char *e = getenv("HASSMIC_UPDATE_API"); return e ? e : "https://api.github.com/repos/" REPO; }
-static const char *dl_base(void) { const char *e = getenv("HASSMIC_UPDATE_DOWNLOAD"); return e ? e : "https://github.com/" REPO "/releases/download"; }
+/* The owner's own server where the settings page names one (sources.c, issue #175: GitHub or a Forgejo/Gitea), else
+ * this project's releases; tests point the default at a local server */
+static const char *api_base(char *b, size_t cap)
+{
+    const char *e = getenv("HASSMIC_UPDATE_API");
+    if (sources_update_urls(b, cap, NULL, 0)) return b;
+    return e ? e : "https://api.github.com/repos/" REPO;
+}
+static const char *dl_base(char *b, size_t cap)
+{
+    const char *e = getenv("HASSMIC_UPDATE_DOWNLOAD");
+    if (sources_update_urls(NULL, 0, b, cap)) return b;
+    return e ? e : "https://github.com/" REPO "/releases/download";
+}
+/* what the summary and the log call it */
+static const char *server_name(void) { return sources_update_urls(NULL, 0, NULL, 0) ? "the update server" : "GitHub"; }
 
 static pthread_mutex_t ulock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t ucond = PTHREAD_COND_INITIALIZER;
@@ -299,8 +313,8 @@ static void set_failed(const char *what, const char *why)
 /* newest on channel CH into st; 0 if found */
 static int look(int ch)
 {
-    char url[400], err[300], t[64], page[192], body[1024], *notes = body; struct buf b = { 0 }; int found;
-    snprintf(url, sizeof url, ch == UPDATE_RELEASE ? "%s/releases/latest" : "%s/releases?per_page=10", api_base());
+    char url[400], err[300], t[64], page[192], body[1024], *notes = body, ab[300]; struct buf b = { 0 }; int found;
+    snprintf(url, sizeof url, ch == UPDATE_RELEASE ? "%s/releases/latest" : "%s/releases?per_page=10", api_base(ab, sizeof ab));
     if (fetch(url, &b, 1u << 20, 0, LONG_S, "hassmic/" CURRENT, err, sizeof err)) {
         set_failed("could not look for updates", strstr(err, "HTTP 404") && ch == UPDATE_RELEASE ? "no release published yet" : err);
         free(b.p); return -1;
@@ -322,7 +336,7 @@ static int look(int ch)
         if (!json_get(rs, re, "body", body, sizeof body)) body[0] = 0;
     }
     free(b.p);
-    if (!found) { set_failed("could not look for updates", ch == UPDATE_BETA ? "nothing published yet" : "unexpected answer from GitHub"); return -1; }
+    if (!found) { char w[60]; snprintf(w, sizeof w, "unexpected answer from %s", server_name()); set_failed("could not look for updates", ch == UPDATE_BETA ? "nothing published yet" : w); return -1; }
     if (!version_ok(t)) { set_failed("could not look for updates", "a release with an unexpected tag"); return -1; }
     while (isspace((unsigned char)*notes)) notes++;
     pthread_mutex_lock(&ulock);
@@ -341,7 +355,7 @@ static int look(int ch)
 
 static void install(int ch)
 {
-    char url[400], err[300], t[64], res[256]; struct buf b = { 0 }, s = { 0 };
+    char url[400], err[300], t[64], res[256], db[300]; struct buf b = { 0 }, s = { 0 }; uint8_t pk[32]; int own, unchecked = sources_update_unchecked();
     if (look(ch)) return;
     pthread_mutex_lock(&ulock);
     snprintf(t, sizeof t, "%s", tag);
@@ -351,13 +365,22 @@ static void install(int ch)
     if (same) { fprintf(stderr, "update: %s runs already, nothing to install\n", CURRENT); return; }
     if (notify) notify();
     fprintf(stderr, "update: downloading %s for %s\n", t, board.codename);
-    snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle", dl_base(), t, board.codename);
+    snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle", dl_base(db, sizeof db), t, board.codename);
     if (fetch(url, &b, MAX_BUNDLE, 1, LONG_S, "hassmic/" CURRENT, err, sizeof err)) { set_failed("download failed", err); goto out; }
-    snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle.sig", dl_base(), t, board.codename);
-    if (fetch(url, &s, 64, 0, LONG_S, "hassmic/" CURRENT, err, sizeof err)) { set_failed("download failed", err); goto out; }
-    if (s.n != 64) { set_failed("download failed", "the signature is not 64 bytes"); goto out; }
+    if (unchecked) {
+        /* No signature check (Sources, the owner's word with the action button): none is fetched, whatever the
+         * server has; hassmic's own key signs what came, the key root was told to trust (sources.c) */
+        if (!(s.p = malloc(64)) || sources_update_sign(b.p, b.n, s.p)) { set_failed("not installed", "hassmic's own key for updates without a signature check is missing"); goto out; }
+        s.n = 64;
+        fprintf(stderr, "update: %s downloaded and NOT CHECKED (Sources: no signature check), signed with hassmic's own key for root\n", t);
+    } else {
+        snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle.sig", dl_base(db, sizeof db), t, board.codename);
+        if (fetch(url, &s, 64, 0, LONG_S, "hassmic/" CURRENT, err, sizeof err)) { set_failed("download failed", err); goto out; }
+        if (s.n != 64) { set_failed("download failed", "the signature is not 64 bytes"); goto out; }
+    }
     /* (nothing of the plugins' to do first: a hassmic update never breaks a plugin, sdk/PROTOCOL.md "Versions") */
-    if (ota_handoff(b.p, b.n, s.p, res, sizeof res)) { set_failed("not installed", res + (strncmp(res, "FAILED ", 7) ? 0 : 7)); goto out; }
+    own = sources_update_key(pk);
+    if (ota_handoff(b.p, b.n, s.p, own ? pk : NULL, res, sizeof res)) { set_failed("not installed", res + (strncmp(res, "FAILED ", 7) ? 0 : 7)); goto out; }
     pthread_mutex_lock(&ulock);
     /* root restarts us in 2 s */
     snprintf(st.summary, sizeof st.summary, "%s installed, restarting", st.latest);
@@ -416,12 +439,12 @@ int update_channel(int ch)
  * what fails is name lookup, connecting or TLS. */
 int update_probe(char *err, size_t cap)
 {
-    char url[400], why[300]; struct buf b = { 0 }; int rc;
-    snprintf(url, sizeof url, "%s/releases?per_page=1", api_base());
+    char url[400], why[300], ab[300]; struct buf b = { 0 }; int rc;
+    snprintf(url, sizeof url, "%s/releases?per_page=1", api_base(ab, sizeof ab));
     rc = fetch(url, &b, 1u << 20, 0, 15, "hassmic/" CURRENT, why, sizeof why);
     free(b.p);
     if (rc && strstr(why, "HTTP ") == why) rc = 0;
-    if (rc) { size_t ul = strlen(url); snprintf(err, cap, "%s", strncmp(why, url, ul) ? why : why + ul + 2); fprintf(stderr, "update: GitHub not reachable: %s\n", why); }
+    if (rc) { size_t ul = strlen(url); snprintf(err, cap, "%s", strncmp(why, url, ul) ? why : why + ul + 2); fprintf(stderr, "update: %s not reachable: %s\n", server_name(), why); }
     return rc ? -1 : 0;
 }
 

@@ -82,6 +82,7 @@
 #include "sound.h"
 #include "whisper.h"
 #include "settings.h"
+#include "sources.h"
 #include "update.h"
 #include "web.h"
 #include "board.h"
@@ -4441,6 +4442,7 @@ int main(int argc, char **argv)
     if (print_mdns) { proto->print_mdns(); return 0; }
     clock_log_start();                              /* before any thread: it forks */
     pi_clock(clock_synced);                         /* the plugin index's serials against the clock Home Assistant set */
+    sources_load();                                 /* the owner's servers and keys (Sources): before the plugins and updates */
     signal(SIGPIPE, SIG_IGN); signal(SIGCHLD, SIG_IGN); signal(SIGUSR1, on_usr1); signal(SIGUSR2, on_usr2); signal(SIGHUP, on_hup); signal(SIGTTIN, on_ttin); signal(SIGTTOU, on_ttou); signal(SIGWINCH, on_winch); signal(SIGURG, on_urg);
     if (access("/system/bin/ledctrl", X_OK)) use_led = 0;
     ledq_start(use_led ? "/system/bin/ledctrl" : NULL, getenv("HASSMIC_FAKE_LED"), child_ids, LEDQ_TIMEOUT_MS);

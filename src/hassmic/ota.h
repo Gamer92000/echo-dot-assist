@@ -12,9 +12,9 @@ int ota_handed(void);           /* 1 while a bundle handed to root may still be 
                                    that late answer too) */
 #include <stddef.h>
 #include <stdint.h>
-/* A bundle hassmic downloaded itself (update.c), signed with the release key: checked against that key, handed to root's
- * installer like a push.  RES gets the installer's answer ("OK <version>": hassmic is restarted on it; "FAILED <why>").
+/* A bundle hassmic downloaded itself (update.c), signed with the release key or OWN (NULL: none; the key the settings
+ * page's Sources had root trust beside it, sources.c): checked against those, handed to root's installer like a push.  RES gets the installer's answer ("OK <version>": hassmic is restarted on it; "FAILED <why>").
  * 0 on OK; -1 refused or not handed over; 1 root did not answer in time (it may install it still: ota_handed reads
  * its answer later).  Blocks for up to a minute. */
-int ota_handoff(const uint8_t *bundle, size_t len, const uint8_t sig[64], char *res, size_t cap);
+int ota_handoff(const uint8_t *bundle, size_t len, const uint8_t sig[64], const uint8_t *own, char *res, size_t cap);
 #endif

@@ -1729,9 +1729,9 @@ static int listing_by(const uint8_t *l, size_t len, const struct ps_manifest *m,
       *serial = 0; for (size_t i = 0; i < k; i++) *serial = *serial * 10 + (d[i] - '0'); }
     return tier;
 }
-static int listing_check(const uint8_t *l, size_t len, const struct ps_manifest *m, long long *serial, char *err, size_t errsz)
+static int listing_check(const uint8_t *l, size_t len, const struct ps_manifest *m, long long *serial, int *key, char *err, size_t errsz)
 {
-    return listing_by(l, len, m, serial, NULL, err, errsz);
+    return listing_by(l, len, m, serial, key, err, errsz);
 }
 /* The tier a listing that does not hold here says it gives (its own line, for this manifest's id and version; the
  * signature not asked): PS_OFFICIAL, PS_COMMUNITY, -1 where it says neither or is no listing of this package.  Only
@@ -1857,7 +1857,7 @@ static int installed_tier(const char *id)
     if (text) {
         snprintf(p, sizeof p, "%s/%s/pkg/listing.sig", ps_dir(), id);
         l = read_file(p, 1024, &ll);
-        t = listing_check(l, ll, om, &ls, NULL, 0); free(l);
+        t = listing_check(l, ll, om, &ls, NULL, NULL, 0); free(l);
         if (t > best) best = t;
     }
     free(text); free(om);
@@ -1891,8 +1891,12 @@ static int relisting_of(const char *id, struct ps_manifest *om, struct relisting
 }
 static int relist_better(const struct relisting *old, int tier, int key, long long serial)
 {
-    if (tier < PS_COMMUNITY || serial < pi_least_index() || tier < old->tier) return 0;
-    return tier > old->tier || key != old->key || old->serial < pi_least_index();
+    if (tier < PS_COMMUNITY || serial < pi_least_listing(key) || tier < old->tier) return 0;
+    /* (the owner's own index, Sources: a listing of the project's key is never moved to the owner's, a higher tier
+     * neither.  Moved, it holds no more once the owner goes back to the project's index, and the plugin is a file's
+     * until that index lists it again, if it does: stopped meanwhile with community plugins off; reviews, 2026-11-24) */
+    if (key >= pi_keys_builtin() && old->key >= 0 && old->key < pi_keys_builtin()) return 0;
+    return tier > old->tier || key != old->key || old->serial < pi_least_listing(old->key);
 }
 
 int ps_relist_wanted(const char *id, long version, const uint8_t manifest[32], int tier, int key, long long serial)
@@ -1914,7 +1918,8 @@ int ps_relist_wanted(const char *id, long version, const uint8_t manifest[32], i
  * review of 3fcd319, S4: the daily look read index.json for good for a version the index had dropped) */
 int ps_relist_reason(const struct ps_idv *skip, int nskip)
 {
-    const struct ps_plugin *l; uint8_t pk[PI_KEYS][32]; int n, nk = pi_keys(pk), r = 0;
+    /* (the build's own keys: the owner's own index key, issue #175, comes after them and is no step of 5.2's) */
+    uint8_t pk[PI_KEYS][32]; const struct ps_plugin *l; int n, nk = pi_keys(pk) < 0 ? -1 : pi_keys_builtin(), r = 0;
     ps_lock(); n = ps_list(&l);
     for (int i = 0; i < n && r < 2; i++) {
         int s = 0;
@@ -1922,7 +1927,7 @@ int ps_relist_reason(const struct ps_idv *skip, int nskip)
         for (int k = 0; k < nskip && !s; k++) s = skip[k].version == l[i].m.version && !strcmp(skip[k].id, l[i].m.id);
         if (s) continue;
         if (l[i].listing_unread) r = 2;
-        else if (l[i].tier != PS_SIDELOAD && ((nk == 2 && l[i].listing_key == 0) || l[i].listing_serial < pi_least_index())) r = 1;
+        else if (l[i].tier != PS_SIDELOAD && ((nk == 2 && l[i].listing_key == 0) || l[i].listing_serial < pi_least_listing(l[i].listing_key))) r = 1;
     }
     ps_unlock();
     return r;
@@ -1947,7 +1952,7 @@ int ps_relist(const uint8_t *pkg, size_t len, char *err, size_t errsz)
     snprintf(p, sizeof p, "%s/%s/pkg/listing.sig", ps_dir(), m->id);
     if (statefile_write(p, 0644, mem[4].data, mem[4].len)) { fail(err, errsz, "cannot write %s", p); rc = -2; ps_unlock(); goto out; }
     fprintf(stderr, "plugins: %s version %ld: the plugin index's listing taken (%s, by its %s key, serial %lld; it was %s)\n", m->id, m->version,
-            t == PS_OFFICIAL ? "official" : "community", key ? "second" : "first", serial,
+            t == PS_OFFICIAL ? "official" : "community", pi_key_name(key), serial,
             r.tier == PS_SIDELOAD ? "a file's: no listing that holds" : r.tier == PS_OFFICIAL ? "official" : "community");
     ps_unlock();
     rc = 1;
@@ -1960,7 +1965,7 @@ static void config_tidy(const struct ps_manifest *m);
 
 int ps_stage_check(struct ps_manifest *m, int *tier, int *button, struct ps_changes *ch, char *err, size_t errsz)
 {
-    char p[400]; size_t len = 0; uint8_t *b, pinned[32], dg[32]; int r = -1, t, unknown = 0, was, had_tier = -1; FILE *f; struct acc a; long long lserial;
+    char p[400]; size_t len = 0; uint8_t *b, pinned[32], dg[32]; int r = -1, t, unknown = 0, was, had_tier = -1; FILE *f; struct acc a; long long lserial; int lkey = -1;
     struct ps_changes *c = ch ? ch : calloc(1, sizeof *c);
     struct member mem[] = { { "manifest.json", NULL, 0, MANIFEST_MAX }, { "manifest.sig", NULL, 0, 64 }, { "plugin", NULL, 0, PS_PACKAGE_MAX },
                             { "LICENSE", NULL, 0, 65536 }, { "listing.sig", NULL, 0, 1024 } };
@@ -1989,14 +1994,14 @@ int ps_stage_check(struct ps_manifest *m, int *tier, int *button, struct ps_chan
     crypto_blake2b(dg, 32, mem[2].data, mem[2].len);
     if (memcmp(dg, m->digest, 32)) { fail(err, errsz, "the program is not the one the manifest names"); goto out; }
     if (ps_elf_check(mem[2].data, mem[2].len, err, errsz)) goto out;
-    if ((t = listing_check(mem[4].data, mem[4].len, m, &lserial, err, errsz)) < 0) goto out;
+    if ((t = listing_check(mem[4].data, mem[4].len, m, &lserial, &lkey, err, errsz)) < 0) goto out;
     /* A listing made by an index older than this build takes (5.5's least serial, raised at a release) is no word of
      * the index's any more: the version may have been dropped from it since, and a file, a copy or a push would keep
      * it installable as official for good.  It counts as no listing: a sideload, which asks for the button and is
      * neither copied nor pushed.  (The Echo's own fetch brings the site's packages, listed under its index's serial,
      * which is at least the least.)  At install only: what is installed keeps the tier it came with (ps_scan) */
-    if (t != PS_SIDELOAD && lserial < pi_least_index()) {
-        change(c, PS_CHANGED, "Listed by an index older than this hassmic takes (serial %lld, it takes %lld): treated as a package from a file. Get it from the plugin index again for its listing", lserial, pi_least_index());
+    if (t != PS_SIDELOAD && lserial < pi_least_listing(lkey)) {
+        change(c, PS_CHANGED, "Listed by an index older than this hassmic takes (serial %lld, it takes %lld): treated as a package from a file. Get it from the plugin index again for its listing", lserial, pi_least_listing(lkey));
         t = PS_SIDELOAD;
     }
     *tier = t;
@@ -2824,12 +2829,12 @@ int ps_scan(const struct ps_plugin **list)
            * stays the one it came with (5.5: a raised least does not turn what is installed into a file's); the
            * whole log, which only the index's word gives, is held to that word as it stands (N4 of a review of
            * 7be9343: the serial was read and dropped here, and only the install asked) */
-          ct = pl->tier != PS_SIDELOAD && ls < pi_least_index() ? PS_SIDELOAD : pl->tier;
+          ct = pl->tier != PS_SIDELOAD && ls < pi_least_listing(pl->listing_key) ? PS_SIDELOAD : pl->tier;
           /* listed all the same, so that its card says why it does not run and has Remove */
           pl->refused[0] = 0; pl->withdrawn[0] = 0; pl->anyway = 0;
           if (runnable(&pl->m, ct, pl->refused, sizeof pl->refused)) {
               if (ct != pl->tier && !runnable(&pl->m, pl->tier, err, sizeof err))
-                  snprintf(pl->refused, sizeof pl->refused, "its listing is from an index older than this hassmic takes (serial %lld, it takes %lld), and the whole log (\"log.read.full\") is for official plugins only: install it from the plugin index again", ls, pi_least_index());
+                  snprintf(pl->refused, sizeof pl->refused, "its listing is from an index older than this hassmic takes (serial %lld, it takes %lld), and the whole log (\"log.read.full\") is for official plugins only: install it from the plugin index again", ls, pi_least_listing(pl->listing_key));
               fprintf(stderr, "plugins: %s is not started: %s\n", e->d_name, pl->refused);
           }
         }

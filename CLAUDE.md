@@ -222,6 +222,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web_davs.py       # models downloaded from a fake Amazon: login by code pair with the device
                                              # attestation token, DAVS, unpack, staging, install, deregister
 .venv/bin/python tests/fake_ha_update.py      # online updates: page channel + HA update entity, fake GitHub, root's installer
+.venv/bin/python tests/fake_ha_sources.py     # Sources (issue #175): the owner's update server (a stand-in Forgejo) and plugin
+                                             # index, a key of the owner's and no check with the button, root's page key
 .venv/bin/python tests/fake_ha_wakesound.py   # wake sound removal: the PC's stand-in echo (HASSMIC_FAKE_ECHO) off/on
 .venv/bin/python tests/fake_ha_volumes.py     # separate volumes: four of their own or following the music, the mixer at the
                                              # loudest, HA's media at the music's, keys on what plays, gains in dB, a
@@ -1454,6 +1456,23 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   the system partition). Channel only from an approved browser on the page (no HA entity for it), install only over the keyed connection.  The page switches a channel on
   only once `update_probe` reached GitHub (web.c `updates_gate`, before `core_lock`; else `github_unreachable` in the
   answer and a warning under the row).
+- **Sources** (`sources.c`, `sources.h`, issue #175): the System page's "Where software comes from": the online
+  updates' server (a repository on GitHub, or Forgejo/Gitea by its host: `<root>/api/v1/repos/<o>/<r>`) and the plugin
+  index's site, each the project's or the owner's, in `state/sources` (not exported, not in HA, gone with a reset).  A
+  server alone at once (root still checks release.pub/update.pub, the index key still decides).  For a server of the
+  owner's a key of the owner's (beside the project's) or no check, only by an approved browser plus the action button
+  (web.c `W_SOURCE`; `sources_widens`; less trust at once), the maintainer's decision although root then trusts a key
+  hassmic names (docs/SECURITY.md says so): `state/update-key` (32 bytes or empty) -> main.sh `page_pub` ->
+  `/data/local/hassmic/page-update.pub` (`HASSMIC_PAGE_UPDATE_PUB`), the third key of ota_watch's loop and of
+  `ota_handoff`'s `own`; no check = hassmic's own key `state/update-own.key` signs what update.c downloads (no .sig
+  fetched).  The push port takes update.pub only.  Plugin index: `pi_source` in main() (plugin_index.c: the owner's
+  key after the built-in ones, `PI_KEYS` 3, `pi_keys_builtin` for 5.2's rules; no check: `pi_signer` takes any 64
+  bytes for the two lists, never for a package's listing (purpose ""), plugin_fetch.c `get_sig` a missing .sig as
+  zeros; least serials 0 for its lists and the owner key's listings, the build's for a built-in key's
+  (`pi_least_listing`); no member revocation lists with a key or no check, `pi_source_trusts`; a built-in key's
+  listing never relisted to the owner's); any change restarts hassmic, one of what is trusted also forgets `.serial`,
+  `.revoked`, `.revoked-at`, `.listed` at the next start (mark `state/sources-forget`, `sources_load`).  `sources_apply(expect, to)`: only over what the caller judged against.  `/api/state` `sources` (level 0/1/2), `POST /api/sources`; app.js
+  `sourcesCallout` on every page (yellow a server, red a key or no check), `sourceDialog`.
 - **Media over HTTPS** (`https.c`, issue #30): `proto_esphome.c` `http_get` hands `https://` to `https_open`, which
   runs the firmware's libcurl (`fwcurl()`, as update.c; BoringSSL, system CAs) in a thread writing the body into a socketpair: the
   decoders and the cancel's `shutdown()` work as on a plain fetch.  Setting `https_verify` (default on; off takes any

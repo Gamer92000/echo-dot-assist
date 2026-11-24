@@ -72,7 +72,25 @@ static int unhex(uint8_t *out, const char *s, size_t n)
     return s[2 * n] ? -1 : 0;
 }
 
-const char *pi_base(void) { const char *e = getenv("HASSMIC_PLUGIN_INDEX"); return e && *e ? e : PLUGIN_INDEX; }
+const char *pi_base_builtin(void) { const char *e = getenv("HASSMIC_PLUGIN_INDEX"); return e && *e ? e : PLUGIN_INDEX; }
+
+/* The owner's own index (pi_source, from main() before any thread of the plugins runs, and never again in a run: a
+ * change of it restarts hassmic, sources.c, so nothing kept in memory here or in plugin_fetch.c was another
+ * index's) */
+static char own_base[256];
+static uint8_t own_key[32];
+static int own_has_key, own_unchecked;
+void pi_source(const char *base, const uint8_t *key, int unchecked)
+{
+    snprintf(own_base, sizeof own_base, "%s", base ? base : "");
+    own_has_key = key != NULL; if (key) memcpy(own_key, key, 32);
+    own_unchecked = unchecked != 0;
+}
+int pi_source_trusts(void) { return own_has_key || own_unchecked; }
+int pi_source_unchecked(void) { return own_unchecked; }
+int pi_source_custom(void) { return own_base[0] != 0; }
+const char *pi_key_name(int by) { int nb = pi_keys_builtin(); return by < 0 ? "no" : by < nb ? (by ? "second" : "first") : "own (Sources)"; }
+const char *pi_base(void) { return own_base[0] ? own_base : pi_base_builtin(); }
 
 static int key_file(const char *path, uint8_t pk[32])
 {
@@ -83,7 +101,7 @@ static int key_file(const char *path, uint8_t pk[32])
 
 /* The tests' first key replaces the built-in ones, both: a test with a key of its own never also takes a list signed
  * by the build's second key.  A second key a test names is read beside whichever first key there is */
-static int keys_read(uint8_t pk[PI_KEYS][32])
+static int keys_builtin(uint8_t pk[PI_KEYS][32])
 {
     const char *e = getenv("HASSMIC_PLUGINS_PUB"), *e2 = getenv("HASSMIC_PLUGINS_PUB2");
     int own = e && *e;
@@ -92,6 +110,17 @@ static int keys_read(uint8_t pk[PI_KEYS][32])
     if (own || !PLUGINS_PUB2[0]) return 1;
     return unhex(pk[1], PLUGINS_PUB2, 32) ? -1 : 2;
 }
+
+/* ... and the owner's own after them (pi_source): the built-in ones keep their places, so 5.2's rules (the second
+ * key is the new one) and what a listing installed says of its key stay what they were */
+static int keys_read(uint8_t pk[PI_KEYS][32])
+{
+    int n = keys_builtin(pk);
+    if (n > 0 && own_has_key) memcpy(pk[n++], own_key, 32);
+    return n;
+}
+
+int pi_keys_builtin(void) { uint8_t pk[PI_KEYS][32]; int n = keys_builtin(pk); return n < 1 ? 1 : n; }
 
 /* ... and none of them a key that vouches for anything (edkey.h: under a key of small order the null signature
  * holds for every text; the Makefile refuses to build one in, this holds for the tests' keys and for a build made
@@ -103,7 +132,7 @@ int pi_keys(uint8_t pk[PI_KEYS][32])
     int n = keys_read(pk);
     for (int i = 0; i < n; i++)
         if (ed_key_weak(pk[i])) {
-            if (!said) { said = 1; fprintf(stderr, "plugins: the plugin index's %s key built in is one under which any signature holds: no list of the index is taken\n", i ? "second" : "first"); }
+            if (!said) { said = 1; fprintf(stderr, "plugins: the plugin index's %s key is one under which any signature holds: no list of the index is taken\n", i == 0 ? "first" : i == 1 && pi_keys_builtin() == 2 ? "second" : "own (Sources)"); }
             return -1;
         }
     return n;
@@ -116,6 +145,14 @@ int pi_signer(const char *purpose, const void *data, size_t len, const uint8_t *
     memcpy(msg, purpose, pl); if (len) memcpy(msg + pl, data, len);
     for (int i = 0; i < n && by < 0; i++) if (!crypto_eddsa_check(sig, pk[i], msg, pl + len)) by = i;
     free(msg);
+    /* No check (the owner's word on the settings page, with the action button): the index's two lists that no key
+     * signed count as the owner's, in the place the owner's key would have (after the built-in ones).  Never a
+     * package's listing (purpose "", plugin_store.c listing_by): that is read from every package, a file uploaded or
+     * copied from another Echo too, and unchecked any 128 hex digits made a file "official" (past the community
+     * switch, log.read.full's and sync's rule for official ones; a review, 2026-11-24).  A package of an index
+     * without a key carries no listing that holds: refused from the index (bring_ok), a file without one installs
+     * only as a community plugin, by "Install from file" */
+    if (by < 0 && own_unchecked && *purpose) by = pi_keys_builtin();
     return by;
 }
 
@@ -132,8 +169,14 @@ static long long least_env(int which)       /* HASSMIC_PLUGINS_LEAST=<index>:<re
     if (!e || !*e) return -1;
     return which ? (c ? atoll(c + 1) : -1) : atoll(e);
 }
-long long pi_least_index(void) { long long e = least_env(0); return e >= 0 ? e : (long long)PLUGINS_LEAST_INDEX; }
-long long pi_least_revoked(void) { long long e = least_env(1); return e >= 0 ? e : (long long)PLUGINS_LEAST_REVOKED; }
+/* (the owner's own index with a key of its own or no check counts its serials as it likes: the build's least are
+ * this project's index's, and would refuse an index the owner made before this build was released) */
+static long long least_built_index(void) { long long e = least_env(0); return e >= 0 ? e : (long long)PLUGINS_LEAST_INDEX; }
+long long pi_least_index(void) { return pi_source_trusts() ? 0 : least_built_index(); }
+/* (a listing the project's key signed keeps the build's least under an index of the owner's too: else one under it,
+ * which the least is there to stop, installed as official from a file, a copy or a push; a review, 2026-11-24) */
+long long pi_least_listing(int by) { return by >= 0 && by < pi_keys_builtin() ? least_built_index() : 0; }
+long long pi_least_revoked(void) { long long e = least_env(1); return pi_source_trusts() ? 0 : e >= 0 ? e : (long long)PLUGINS_LEAST_REVOKED; }
 
 static int (*clock_set)(void);
 void pi_clock(int (*synced)(void)) { clock_set = synced; }
@@ -672,7 +715,7 @@ int pi_revoked_take(const char *text, size_t len, const uint8_t *sig, size_t sig
             kept_path(p, sizeof p);
             if (kept_write(kept_floor, sig, text, len))
                 fprintf(stderr, "plugins: cannot keep the revocation list's new signature on the flash (%s): the one kept stays, until the next look\n", p);
-            else { fprintf(stderr, "plugins: the revocation list (serial %lld) kept with the signature of the index's %s key now\n", nr.serial, by ? "second" : "first"); pi_revoked_free(&kept); kept = nr; kept_by = by; nr.r = NULL; nr.n = 0; }
+            else { fprintf(stderr, "plugins: the revocation list (serial %lld) kept with the signature of the index's %s key now\n", nr.serial, pi_key_name(by)); pi_revoked_free(&kept); kept = nr; kept_by = by; nr.r = NULL; nr.n = 0; }
         }
         pi_revoked_free(&nr); if (from == PI_SITE) word(-1);
     }

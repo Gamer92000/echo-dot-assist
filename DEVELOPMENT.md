@@ -354,7 +354,10 @@ script changes nothing in git; a commit whose tag the fork took from this projec
 run never publishes), and put each Echo on a build of the fork once from the PC (`scripts/ota-push.sh` or
 `scripts/setup.sh`): that brings it the fork's key. Back up `secrets/`. A fork without `secrets/fork.conf` builds what
 this project builds, byte for byte, and its Echos take this project's updates. `tests/unit/fork_release_test.sh` runs
-the script against a stand-in `gh`.
+the script against a stand-in `gh`.  A fork's releases somewhere other than GitHub (a Forgejo or Gitea, a mirror on a
+LAN without internet), or a plugin index of its own that a build does not name: the settings page's "Where software
+comes from" (`src/hassmic/sources.c`, docs/GUIDE.md), per Echo; the `HASSMIC_UPDATE_*` and `HASSMIC_PLUGIN_INDEX`
+variables are the tests' only.
 
 **Trying the workflow locally** with [nektos/act](https://github.com/nektos/act): the publishing step only says what it
 would publish under act. The toolchains go on a volume: unpacked inside the job containers (3 GB), act times out

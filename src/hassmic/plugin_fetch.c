@@ -235,6 +235,23 @@ static int get(const char *name, size_t max, const volatile int *stop, long long
     return -1;
 }
 
+/* A list's signature (NAME: "<list>.sig").  With no check (the owner's own index, Sources: pi_source) an index made
+ * without a key has none: the server's answer for it (a 404, a 200 that is not 64 bytes or empty, a page longer than one) stands for a signature
+ * of 64 zeros, which pi_signer then takes as the owner's.  What fails on the way (the site not reached, cancelled) fails
+ * as ever */
+static int get_sig(const char *name, const volatile int *stop, long long until, unsigned char **d, size_t *n, int *state, char *err, size_t cap)
+{
+    int was = *state;
+    if (!get(name, SIG_MAX, stop, until, d, n, state, err, cap)) {
+        if (!pi_source_unchecked() || *n == 64) return 0;
+        free(*d); *d = NULL;                            /* (a page a static host answers with for a file it lacks) */
+    } else if (!pi_source_unchecked() || !(strstr(err, "an empty answer")
+               || (*state == PF_FAILED && (!strncmp(err, "the plugin index answered ", 26) || strstr(err, " is larger than this hassmic reads"))))) return -1;
+    if (!(*d = calloc(1, 65))) return -1;
+    *n = 64; err[0] = 0; *state = was;
+    return 0;
+}
+
 /* what is known, as a look's answer: 0, or -1 and the reason kept from the look that failed (fl held) */
 static int known_answer(char *err, size_t cap)
 {
@@ -285,14 +302,14 @@ int pf_look_until(const char *want, int pace, const volatile int *stop, long lon
      * this Echo has: that one stays, said beside the answer, and the index is held to it by the pair's rule below
      * (the whole look failed, and with it every install, while the site served an older list than a member had
      * handed over; a review, 2026-11-21) */
-    if (get("revoked.json", PI_REVOKED_MAX, stop, until, &rj, &rjn, &state, why, sizeof why) || get("revoked.json.sig", SIG_MAX, stop, until, &rs, &rsn, &state, why, sizeof why)) goto done;
+    if (get("revoked.json", PI_REVOKED_MAX, stop, until, &rj, &rjn, &state, why, sizeof why) || get_sig("revoked.json.sig", stop, until, &rs, &rsn, &state, why, sizeof why)) goto done;
     withdrawn = pi_revoked_take((const char *)rj, rjn, rs, rsn, PI_SITE, why, sizeof why);
     if (withdrawn == PI_OLDER) {
         snprintf(note, sizeof note, "the plugin index's list of withdrawn plugins is older than the one this Echo has (from another Echo of its network, or from an earlier look): this Echo keeps its own");
         fprintf(stderr, "plugins: %s\n", why);
         withdrawn = 0; why[0] = 0;
     } else if (withdrawn < 0) { state = PF_FAILED; withdrawn = 0; goto done; }
-    if (get("index.json", PI_INDEX_MAX, stop, until, &ij, &ijn, &state, why, sizeof why) || get("index.json.sig", SIG_MAX, stop, until, &is, &isn, &state, why, sizeof why)) goto done;
+    if (get("index.json", PI_INDEX_MAX, stop, until, &ij, &ijn, &state, why, sizeof why) || get_sig("index.json.sig", stop, until, &is, &isn, &state, why, sizeof why)) goto done;
     /* the signature first: nothing of a list is read before its signer is known */
     if ((by = pi_signer(PI_SIGN_INDEX, ij, ijn, is, isn)) < 0) { state = PF_FAILED; snprintf(why, sizeof why, "the plugin index's signature does not hold: this is not a list its key signed, and nothing of it was taken"); goto done; }
     if (pi_index_parse((const char *)ij, ijn, &ix, why, sizeof why)) { state = PF_FAILED; goto done; }
@@ -859,7 +876,7 @@ static void daily_fetch(void)
         if (!pf_look(NULL, PF_DAILY, &pf_stop, why, sizeof why)) relist_due(0);
         return;
     }
-    if (!get("revoked.json", PI_REVOKED_MAX, &pf_stop, 0, &rj, &rjn, &state, why, sizeof why) && !get("revoked.json.sig", SIG_MAX, &pf_stop, 0, &rs, &rsn, &state, why, sizeof why))
+    if (!get("revoked.json", PI_REVOKED_MAX, &pf_stop, 0, &rj, &rjn, &state, why, sizeof why) && !get_sig("revoked.json.sig", &pf_stop, 0, &rs, &rsn, &state, why, sizeof why))
         r = pi_revoked_take((const char *)rj, rjn, rs, rsn, PI_SITE, why, sizeof why);
     free(rj); free(rs);
     if (r < 0) fprintf(stderr, "plugins: the daily look at the revocation list: %s%s\n", state == PF_UNREACHABLE ? "not reachable: " : "", why);
@@ -1015,7 +1032,7 @@ static int member_fetch(unsigned ip, int port, long long serial, const char *nod
 static void tell(void)
 {
     long long s = pi_revoked_serial(); uint8_t m[M_LEN];
-    if (s < 0) return;
+    if (s < 0 || pi_source_trusts()) return;            /* (pf_message says why) */
     m[0] = M_REVOKED;
     for (int i = 0; i < 8; i++) m[1 + i] = (uint8_t)(s >> (56 - 8 * i));
     m[9] = (uint8_t)(my_port >> 8); m[10] = (uint8_t)my_port;
@@ -1107,6 +1124,11 @@ void pf_message(const unsigned char from[8], const char *node, unsigned ip, cons
 {
     long long s = 0, now = mono_ms(); int port, k = -1;
     if (n != M_LEN || p[0] != M_REVOKED) return;
+    /* The owner's own index with a key of the owner's or no check (Sources): its revocation list is of its own
+     * serials and key, and a member's is the project's (or another owner's): taken, the project's newer list replaced
+     * the owner's, or with no check any member's list raised the floor over the owner's site's own (a review,
+     * 2026-11-24).  Neither told nor taken.  A mirror alone (the project's keys) is the project's list: as ever */
+    if (pi_source_trusts()) return;
     /* a member is on this network: its word comes from a private or link-local address (loopback: this host itself,
      * the PC's tests' members), never from the internet.  The address is the datagram's source and the port the
      * message's, so a word from anywhere else would have this Echo fetch from an address of the sender's choosing

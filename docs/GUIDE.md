@@ -1595,6 +1595,51 @@ hassmic also has built in, deprecated there: [Move to the plugin](#microwakeword
   all, by how old the Echo's system install is. `scripts/install-system.sh` run again brings the newest.
 - `PLUGINS=0` in `hassmic.conf` starts hassmic without plugins at all.
 
+## Where software comes from
+
+The System page's card "Where software comes from" says where online updates and plugins come from, and lets you
+pick other servers. While anything there is not the project's own, every page of the settings says so at the top:
+yellow for a server of your own, red for a signing key of your own or no signature check.
+
+- **Updates**: the project's releases on GitHub by default. Another repository is given as
+  `https://<server>/<owner>/<repository>`, on GitHub, Forgejo or Gitea (told apart by the server: github.com is
+  GitHub, anything else is taken for Forgejo or Gitea, whose API answers at `<server>/api/v1`). The releases need the
+  same tags (`v<version>`, `v<version>-beta`) and assets (`hassmic-<codename>.bundle` and `.bundle.sig`) as the
+  project's. The release channel uses the newest release that is not a prerelease, so with prereleases only, only beta
+  finds anything. Many Echos do not know newer certificate authorities (Let's Encrypt among them): a server on your
+  network may have to be plain `http://`. That is fine for the bundles, whose signature is what counts.
+- **Plugin index**: the project's by default. Another site has the same files as the project's (`index.json`,
+  `revoked.json` and their `.sig`, `packages/`), as the index's own tool builds them. A change restarts the satellite;
+  plugins installed stay. A change of what is trusted (below) also forgets what the Echo kept of the old index (its
+  list of withdrawn plugins, its serials); a mirror under the same keys keeps it, so it cannot hand back an older
+  list. With a key of your own or no check, the Echos of your network do not pass lists of withdrawn plugins to this
+  one or take its own (a mirror under the project's keys still does).
+
+A server alone is set at once and changes nothing of what is trusted: bundles are still checked against the project's
+release key and your update key, plugin lists against the project's index key. So a mirror of the project's releases
+or index needs nothing else, and an Echo on a fork's builds (which carry the fork's release key) needs only the fork's
+server.
+
+For a server of your own there are two more choices, each of which takes a press of the action button after you save
+it (as adb does), and turns the warning red:
+
+- **Your signing key** (its public half, 64 hex digits: `od -An -tx1 -v <key>.pub | tr -d ' \n'`), trusted beside the
+  project's. Updates signed with it are installed (root keeps the key; the row says "Root has not taken the key yet"
+  until it has, a few seconds), lists of your index signed with it count, and what that index lists as official is
+  official on this Echo.
+- **No signature check**. Updates: no `.sig` is fetched, the Echo signs what it downloads with a key of its own that
+  root trusts. Plugin index: its lists without signatures are taken, but each package's own listing is still checked
+  against the project's index key or your own: from an index built without any key, plugins can be browsed but not
+  installed. Whoever controls that
+  update server, or on plain `http://` anyone on the network on the way to it, can then install anything on the Echo.
+
+Plugins still run in their sandbox, and each install still takes the action button. Pushing an update from your PC
+(`scripts/ota-push.sh`) still takes your update key only. Taking a key or no check away, or going back to the
+project's ("The project's" in the dialog), works at once. Not exported, not copied to other Echos, not in Home
+Assistant; a factory reset goes back to the project's. That does not undo what an update installed under your key or
+without a check did: it ran as root, and brings its own release key with it (an update of a fork's carries the
+fork's). What each choice costs: [security](SECURITY.md#updates).
+
 ## hassmic.conf
 
 One file on the Echo, `/data/local/hassmic/hassmic.conf`, read at boot (edit over adb, reboot):

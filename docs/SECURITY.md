@@ -200,11 +200,16 @@ ring, mute's red ring included, which it could already through the ring's own pa
 does not depend on any of it.
 
 What stays: hassmic is what sees the action button and checks the signed challenge, so code that took hassmic over
-can open adb over Wi-Fi for someone else on the network, though not use it itself.
+can open adb over Wi-Fi for someone else on the network, though not use it itself. And it can name a key of
+[Sources](#updates) for root to trust (state/update-key), and so get a bundle of its own installed as root: the one
+request root takes on hassmic's word alone, for the page's signing key of your own or no signature check.
 
 ## Plugins
 
-Experimental, off by default; [plugins.md](plugins.md) has the whole design and its threat table. A plugin is
+Experimental, off by default; [plugins.md](plugins.md) has the whole design and its threat table. A plugin index of
+your own ([Sources](#updates)) changes only what the index decides: with a key of yours, what that index lists as
+official is official here; with a key of yours or no signature check, what it withdraws (or does not) is what is
+withdrawn here (an approved browser and the action button, and the page warns in red). Everything below holds for its plugins as for any. A plugin is
 someone else's native code on the Echo, so what holds it matters:
 
 - **Its own process and user.** Root's launcher (`plugrun`, started in front of hassmic) starts each plugin as a
@@ -922,6 +927,23 @@ Installed only when signed with your `secrets/update.key` (pushed from your PC) 
 (`keys/release.pub`; downloaded by hassmic itself, only once a channel is picked under "Online updates"). Root checks
 the signature, with the tool and keys from the system partition or the installed copy, before anything is unpacked.
 Your key also opens adb over Wi-Fi; the release key does not.
+
+**Sources** (issue #175: the settings page's "Where software comes from"). Online updates may come from another server
+than GitHub, set from an approved browser; that alone trusts no more, since root still checks the release key and
+your update key. For a server of your own you may also name a signing key of yours, or switch the signature check off
+(then hassmic signs what it downloads with a key of its own). Either is taken only from an approved browser plus a
+press of the action button for that very choice, and every page warns in red while it stands. Root then trusts a third
+key, which hassmic named (`state/update-key`, kept by root as `/data/local/hassmic/page-update.pub`). That is the one
+place where root takes hassmic's word on what it installs: **code that took hassmic over can name its own key there
+and run as root**, which without it it cannot (below, "hassmic and root"). The maintainer chose that over a key set
+through adb only (2026-11-24): the button bounds it as it bounds adb over Wi-Fi, against everyone but a hassmic
+already taken over. With no check, whoever controls the server, and on plain HTTP anyone on the network between, can
+install anything. The push port is not affected: it takes your update key only. A factory reset takes the key away,
+but not what was installed under it: that ran as root, and an update brings the release key the Echo trusts next
+(the factory copy's included), so a server that was trusted once can stay trusted. Reflash the Echo if that matters.
+A plugin index of your own with no check takes its lists unchecked, never a package's listing: a file uploaded or
+copied from another Echo cannot pass for official by it, and a listing by the project's key keeps this build's least
+serial whatever index is set.
 
 Online updates mean trusting the project's releases: GitHub Actions builds and signs them
 (`.github/workflows/build.yml`) in a job that runs only for `main` and `release`, and its secret is the only copy of the

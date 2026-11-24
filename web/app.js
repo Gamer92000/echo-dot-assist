@@ -283,14 +283,15 @@ const HELP = {
   kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
   kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
   kiosk_dlna: { help: 'Lets phones and media servers on your network find the Kiosk Satellite app\'s DLNA renderer and play on this Echo, Home Assistant\'s DLNA Digital Media Renderer integration included. Switch the renderer on in the app as well: it is off there by default. The Echo\'s firewall then admits, from private addresses only, the port the app names under Settings > DLNA Renderer > Server port (2326 or so; one you type in works too) while the app listens there, and the network\'s searches for renderers (UDP port 1900, multicast only) while the app alone listens there. The ports close again when the renderer stops, the app goes or this is off. DLNA has no password: while this is on, anyone on your network can play on the Echo. Off by default. Takes effect within seconds.' },
-  online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up.',
-    status: () => updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, 'Checking that this Echo can reach GitHub…'))
+  online_updates: { help: 'Where new versions come from. Release: tested releases only. Beta: every new build, plus releases. Off: nothing is fetched. The Echo downloads them itself from the project\'s releases on GitHub, not through this browser or Home Assistant, so it needs internet access to github.com: an Echo on a network kept off the internet cannot use this, and switching it on first checks that GitHub answers. The Echo\'s "Firmware" entity in Home Assistant then shows what is new and installs it; every update is signature-checked, and the Echo falls back by itself if a new version does not stay up. Another server (a mirror on your network, a fork\'s releases on Forgejo or Gitea): Where software comes from, below.',
+    status: () => { const own = ((state.sources || {}).updates || {}).url; return updCheck.busy ? h('div', { class: 'callout info' }, icon('net'), h('p', {}, own ? 'Checking that this Echo can reach the update server…' : 'Checking that this Echo can reach GitHub…'))
       : updCheck.why ? h('div', { class: 'callout bad big' }, icon('warn'), h('div', { class: 'grow' },
-        h('p', {}, h('b', {}, 'Online updates were not switched on: this Echo cannot reach GitHub.')),
-        h('p', {}, 'It downloads updates itself, so it needs to get out to the internet. Check that its network, firewall, VLAN or DNS filter lets it reach github.com, api.github.com and GitHub\'s download servers (*.githubusercontent.com) over HTTPS, then pick a channel again.'),
+        h('p', {}, h('b', {}, own ? 'Online updates were not switched on: this Echo cannot reach the update server.' : 'Online updates were not switched on: this Echo cannot reach GitHub.')),
+        h('p', {}, own ? `It downloads updates itself from ${own} (Where software comes from). Check that the server answers from the Echo's network, then pick a channel again.`
+          : 'It downloads updates itself, so it needs to get out to the internet. Check that its network, firewall, VLAN or DNS filter lets it reach github.com, api.github.com and GitHub\'s download servers (*.githubusercontent.com) over HTTPS, then pick a channel again.'),
         h('p', { class: 'why' }, 'What failed: ', h('code', {}, updCheck.why)),
         h('button', { class: 'link', onclick: () => { updCheck.why = ''; paintStatus('online_updates'); } }, 'Dismiss')))
-      : null },
+      : null; } },
 
   arbitration: { icon: 'net', ha: ['Arbitration peers'], help: 'When several Echos hear the wake word, only the one that heard you best answers; the others stay silent and dark. Only devices listening for the same wake word compete. Off: this Echo answers every wake word it hears.',
     status: () => {
@@ -667,7 +668,7 @@ async function answerVouch() {
 // Why the Echo did not take, or did not approve, a login (web.c "what waits for the action button"): one thing waits
 // for the button at a time, and a press is not turned from the wait it was armed for to another.  What the page adds
 // to that: nobody is sent to press unless the Echo's last word was "waiting" for this browser
-const WAIT_KIND = { login: 'a login', adb: 'adb over Wi-Fi', plugin: 'a plugin\'s install', note: 'the note of a copied plugin', anyway: 'a withdrawn plugin to run anyway' };
+const WAIT_KIND = { login: 'a login', adb: 'adb over Wi-Fi', plugin: 'a plugin\'s install', note: 'the note of a copied plugin', anyway: 'a withdrawn plugin to run anyway', sources: 'a signing key of Sources' };
 const synWaits = new Map();            // "<Echo's key> <note's number>" -> until when the page looks for the hold that dismisses it (renderAttention)
 // A browser's key as the Echo shows it beside a label, which whoever logs in chooses freely: the first eight bytes.
 // The same in the list of browsers (System) and on the note of a copied plugin, to hold one against the other
@@ -1487,6 +1488,7 @@ const FINDABLE = [
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
   ['Log', 'system', 'log', 'boot.log troubleshooting bug report'],
   ['Debug access', 'system', 'debug', 'adb root shell'],
+  ['Where software comes from', 'system', 'sources', 'sources update server forgejo gitea github mirror fork plugin index url signing key signature check'],
   ['Note', 'system', 'note', 'description location room label where which echo'],
   ['Restart', 'system', 'restart', 'reboot'],
   ['Factory reset', 'system', 'factory-reset', 'erase forget'],
@@ -1655,6 +1657,9 @@ function renderAttention() {
       h('p', {}, ha ? 'Home Assistant is not connected. The Echo cannot answer requests until it is; check that the ESPHome integration has this device and that both are on the same network.'
         : MODEL_WARN.test(text) ? linkModels(text) : text));
   };
+  // Sources (issue #175): where updates and plugins come from, while not the project's: on every page, yellow for a
+  // server of the owner's, red for a key of the owner's or no signature check
+  if (state && state.sources && state.sources.level) box.append(sourcesCallout(state.sources));
   for (const text of all) {
     const ha = /Home Assistant is not connected/.test(text);
     // (a wake word engine that does not listen: on every page, as Home Assistant missing is)
@@ -3218,7 +3223,7 @@ async function loadModels(arts) {
 
 // ---------------------------------------------------------------- System: settings file, debug access, browsers
 
-let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl;
+let adbBox, clientsBox, importMsg, nameCtl, noteCtl, wifiCtl, sourcesBox;
 
 // The name: the model and the end of its MAC address (main.c name_make), never set here.  What people call it is the name
 // given in Home Assistant when the Echo was added.
@@ -3596,10 +3601,12 @@ function buildSystem(el, list) {
   };
   adbBox = h('div', { class: 'btns' });
   clientsBox = h('div');
+  sourcesBox = h('div');
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
     titled('This Echo', nameRow(), named('note', noteRow()), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
       list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
+    titled('Where software comes from', named('sources', sourcesBox)),
     titled('When something is wrong', named('log', logRow()),
       named('debug', infoRow('Debug access', 'A root shell over Wi-Fi for 30 minutes', act('Opens adb over Wi-Fi for 30 minutes: a root shell on this Echo for anyone on your network while it is open. Only for troubleshooting. Opening needs a press of the action button, even from an approved browser.'), adbBox)),
       named('restart', infoRow('Restart', 'Back in about a minute, nothing is forgotten', HELP.restart.help, h('button', { onclick: restartEcho }, 'Restart…'))),
@@ -3610,6 +3617,121 @@ function buildSystem(el, list) {
     h('div', { class: 'card', id: 'browsers' },
       infoRow('Approved browsers', 'Browsers that may change settings on this Echo', null, null),
       h('div', { class: 'clients' }, clientsBox))]));
+}
+
+// ---------------------------------------------------------------- Sources (sources.c, issue #175)
+
+// Where online updates and plugins come from: the project's (the default) or a server of the owner's, with a key of
+// the owner's beside the project's or no signature check (each of those two only with the action button: web.c W_SOURCE)
+const SRC_NAME = { updates: 'Updates', plugins: 'Plugin index' };
+const SRC_SUB = { updates: 'Where online updates come from', plugins: 'Where plugins are browsed and installed from' };
+const SRC_HELP = {
+  updates: 'The server online updates look at: the project\'s releases on GitHub (the default), or a repository of your own on GitHub, Forgejo or Gitea, given as https://<server>/<owner>/<repository>. For example a mirror on your network for an Echo kept off the internet, or a fork\'s own releases. Its bundles are still checked against the project\'s release key and your update key, so a server alone changes nothing of what may be installed. Many Echos cannot check certificates of newer authorities (Let\'s Encrypt among them), so a server on your own network may have to be plain http://: the signature is what counts. For a server of your own you can also name a signing key of yours, trusted beside the project\'s, or switch the signature check off. Either needs the action button, and the page warns in red on every page while it stands: whoever holds that key (with no check: whoever controls the server, or the network on the way to it) can install anything on this Echo, as root.',
+  plugins: 'The site plugins are browsed and installed from: the project\'s plugin index (the default), or one of your own, laid out as the index\'s own tool builds it (index.json, revoked.json, packages/). Its lists still count only under the project\'s index key, so a mirror changes nothing of what is trusted. For a site of your own you can also name a signing key of yours, trusted beside the project\'s, or switch the signature check off. Either needs the action button, and the page warns in red while it stands: what that site lists as official is taken as official here, and what it withdraws (or does not) is what is withdrawn. Plugins still run in their sandbox, and every install still takes the action button. A change restarts the satellite (a few seconds) and forgets what was kept of the index before.',
+};
+// the dialog's own short words (the row's ⓘ has SRC_HELP)
+const SRC_INTRO = {
+  updates: 'A repository on GitHub, Forgejo or Gitea: https://<server>/<owner>/<repository>. Its releases are still checked against the project\'s release key and your update key. On your own network it may have to be plain http://: many Echos do not know newer certificate authorities.',
+  plugins: 'A site laid out as the plugin index\'s own tool builds it. Its lists still count only under the project\'s index key. A change restarts the satellite.',
+};
+const srcKeyMark = (k) => k ? `${k.slice(0, 8)} ${k.slice(8, 16)}…` : '';
+
+function sourcesCallout(src) {
+  const red = src.level >= 2, lines = [];
+  for (const w of ['updates', 'plugins']) {
+    const o = src[w]; if (!o || !o.url) continue;
+    const what = w === 'updates' ? 'Updates come from' : 'Plugins come from';
+    lines.push(h('p', {}, `${what} `, h('code', {}, o.url),
+      o.unchecked ? h('b', {}, ' with NO signature check') : o.key ? [' with your own signing key ', h('code', {}, srcKeyMark(o.key)), ' trusted beside the project\'s'] : ', checked against the project\'s keys', '.'));
+  }
+  lines.push(h('p', {}, red
+    ? (src.updates && src.updates.unchecked ? 'Whoever controls that update server, or the network on the way to it, can install anything on this Echo, as root. '
+      : src.updates && src.updates.key ? 'Whoever holds that update key can install anything on this Echo, as root. ' : '')
+      + (src.plugins && (src.plugins.unchecked || src.plugins.key) ? 'The plugin index of your own decides which plugins count as official and which are withdrawn. ' : '')
+      + 'Only if you meant this: '
+    : 'Not the project\'s own server. ', h('a', { href: '#/system/sources' }, 'Where software comes from')));
+  return h('div', { class: 'callout' + (red ? ' bad' : '') }, icon('warn'), h('div', { class: 'grow' }, ...lines));
+}
+
+function sourceRows() {
+  const s = state.sources;
+  return ['updates', 'plugins'].map((w) => {
+    const o = s[w] || {}, badges = [];
+    if (o.unchecked) badges.push(h('span', { class: 'badge bad' }, 'No signature check'));
+    else if (o.key) badges.push(h('span', { class: 'badge bad', title: o.key }, `Your key ${srcKeyMark(o.key)}`));
+    else if (o.url) badges.push(h('span', { class: 'badge warn' }, 'Your server'));
+    // root holds the key the page named (main.sh takes it within seconds; an older main.sh never: update first)
+    if (w === 'updates' && (o.key || o.unchecked) && o.root !== 'held') badges.push(h('span', { class: 'badge', title: 'Root takes it within seconds. If this stays, the installed copy\'s root script is older than hassmic: an update pushed from the PC brings it' }, 'Root has not taken the key yet'));
+    const val = h('div', { class: 'row-val' }, h('span', {}, o.url || `The project's (${o.default || 'default'})`), ...badges);
+    return infoRow(SRC_NAME[w], SRC_SUB[w], SRC_HELP[w], h('button', { onclick: () => sourceDialog(w) }, 'Change…'), null, val);
+  });
+}
+
+// The dialog for one source: the server, a key of the owner's, no check.  A choice that trusts more asks first, then
+// waits for the action button (as adb does: the page polls until the Echo no longer holds it)
+function sourceDialog(w) {
+  const o = (state.sources || {})[w] || {};
+  const m = modal(`${SRC_NAME[w]}: where from`, 'sources');
+  const url = h('input', { type: 'text', id: 'src-url', value: o.url || '', placeholder: o.default || '', autocomplete: 'off', spellcheck: 'false' });
+  const key = h('input', { type: 'text', id: 'src-key', value: o.key || '', placeholder: '64 hex digits; empty: the project\'s key only', autocomplete: 'off', spellcheck: 'false', maxlength: '64' });
+  const off = h('input', { type: 'checkbox', id: 'src-off', role: 'switch' }); off.checked = !!o.unchecked;
+  const msg = h('p', { class: 'help ask-msg' });
+  const risk = h('div');
+  const paint = () => {
+    const custom = !!url.value.trim();
+    key.disabled = off.disabled = !custom; if (!custom) { key.value = ''; off.checked = false; }
+    key.disabled = key.disabled || off.checked;
+    const red = custom && (off.checked || key.value.trim());
+    risk.replaceChildren(...!red ? [] : [h('div', { class: 'callout bad' }, icon('warn'), h('p', {}, off.checked
+      ? (w === 'updates' ? 'No signature check: whatever that server (or anyone on the network on the way to it) hands out is installed on this Echo, as root.' : 'No signature check: whatever that site (or anyone on the way to it) lists is taken, official plugins and withdrawals included.')
+      : (w === 'updates' ? 'Whoever holds that key can install anything on this Echo, as root.' : 'Plugins that key lists as official are official here.')))]);
+  };
+  url.oninput = key.oninput = off.onchange = () => { msg.textContent = ''; paint(); };
+  paint();
+  const send = async (body) => {
+    msg.textContent = '';
+    try {
+      const r = (await echo.call('POST', '/api/sources', body)).json();
+      if (r.sources === 'refused') { msg.textContent = r.why || 'Refused'; return; }
+      if (r.sources === 'busy') { msg.textContent = `Not asked: ${WAIT_KIND[r.holds] || 'something else'} waits for the action button first. Try again when it is done.`; return; }
+      m.dlg.close();
+      if (r.sources === 'applied') {
+        toast(r.why ? `Saved: ${r.why}` : w === 'plugins' ? 'Saved. The satellite restarts to read the new plugin index' : 'Saved');
+        await load(); return;
+      }
+      toast(act('Press the action button on the Echo'));
+      for (let i = 0; i < 65; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        await load();
+        const b = state.button || {};
+        if (!(b.holds === 'sources' && b.mine)) break;
+      }
+      // in force only where the Echo now says what this dialog asked for (a key it had before is not this one)
+      const now = (state.sources || {})[w] || {}, k = body.match(new RegExp(`^${w}_key=(.*)$`, 'm'))[1], x = /_unchecked=1/.test(body);
+      toast(now.url === body.match(new RegExp(`^${w}_url=(.*)$`, 'm'))[1].replace(/\/*$/, w === 'updates' ? '' : '/') && !!now.unchecked === x && (x || now.key === k)
+        ? 'In force: the Echo trusts it now' : 'Not in force: the action button was not pressed in time, or something else changed it');
+    } catch (e) { toast(errText(e)); }
+  };
+  const save = h('button', { type: 'button', class: 'primary' }, 'Save');
+  save.onclick = async () => {
+    const u = url.value.trim(), k = key.disabled ? '' : key.value.trim().toLowerCase(), x = !off.disabled && off.checked;
+    if ((k || x) && !await ask({ title: x ? 'Switch the signature check off?' : 'Trust your own key?', ok: x ? 'Switch it off' : 'Trust it', danger: true, body: [
+      x ? (w === 'updates' ? 'Whatever that server hands out is installed as root, unchecked: the server, and anyone who can change what reaches the Echo on the way (on plain http:// anyone on the network), can take the Echo over.' : 'Whatever that site lists is taken unchecked: which plugins count as official, and what is withdrawn.')
+        : (w === 'updates' ? 'Bundles signed with that key are installed as root, beside the project\'s. Whoever holds the key can take the Echo over.' : 'Lists signed with that key count beside the project\'s index: what it lists as official is official here.'),
+      act('It also takes a press of the action button, and every page of this Echo warns in red for as long as it stands.')] })) return;
+    send(`${w}_url=${u}\n${w}_key=${k}\n${w}_unchecked=${x ? 1 : 0}\n`);
+  };
+  const back = h('button', { type: 'button', onclick: () => send(`${w}_url=\n${w}_key=\n${w}_unchecked=0\n`) }, 'The project\'s');
+  if (!o.url) back.disabled = true;
+  m.body.append(h('div', { style: 'display:grid;gap:14px' },
+    h('p', { class: 'help', style: 'margin:0' }, SRC_INTRO[w]),
+    h('div', { class: 'field' }, h('label', { for: 'src-url' }, w === 'updates' ? 'Repository (empty: the project\'s)' : 'Site (empty: the project\'s)'), url),
+    h('p', { class: 'help', style: 'margin:0' }, act('Only for a server of your own, and only with a press of the action button:')),
+    h('div', { class: 'field' }, h('label', { for: 'src-key' }, 'Your signing key (public, 64 hex digits)'), key),
+    h('div', { class: 'field' }, h('label', { for: 'src-off' }, 'No signature check'), h('label', { class: 'switch' }, off, h('span'))),
+    risk, msg));
+  m.foot.append(back, h('button', { type: 'button', onclick: () => m.dlg.close() }, 'Cancel'), save);
+  m.show();
 }
 
 // Restart (main.c core_reboot): root reboots the Echo, as a power cycle does; this page is back once it is up again
@@ -3631,6 +3753,7 @@ async function factoryReset() {
 
 function renderSystem() {
   if (!adbBox) return;
+  if (sourcesBox && state.sources) sourcesBox.replaceChildren(...sourceRows());
   if (nameCtl) nameCtl.paint();
   if (noteCtl) noteCtl.paint();
   if (wifiCtl) wifiCtl.paint();

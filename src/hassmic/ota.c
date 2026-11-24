@@ -477,18 +477,21 @@ static int stage(const uint8_t *b, size_t len, const uint8_t sig[64], char *dir,
     return -1;
 }
 
-int ota_handoff(const uint8_t *b, size_t len, const uint8_t sig[64], char *res, size_t cap)
+int ota_handoff(const uint8_t *b, size_t len, const uint8_t sig[64], const uint8_t *own, char *res, size_t cap)
 {
-    uint8_t pk[32]; char dir[280], nonce[33]; int none = 0, bad;
-    if (!load_key(release_pub_path(), pk)) snprintf(res, cap, "FAILED no release key on this device (%s): an update with it pushed or installed first", release_pub_path());
-    else if (crypto_eddsa_check(sig, pk, b, len)) snprintf(res, cap, "FAILED signature does not verify against the release key");
-    else goto check;
+    uint8_t pk[32]; char dir[280], nonce[33]; int none = 0, bad, rel = load_key(release_pub_path(), pk);
+    const char *by = "the release key";
+    /* the release key, or the key the owner's Sources named (root checks against the same: main.sh ota_watch) */
+    if (rel && !crypto_eddsa_check(sig, pk, b, len)) goto check;
+    if (own && !ed_key_weak(own) && !crypto_eddsa_check(sig, own, b, len)) { by = "the key of Sources (settings page)"; goto check; }
+    if (!rel && !own) snprintf(res, cap, "FAILED no release key on this device (%s): an update with it pushed or installed first", release_pub_path());
+    else snprintf(res, cap, "FAILED signature does not verify against the release key%s", own ? " nor the key of Sources (settings page)" : "");
     return -1;
 check:
     pthread_mutex_lock(&handoff_lock);
     if ((bad = stage(b, len, sig, dir, sizeof dir, nonce))) snprintf(res, cap, "FAILED cannot store the bundle");
     if (!bad) {
-        fprintf(stderr, "update: %zu bytes downloaded, signed with the release key, handed to the installer\n", len);
+        fprintf(stderr, "update: %zu bytes downloaded, signed with %s, handed to the installer\n", len, by);
         none = answer(dir, nonce, 60, res, cap);
         if (strncmp(res, "OK ", 3) && !none) handed_off();
         if (none) handed_late();
