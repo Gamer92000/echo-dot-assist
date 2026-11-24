@@ -4,7 +4,10 @@ against a fake adb whose "shell" runs here, with the stand-ins of tests/fake_wif
 wifictl.dex over the fake framework, ifconfig with the address Android's DHCP gives).  A fresh Echo with nothing saved:
 the PSK made on the PC, add retried while the radio comes up, a wrong password, an open network, a passphrase of the
 wrong length, a radio that never comes up; and a network saved before by another user (a stock update over Wi-Fi),
-which root may not change: as the system user through runas."""
+which root may not change: as the system user through runas.  And on a Dot (cannoli, #213's), through its stock wpa_supplicant
+(scripts/device/wifi-join.sh against the fake wpa_cli): nothing saved before it is on the network, then the networks
+saved before gone, run again or not (issue #213: a profile a try, kept, and the Echo moving between them); a failed
+join leaves the saved ones as they were, enabled as they were; a file with CR LF lines; a missing line 2."""
 import hashlib, json, os, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,16 +33,19 @@ ADB = r'''#!/bin/sh
 # adb for tests/fake_wifi_join.py: the Echo is this PC, its shell sh with the fake tools first in PATH
 case "$1" in
 get-state) echo device;;
-push) exit 0;;
+push) cp "$2" "$(printf %s "$3" | sed "s#^/data/local/hassmic#$FAKE_D#")" 2>/dev/null; exit 0;;
 shell) shift
-    case "$*" in "getprop ro.product.device") echo checkers; exit 0;; esac
+    case "$*" in "getprop ro.product.device") echo ${FAKE_PRODUCT:-checkers}; exit 0;; esac
     exec sh -c "$(printf %s "$*" | sed "s#/data/local/hassmic/#$FAKE_D/#g")";;     # the Echo's folder is a tmp one
 *) echo "fake adb: $*" >&2; exit 1;;
 esac
 '''
 
 
-def run(tmp, conf, world_extra=None, nets=None, runas=False):
+IPTABLES = "#!/bin/sh\necho '-A OUTPUT -j hassmic_out'\n"          # the lockdown is there
+
+
+def run(tmp, conf, world_extra=None, nets=None, runas=False, dot=False):
     fake = os.path.join(tmp, "bin")
     os.makedirs(fake, exist_ok=True)
     d = os.path.join(tmp, "d")                                  # /data/local/hassmic
@@ -47,26 +53,29 @@ def run(tmp, conf, world_extra=None, nets=None, runas=False):
     if runas:
         with open(os.path.join(d, "runas"), "w") as f: f.write(RUNAS)
         os.chmod(os.path.join(d, "runas"), 0o755)
-    for t in ("app_process", "ifconfig"):
+    for t in ("app_process", "ifconfig", "wpa_cli", "start", "stop"):
         p = os.path.join(fake, t)
         if not os.path.exists(p): os.symlink(f"{ROOT}/tests/fake_wifi_tools.py", p)
-    with open(os.path.join(fake, "adb"), "w") as f: f.write(ADB)
-    os.chmod(os.path.join(fake, "adb"), 0o755)
+    for name, text in (("adb", ADB), ("iptables", IPTABLES)):
+        with open(os.path.join(fake, name), "w") as f: f.write(text)
+        os.chmod(os.path.join(fake, name), 0o755)
     world = os.path.join(tmp, "world.json")
     air = [{"hex": H(HOME), "psk": PSK("home password", HOME), "flags": "[WPA2-PSK-CCMP][ESS]",
             "bss": [["aa:00:00:00:00:01", 2437, -60]], "ip": "192.168.1.20", "gw": "192.168.1.1"},
            {"hex": H("Cafe"), "psk": None, "flags": "[ESS]", "bss": [["aa:00:00:00:00:02", 2412, -70]],
             "ip": "10.0.0.7", "gw": "10.0.0.1"}]
-    w = {"networks": nets or [], "next_id": 0, "current": None, "target": None, "air": air, "saved": [],
+    w = {"networks": nets or [], "next_id": 0, "current": None, "target": None, "air": air,
+         "saved": json.loads(json.dumps(nets or [])),
          "arp_file": os.path.join(tmp, "arp"), "route_file": os.path.join(tmp, "route"),
          "lease": {"ip": "", "gw": ""}, "props": {}}
     w.update(world_extra or {})
     with open(world, "w") as f: json.dump(w, f)
     cf = os.path.join(tmp, "wifi.conf")
     with open(cf, "w") as f: f.write(conf)
-    env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, ANDROID="1", WIFI_CONF=cf, FAKE_D=d,
-               WIFI_JOIN_SECS="10", WIFI_ADD_SECS="4")
-    env.pop("DEVICE", None); env.pop("ANDROID_SERIAL", None)
+    env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", FAKE_WIFI_WORLD=world, WIFI_CONF=cf, FAKE_D=d,
+               WIFI_JOIN_SECS="4" if dot else "10", WIFI_ADD_SECS="4", FAKE_PRODUCT="cannoli" if dot else "checkers")
+    if not dot: env["ANDROID"] = "1"
+    for k in ("DEVICE", "ANDROID_SERIAL") + (("ANDROID",) if dot else ()): env.pop(k, None)
     p = subprocess.run(["sh", f"{ROOT}/scripts/wifi-join.sh"], env=env, capture_output=True, text=True, timeout=60)
     return p.returncode, p.stdout + p.stderr, json.load(open(world))
 
@@ -109,9 +118,44 @@ def main():
     rc, out, w = run(tempfile.mkdtemp(), f"{HOME}\nhome password\n", {"next_id": 1}, nets=old)
     check(rc == 1 and "did not add the network" in out, "the same without runas on the Echo: gives up, says what it got")
 
+    dot_main()
     if failed:
         print(f"FAILED: {len(failed)}"); sys.exit(1)
     print("PASS")
+
+
+def dot_main():
+    """A Dot: scripts/device/wifi-join.sh through the stock wpa_supplicant"""
+    quoted = lambda pw: f'"{pw}"'
+    rc, out, w = run(tempfile.mkdtemp(), f"{HOME}\nhome password\n", dot=True)
+    net = w["networks"][0] if w["networks"] else {}
+    check(rc == 0 and "inet addr:192.168.1.20" in out and len(w["networks"]) == 1 and net.get("ssid") == H(HOME)
+          and net.get("psk") == quoted("home password") and net.get("key_mgmt") == "WPA-PSK" and w["current"] == net.get("id"),
+          f"Dot: joins, the lease from dhcpcd ({out.strip()!r})")
+    check(w["saved"] == w["networks"], "Dot: saved once on it")
+
+    # tried before (#213): the same name twice, an older password, another network, and a P2P group of wpa_supplicant's
+    p2p = {"id": 3, "disabled": 2, "priority": 0, "ssid": H("DIRECT-xy")}
+    before = [{"id": 0, "disabled": 1, "priority": 0, "ssid": H(HOME), "psk": quoted("old password"), "key_mgmt": "WPA-PSK"},
+              {"id": 1, "disabled": 0, "priority": 0, "ssid": H(HOME), "psk": quoted("home password"), "key_mgmt": "WPA-PSK"},
+              {"id": 2, "disabled": 0, "priority": 0, "ssid": H("Other"), "psk": quoted("other password"), "key_mgmt": "WPA-PSK"}, p2p]
+    rc, out, w = run(tempfile.mkdtemp(), f"{HOME}\nhome password\n", {"next_id": 4}, nets=json.loads(json.dumps(before)), dot=True)
+    ids = sorted(n["id"] for n in w["networks"])
+    check(rc == 0 and ids == [3, 4] and w["current"] == 4 and sorted(n["id"] for n in w["saved"]) == [3, 4],
+          f"Dot: run again, the networks saved before gone, the P2P group kept: {ids} ({out.strip()!r})")
+
+    rc, out, w = run(tempfile.mkdtemp(), f"{HOME}\nwrong password\n", {"next_id": 4}, nets=json.loads(json.dumps(before)), dot=True)
+    check(rc == 1 and "password is probably wrong" in out, f"Dot: a wrong password, said ({out.strip()!r})")
+    check(w["networks"] == before and w["saved"] == before and not any(c.endswith(" save_config") for c in w.get("calls", [])),
+          "Dot: failed, nothing saved; the networks as they were, enabled as they were (not every one)")
+
+    rc, out, w = run(tempfile.mkdtemp(), f"{HOME}\r\nhome password\r\n", dot=True)
+    check(rc == 0 and w["networks"] and w["networks"][0].get("ssid") == H(HOME) and w["networks"][0].get("psk") == quoted("home password"),
+          "Dot: a file with CR LF lines (Windows): name and passphrase without the CR")
+
+    rc, out, w = run(tempfile.mkdtemp(), f"{HOME}\n", dot=True)
+    check(rc == 1 and "line 2" in out and not any(c.endswith(" add_network") for c in w.get("calls", [])),
+          f"Dot: no line 2: said so, nothing added ({out.strip()!r})")
 
 
 main()

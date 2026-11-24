@@ -4,11 +4,23 @@
 # Profile is saved to /data/misc/wifi/wpa_supplicant.conf (update_config=1), so it survives reboots.
 #   wifi-join.sh <file>                   line 1 = SSID, line 2 = passphrase (keeps the secret out of shell history;
 #                                         scripts/wifi-join.sh on the PC pushes secrets/wifi.conf and deletes it after)
-if [ -f "$1" ]; then { IFS= read -r SSID; IFS= read -r PSK; } < "$1"
+# Nothing is saved until the Echo is on the network; then every network saved before goes, as the settings page's
+# switch does (wifi.sh join): run once per try, this added a profile each time and kept them all, and the Echo moved
+# between them (issue #213).  A failed join leaves the saved configuration as it was.
+CR=$(printf '\r')
+if [ -f "$1" ]; then
+    { IFS= read -r SSID; IFS= read -r PSK; } < "$1"
+    # a file written on Windows: its lines end in CR LF, and the name with a CR is no network's
+    SSID=${SSID%$CR}; PSK=${PSK%$CR}
+    [ -n "$PSK" ] || { echo "no passphrase: line 2 of the file (line 1 the Wi-Fi name, line 2 its passphrase) is missing or empty"; exit 1; }
 else SSID=${1:?usage: wifi-join.sh <ssid> <passphrase> | <file>}; PSK=${2:?passphrase missing}; fi
 W="wpa_cli -i wlan0 -p /data/misc/wifi/sockets"
 iptables -S OUTPUT | grep -q hassmic_out || { echo "refusing: run lockdown.sh first"; exit 1; }
 $W status >/dev/null 2>&1 || { start wpa_supplicant; sleep 3; }
+# the networks saved before, and which of them are enabled (select_network disables the rest; a failed join enables
+# those again).  disabled=2 is a P2P group of wpa_supplicant's (Wi-Fi Direct), not a network to join: never touched.
+IDS=$($W list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p')
+ON=; for i in $IDS; do case "$($W get_network $i disabled | tail -1)" in 1|2) ;; *) ON="$ON $i";; esac; done
 N=$($W add_network | tail -1)
 $W set_network $N ssid $(printf %s "$SSID" | od -An -tx1 | tr -d " \n")      # hex form: apostrophes and spaces are safe
 # Probe for the name too, as wifi.sh does: a hidden network leaves its name out of its beacons, and the Echo sat in
@@ -19,7 +31,6 @@ $W set_network $N psk "\"$PSK\"" | grep -q OK || { echo "the password is not one
 $W set_network $N key_mgmt WPA-PSK
 $W enable_network $N
 $W select_network $N
-$W save_config
 # connected, or why not: the script used to end the same either way, and an Echo with a mistyped name sat in SCANNING
 # while setup went on (forum, 2026-10-10)
 i=0; while [ $i -lt ${WIFI_JOIN_SECS:-20} ]; do $W status | grep -q "^wpa_state=COMPLETED" && break; sleep 1; i=$((i + 1)); done
@@ -41,9 +52,13 @@ if [ "$S" != COMPLETED ]; then
     *HANDSHAKE*) echo "not connected ($S): the password is probably wrong";;
     *) echo "not connected ($S): no network named \"$SSID\" in range (names are case-sensitive), or the password is wrong";;
     esac
-    # select_network disabled every other network: enable them again, or a profile that worked stays off after a reboot
-    $W remove_network $N >/dev/null; $W enable_network all >/dev/null; $W save_config >/dev/null
+    # nothing was saved: the new network out again, and what was enabled before enabled again (select_network
+    # disabled it), so this is the configuration on disk as well
+    $W remove_network $N >/dev/null; for i in $ON; do $W enable_network $i >/dev/null; done
     exit 1
 fi
+# On it: the networks saved before go (the same name with an older password too), then it is saved
+for i in $IDS; do [ "$($W get_network $i disabled | tail -1)" = 2 ] || $W remove_network $i >/dev/null; done
+$W save_config | grep -q OK || echo "warning: on \"$SSID\", but wpa_supplicant.conf could not be written: a reboot goes back"
 # DHCP is normally started by Amazon's netmgrd once the link is up; fall back to the init service.
 ifconfig wlan0 | grep -q "inet addr" || { start dhcpcd-wlan0; sleep 5; ifconfig wlan0 | grep "inet addr"; }

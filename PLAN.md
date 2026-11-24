@@ -95,6 +95,15 @@ dozen daemons phone home within seconds.
       `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` (comma list works); `mixer`, `netmgrd`, `wifisvc` stay up. Tighten to the real subnet after DHCP
 - [x] `scripts/device/wifi-join.sh`: join via stock `wpa_supplicant`, refuses to run without lockdown (untested). PC wrapper
       `scripts/wifi-join.sh` pushes git-ignored `secrets/wifi.conf` (line 1 SSID, line 2 passphrase), SSID sent as hex
+- [x] **`wifi-join.sh` keeps one profile (issue #213, 2026-11-24).**  On the Dots it added a network on every run and
+      saved it before knowing whether it joined; a failed run did `enable_network all` and saved that too.  #213's
+      cannoli, joined a few times over USB, had one profile a try, all enabled, and moved between its networks.  Now as
+      wifi.sh's switch: nothing saved until COMPLETED, then every network saved before removed (P2P groups,
+      disabled=2, left alone) and saved; a failure removes the new one and enables only what was enabled before,
+      unsaved, so the file on disk never changed.  A CR at a line's end is dropped (a `wifi.conf` from Windows), and a
+      missing line 2 is named as such (#213 got "the password is not one WPA2 takes").  An Echo with duplicates
+      already: one more successful run clears them.  `tests/fake_wifi_join.py`'s Dot block (cannoli, the stand-in
+      wpa_cli of fake_wifi_tools.py; four of its checks fail on the script before).
 - [x] **(device)** Never-registered device, USB/ADB only → `lockdown.sh` → `scripts/wifi-join.sh`: joined IoT SSID (no-internet VLAN),
       192.168.100.147/22, lock tightened to `192.168.100.0/22`, `ping 1.1.1.1` fails, `lockdown.sh ... watch` running.
       Stock INPUT drops ICMP (PC ping fails) but TCP 16700 is reachable from the PC (VLAN if `enp5s0.2`).

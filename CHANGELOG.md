@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Joining Wi-Fi over USB keeps one network
+
+- **`scripts/wifi-join.sh` no longer piles up saved Wi-Fi networks on the Dots** (issue #213). Every run used to add
+  the network again and keep the ones before, so an Echo joined a few times had several, and moved between them. Now it
+  saves the network only once the Echo is on it, and then removes the ones saved before, as the settings page's
+  "Switch network…" does; a join that fails leaves the saved networks as they were. One more run clears an Echo that
+  has several already. Also: a `wifi.conf` written on Windows works, and a missing password line is named as such.
+
 ## 2026-11-24 — Echo Dot 5: clearer install steps
 
 - **Every step of the Echo Dot 5's install says where it runs** (`devices/cannoli/README.md`, thanks to PR #212): each
