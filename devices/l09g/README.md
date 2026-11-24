@@ -4,7 +4,7 @@
 
 This branch adapts `hassmic` to one rooted Xiaomi Mi Smart Speaker L09G. It is **vibecoded**: the device port, integrations and supporting scripts were developed with OpenAI Codex and iteratively tested by the owner on a real speaker. It is a community experiment, not a Xiaomi product or an upstream release. The upstream base is commit `1d7d957139f24788f06acc7761854fe2c80d19a0`.
 
-**Status: source and development notes, not a tested fresh-device installer.** Root, SpeakerLab's writable `/data` overlay, a way to recover the device, and knowledge of its firmware are prerequisites. Rooting and preparing a fresh speaker are outside the scope of this branch. Do not use the Echo-specific installer or upstream OTA updates on an L09G. Back up the device before changing boot scripts; losing access or a failed boot is possible. The tests below do not establish compatibility with other firmware builds or devices.
+**Status: source and development notes, not a tested fresh-device installer.** Root, SpeakerLab's writable `/data` overlay, a way to recover the device, and knowledge of its firmware are prerequisites. The separate [rooting notes](ROOT_RU.md) describe the owner's experience and the risks of bypassing the BL33 check (in Russian). Rooting is not part of the port installer. Do not use the Echo-specific installer or upstream OTA updates on an L09G. Back up the device before changing boot scripts; losing access or a failed boot is possible. The tests below do not establish compatibility with other firmware builds or devices.
 
 ## What was checked on the owner's speaker
 
