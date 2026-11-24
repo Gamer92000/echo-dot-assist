@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Echo Show: Play works again after AirPlay into its group
+
+- **The Show's music screen no longer says "This Echo has no queue in Music Assistant yet" after AirPlay ends**
+  (issue #222). While Music Assistant's AirPlay receiver plays into a sync group, the group has no queue, and as it
+  stops Music Assistant regroups the players a moment before it lets go of the AirPlay source, so the Show asked once,
+  too early, and never again. It now asks again when the group's (or its own, or its leader's) source changes, and a
+  tap on Play, Add or "Play here" while it knows of no queue asks Music Assistant and plays once there is one, instead
+  of refusing; only if there is still none after up to 10 seconds does it say so.
+
 ## 2026-11-24 — Setup: a first boot that installs the light ring is no failure
 
 - **The guided setup no longer reports "Checking it stays up" failed on an Echo that is fine** (issue #224). On its
