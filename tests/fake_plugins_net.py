@@ -85,7 +85,10 @@ def control(log, lan, where):
     """a public line written after the lines under test, and waited for at the server: the plugin read past all of
     them by then, and none of them having come means none will (Q4 of a review of 0dabfa6: without it the check could
     pass before the pump had looked)"""
-    tag = f"CONTROL-{time.monotonic_ns()}"
+    # a letter right before the number: twelve digits alone pass for a device's address (a2dp.c's %012llx), which
+    # the log a plugin gets has blanked (logread.c blank_addresses): on a runner up for minutes, not days, the
+    # monotonic clock had twelve and the line came as "CONTROL-************"
+    tag = f"CONTROL-t{time.monotonic_ns()}"
     say(log, f"boot+900.000 {tag} {where}")
     got = fp.until(lambda: lan.has(tag), 20)
     check(got, f"(a line written {where} reached the server: the plugin read past them)")

@@ -105,7 +105,10 @@ async def main():
     nr = rings(b); ring(b); await until(lambda: rings(b) > nr, 2); await asyncio.sleep(0.5)
     ob, sa = off(b), len(a.stops)
     await woke(a); a.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_STT_END, {"text": "Stop."})
-    await until(lambda: off(b) > ob, 2)
+    # both waited for: the hall's log and the kitchen's cancel come over two links, and the cancel was still on its
+    # way to this client when the hall's "alarm: off" alone was waited for (CI, 2026-11-24: hassmic logged "run
+    # cancelled" in the same millisecond)
+    await until(lambda: off(b) > ob and aborts(a, sa), 3)
     check(off(b) == ob + 1 and "said stop: echo-hall rings: told to stop" in a.text() and aborts(a, sa) == [True],
           f"a \"stop\" transcript: the hall stops, the kitchen's run cancelled ({aborts(a, sa)})")
     await asyncio.sleep(1)

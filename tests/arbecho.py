@@ -109,6 +109,10 @@ class Echo:
         async def handle_stop(abort): self.stops.append((time.monotonic(), abort))
         async def handle_audio(data, *_): self.chunks.append(len(data))
         self.cli.subscribe_voice_assistant(handle_start=handle_start, handle_stop=handle_stop, handle_audio=handle_audio)
+        # a round trip behind the subscriptions (hassmic takes a link's messages in order): back from here, the voice
+        # assistant is subscribed.  Without it a wake word right after (arbitrate()) came between the link and the
+        # subscription: "a client is linked, no voice assistant running, nothing started" (arb-afe on CI, 2026-11-24)
+        await asyncio.wait_for(self.cli.device_info(), 5)
 
     def end_pipeline(self): self.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
 

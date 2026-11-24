@@ -220,10 +220,14 @@ async def main():
         check(await says("answered here", n0), "the action button answers: CALL_ANSWER")
         check(await until(lambda: "p- call_incoming" in ui()[u1:] and "p+ call_connected" in ui()[u1:], 1) and not any("live: " in l for l in plog()[n0:]),
               f"... the ring's light and the screen leave ringing at the press, before the far side is in: {re.findall(r'(?:p[+-]) call[^\n]*', ui()[u1:])}")
-        await asyncio.sleep(0.8)
-        check("earcon: cut at" in text()[l1:] and "until stopped" not in text()[l1:].split("earcon: cut at")[-1] and not any("live: " in l for l in plog()[n0:]),
-              "... and the ringtone is cut at the press, not played again while it connects")
         check((fp.plug(b, "testcall") or {}).get("call") == "answered", "its card: answered here, connecting")
+        # the cut, as the earcon thread logs it, and the far side's CALL_LIVE (1.5 s after the answer), each waited for:
+        # the cut comes before it is live, and no ringtone starts between the two.  It was looked at once after 0.8 s,
+        # which a loaded runner's earcon thread did not always make with its line (CI, 2026-11-24)
+        await until(lambda: "earcon: cut at" in text()[l1:], 5); await says("live: ", n0, 5)
+        seg = text()[l1:]; cut, live = seg.find("earcon: cut at"), seg.find("plugin testcall: live: ")
+        check(cut >= 0 and live > cut and "until stopped" not in seg[cut:live],
+              f"... and the ringtone is cut at the press, not played again while it connects ({cut}, {live})")
         check(await says("live: 0 (0)", n0, 4) and await logged("testcall: the call is live (answered here)", l0), "then live")
         await act("try", what="slow")
         check(await says("room: 50 frames", n0, 5), "the room reaches it once answered")

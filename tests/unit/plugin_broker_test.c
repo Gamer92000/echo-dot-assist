@@ -48,6 +48,21 @@ static void h_free(struct plug *x) { pthread_mutex_lock(&bl); x->state = P_FREE;
 static void h_exited(struct plug *x) { pthread_mutex_lock(&bl); exited(x, "it ended", 0); pthread_mutex_unlock(&bl); }
 static void h_call_timers(void) { pthread_mutex_lock(&bl); call_timers(now_ms()); pthread_mutex_unlock(&bl); }
 static void h_runnable(int l) { pthread_mutex_lock(&bl); launcher = l; sandbox_ok = l >= 0; feature = l >= 0; pthread_mutex_unlock(&bl); }    /* a launcher there, or none */
+/* WHY names, as the one that hears every request, a plugin of the store that does (enabled, request.audio).  Not one
+ * id: the refusal names the first such plugin in the store's order, which is ps_scan's readdir order of state/plugins
+ * (tmpfs on a PC: reqplug first; ext4 on GitHub's runner: x-srv, installed earlier for the second press, first) */
+static int names_listener(const char *why)
+{
+    const struct ps_plugin *l; int n, ok = 0; char at[PS_ID_MAX + 32];
+    ps_lock(); n = ps_list(&l);
+    for (int i = 0; i < n && !ok; i++) {
+        if (!l[i].enabled || !(l[i].m.caps & PM_CAPBIT(PM_CAP_REQUEST_AUDIO))) continue;
+        snprintf(at, sizeof at, "%s hears every request", l[i].m.id);
+        ok = strstr(why, at) != NULL;
+    }
+    ps_unlock();
+    return ok;
+}
 static void h_partner_due(int v) { pthread_mutex_lock(&bl); partner_due = v; pthread_mutex_unlock(&bl); }
 static void h_stop(struct plug *x) { pthread_mutex_lock(&bl); stop(x, "test"); pthread_mutex_unlock(&bl); }
 static void set_feature(int on) { pthread_mutex_lock(&bl); feature = on; relist_due = 2; pthread_mutex_unlock(&bl); }      /* (as plugin_feature leaves it) */
@@ -2043,9 +2058,9 @@ int main(void)
             start("reqplug");
             { struct plug *q = h_find("reqplug"); CHECK(q && !running(q) && q->partner && strstr(q->why, "unwake"), "at start: not started, the card says why"); }
             h_runnable(-1);
-            CHECK(ps_engine_refused("unwake", why, sizeof why) == 1 && strstr(why, "reqplug"), "choosing it as the engine beside the plugin that hears requests: refused");
+            CHECK(ps_engine_refused("unwake", why, sizeof why) == 1 && names_listener(why), "choosing it as the engine beside the plugin that hears requests: refused");
             ps_lock(); x = ps_find("unwake"); r1 = x ? ps_partner(&x->m, x->tier, 1, why, sizeof why) : 0; ps_unlock();
-            CHECK(r1 == -1 && strstr(why, "reqplug"), "installing it, as the engine, beside the plugin that hears requests: refused");
+            CHECK(r1 == -1 && names_listener(why), "installing it, as the engine, beside the plugin that hears requests: refused");
             /* listed official it is vouched for; withdrawn by the index, also when the owner runs it anyway, by nobody
              * (C4 of a review of b294fa0: an official tier was enough).  The store's entry as a scan leaves it for such
              * a plugin: its tier, the list's reason, the owner's anyway */
