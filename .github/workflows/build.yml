@@ -231,7 +231,7 @@ jobs:
       - name: Plugin protocol against every release
         run: python3 tools/mkplugmsg.py --released && python3 tools/mkplugmsg.py --check
       - name: Build
-        run: make -j"$(nproc)" build/hassmic-host build/hassmic-host-screen build/otatool-host build/plugrun-host build/testwake build/testnet
+        run: make -j"$(nproc)" host-tests     # make host without the ARM build for qemu (no NDK, no firmware here)
       # tests/run.py starts every test at once, each in a network namespace of its own (unshare -rn: the tests' ports
       # and hassmic's defaults would collide); they mostly wait on audio at real time and on hassmic's timers, so the
       # job takes about as long as the slowest one; one that fails under that load runs again alone (a warning if it

@@ -410,7 +410,11 @@ build/testbutton: tests/plugins/testbutton.c sdk/hmplugin.c sdk/hassmic_plugin.h
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -static -Isdk tests/plugins/testbutton.c sdk/hmplugin.c -o $@
 
-host: build/hassmic-host build/hassmic-host-screen $(OUT)/hassmic-qemu build/otatool-host build/plugrun-host build/testwake build/testnet build/testmusic build/testcall build/testreq build/testbutton
+# What tests/run.py needs built (CI's test job builds exactly this: a stand-in plugin left out of a list of its own
+# there failed five tests on the runner only, where a PC had it from an earlier make host)
+HOST_TESTS := build/hassmic-host build/hassmic-host-screen build/otatool-host build/plugrun-host build/testwake build/testnet build/testmusic build/testcall build/testreq build/testbutton
+host-tests: $(HOST_TESTS)
+host: $(HOST_TESTS) $(OUT)/hassmic-qemu
 
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/logread.c src/hassmic/noise.c src/third_party/monocypher.c
@@ -726,4 +730,4 @@ version:
 clean:
 	rm -rf build
 
-.PHONY: all host unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE
+.PHONY: all host host-tests unit $(addprefix unit-,$(UNIT_TESTS)) version clean kmod-missing kernel-tools FORCE

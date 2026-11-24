@@ -529,7 +529,16 @@ int main(void)
       st = stop_and_wait(s, p, 3000, NULL); read_errs(e); close(s); close(e);
       CHECK(st == 0 && !strstr(errs, "button 1"), "BUTTON while button is not spoken: dropped, no callback");
       p = plugin_v(&cb, PM_CAPBIT(PM_CAP_BUTTON), &s, &e, 1);
-      { int k = 0, any = 0; while (waitpid(p, &st, WNOHANG) == 0 && k++ < 50) { if (next(s, 100, &h, &body, &bl) > 0) any = 1; } read_errs(e); close(s); close(e);
+      /* until it ended, 5 s at most by the clock: once it closed its end, next() answers at once (EOF), and 50 rounds of
+       * it were over before a loaded CI runner let the child exit (st was the plugin's before, and it failed) */
+      { int any = 0; struct timespec w0, w1; clock_gettime(CLOCK_MONOTONIC, &w0);
+        for (;;) {
+            if (waitpid(p, &st, WNOHANG) == p) break;
+            clock_gettime(CLOCK_MONOTONIC, &w1);
+            if ((w1.tv_sec - w0.tv_sec) * 1000 + (w1.tv_nsec - w0.tv_nsec) / 1000000 >= 5000) { kill(p, SIGKILL); waitpid(p, &st, 0); break; }
+            if (next(s, 100, &h, &body, &bl) > 0) any = 1; else usleep(10000);
+        }
+        read_errs(e); close(s); close(e);
         CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 1 && !any && strstr(errs, "hassmic speaks a scope this client does not have"), "a WELCOME past this client's version: it ends before READY, and says why"); } }
 
     /* FILE_CHECK answered at its bound: FILE_OK of a title of 64 and 8 fields of 256 is 2412 bytes, and the client's

@@ -17,6 +17,7 @@
 #include "hassmic_plugin.h"
 #include "plugmsg.h"
 #include <errno.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +27,13 @@
 
 static char mode[16] = "forward", cursor[64], reach[300], reached[300];
 static int sock = -1, tried, probed, dirty, ticks;
-static long sent;
+static long sent, unsent;
+/* Lines that came before its socket: the broker hands the log over from the follow on, which is in ready, and the
+ * socket comes with the first tick; on a CI runner's four loaded cores the first LOG came before it, and a forwarder
+ * that dropped them lost "what was written while it was off" (as #193's would have, a line the owner then never sees).
+ * Kept until the socket is there (not in mode reach: its socket is the one a setting keeps) */
+#define EARLY_MAX 1024
+static char early[EARLY_MAX][1024]; static int nearly;
 
 static void on_config(void *ctx, const struct hm_setting *s, int n)
 {
@@ -67,6 +74,22 @@ static void connect_raw(int entry, const char *host, int port)
     if (send(3, b, (size_t)pm_wlen(&w), MSG_NOSIGNAL) < 0) hm_log("raw connect: %s", strerror(errno));
 }
 
+/* a line to the server.  A send that would block waits for room, up to a second: UDP's buffer is the sender's until the
+ * receiving host's stack took the datagram, and on a loaded runner that took long enough for a burst of the log to
+ * fill it (MSG_DONTWAIT alone dropped lines there) */
+static void forward(const char *l)
+{
+    size_t k = strlen(l); int tcp = !strcmp(mode, "tcp") || !strcmp(mode, "reach");
+    if (sock < 0) return;                           /* no server: nothing goes anywhere, as before */
+    for (int tries = 0; ; tries++) {
+        if (send(sock, l, k, MSG_DONTWAIT | MSG_NOSIGNAL) > 0) { sent++; break; }
+        if ((errno != EAGAIN && errno != EWOULDBLOCK) || tries) { unsent++; break; }
+        struct pollfd pf = { sock, POLLOUT, 0 };
+        poll(&pf, 1, 1000);
+    }
+    if (tcp) send(sock, "\n", 1, MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
 static void on_tick(void *ctx)
 {
     int why = 0;
@@ -98,6 +121,13 @@ static void on_tick(void *ctx)
         sock = hm_connect(!strcmp(mode, "tcp") ? 1 : 0, 0, &why);
         hm_log("connect: %s (%d)", sock >= 0 ? "ok" : "refused", why);
     }
+    if (nearly && (sock >= 0 || tried >= 3 || !strcmp(mode, "reach"))) {         /* the lines kept for it, or given up */
+        for (int i = 0; i < nearly; i++) forward(early[i]);
+        nearly = 0;
+    }
+    /* said only when lines were lost, so a test that fails for a line that never came shows where it went */
+    static long said;
+    if (unsent != said) { hm_log("lines not sent: %ld", unsent); said = unsent; }
     /* the cursor at most every 2 s: the Echo's bucket takes ten writes, then one a minute (the test makes it faster) */
     if (dirty && ticks % 2 == 0) { int w; int r = hm_store_put("cursor", cursor, strlen(cursor), &w); dirty = 0; if (r < 0) hm_log("cursor not kept: %d", w); }
 }
@@ -109,8 +139,11 @@ static void on_log(void *ctx, const char *cur, int gap, const char *const *lines
     for (int i = 0; i < n; i++) {
         /* its own lines would come back to it: not sent on (a forwarder that sends what it says makes a loop) */
         if (strstr(lines[i], "plugin testnet: ") || strstr(lines[i], "plugin testlan: ")) continue;
-        if (sock >= 0 && send(sock, lines[i], strlen(lines[i]), MSG_DONTWAIT | MSG_NOSIGNAL) > 0) sent++;
-        if (sock >= 0 && (!strcmp(mode, "tcp") || !strcmp(mode, "reach"))) send(sock, "\n", 1, MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (sock < 0 && strcmp(mode, "reach") && tried < 3) {
+            if (nearly < EARLY_MAX) snprintf(early[nearly++], sizeof early[0], "%s", lines[i]); else unsent++;
+            continue;
+        }
+        forward(lines[i]);
     }
     snprintf(cursor, sizeof cursor, "%s", cur); dirty = 1;
 }

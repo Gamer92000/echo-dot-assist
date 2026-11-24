@@ -87,7 +87,11 @@ def control(log, lan, where):
     pass before the pump had looked)"""
     tag = f"CONTROL-{time.monotonic_ns()}"
     say(log, f"boot+900.000 {tag} {where}")
-    check(fp.until(lambda: lan.has(tag), 20), f"(a line written {where} reached the server: the plugin read past them)")
+    got = fp.until(lambda: lan.has(tag), 20)
+    check(got, f"(a line written {where} reached the server: the plugin read past them)")
+    if not got:
+        print(f"     the server got {len(lan.lines)} lines, the last: {[l for _, l in lan.lines[-3:]]}")
+        print(f"     the plugin said last: {[l.split('plugin testnet: ', 1)[1] for l in open(log, errors='replace').read().splitlines() if 'plugin testnet: ' in l][-6:]}")
 
 
 async def wyoming_writers(log, lan):

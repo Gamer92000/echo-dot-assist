@@ -59,6 +59,7 @@ Device binaries need the NDK and the unpacked firmware in `firmware/<codename>/`
 make [DEVICE=donut]                               # ARM binaries into build/donut/
 make DEVICE=donut STUBS=1                         # the same, without the firmware: stand-ins for its libraries
 make host                                         # PC build (build/hassmic-host) + qemu build for the tests (needs libopus)
+make host-tests                                   # what tests/run.py needs (HOST_TESTS: hassmic's PC builds, the stand-in plugins); CI's
 make unit-plugfuzz                                # the plugins' broker fuzzed for a minute (clang with libFuzzer; not in make unit)
 make unit                                         # C unit tests; microWakeWord against pymicro-features and TFLite (mww_ref.py);
                                                  # the Drop In blueprint (blueprint_dropin.py); one target each (make

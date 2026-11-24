@@ -43,7 +43,7 @@ for k in 0100000000000000000000000000000000000000000000000000000000000080 ecffff
          edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff \
          eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff; do
     python3 -c 'import sys; sys.path.insert(0, "scripts"); import otatool as o; sys.exit(not o.weak(bytes.fromhex(sys.argv[1])))' $k &&
-        printf "$(printf %s "$k" | sed 's/../\\x&/g')" > $T/nc.pub &&
+        python3 -c 'import sys; open(sys.argv[2], "wb").write(bytes.fromhex(sys.argv[1]))' $k $T/nc.pub &&
         ! $PY verify $T/nc.pub $T/c.bundle $T/null.sig 2>/dev/null && ! $C verify $T/nc.pub $T/c.bundle $T/null.sig 2>/dev/null &&
         $PY verify $T/nc.pub $T/c.bundle $T/null.sig 2>&1 | grep -q "any signature holds" &&
         $C verify $T/nc.pub $T/c.bundle $T/null.sig 2>&1 | grep -q "any signature holds"; ok $? "weak() and both otatools: $k (Monocypher's small order, decode() no point) is no key"

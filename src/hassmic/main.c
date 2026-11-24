@@ -2091,14 +2091,20 @@ static void send_mic(const int16_t *pcm, size_t n, uint64_t at)
     }
 }
 
-static void stream_ring(uint64_t from, uint64_t to) /* capture thread, lock held: samples [from, to) as far as the ring has them */
+/* capture thread, lock held: samples [from, to) as far as the ring has them, in send_mic's pieces of 1024 counted from
+ * `from`, the ring's wrap copied over: the blocks Home Assistant gets are the same wherever the ring wraps.  Cut at the
+ * wrap they were not (2048 + 448 + 2048 + 1152 bytes in place of 2048 + 2048 + 1600 for one replay): a wake word 4 s
+ * after the start, on a CI runner slower to start than a PC, put the wrap into the replay, and fake_ha_esphome.py, which
+ * finds the replay's end by the block sizes, failed there only */
+static void stream_ring(uint64_t from, uint64_t to)
 {
+    static int16_t piece[1024];
     if (ring_n > RING_SAMPLES && from < ring_n - RING_SAMPLES) from = ring_n - RING_SAMPLES;
     if (to > ring_n) to = ring_n;
     while (from < to) {
-        uint64_t at = from % RING_SAMPLES, n = to - from;
-        if (n > RING_SAMPLES - at) n = RING_SAMPLES - at;
-        send_mic(ring + at, n, from);
+        size_t n = to - from < 1024 ? (size_t)(to - from) : 1024;
+        for (size_t i = 0; i < n; i++) piece[i] = ring[(from + i) % RING_SAMPLES];
+        send_mic(piece, n, from);
         from += n;
     }
 }
