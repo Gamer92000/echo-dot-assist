@@ -26,8 +26,10 @@ The guided way: `scripts/setup.sh cupcake` runs these same steps and checks each
 
 Read the [XDA thread][xda] in full first: the unlock is not this project's work.
 
-> **Never let the Echo go online with Amazon on the way.** It would update itself, and an update can close the hole the
-> unlock uses. Do not set it up with the Alexa app.
+> **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in Amazon's software,
+> and updates close such holes. Which versions still unlock is not tracked here (the XDA thread may know), and an
+> unlock that does not take can leave the Echo unusable. Never let the Echo update: do not set it up with the Alexa
+> app, and keep it off Wi-Fi until the install puts it there.
 
 ### Requirements
 

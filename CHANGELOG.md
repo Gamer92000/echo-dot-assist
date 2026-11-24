@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — One word on firmware and the unlock, for every model
+
+- **No list of which firmware versions still unlock.** The Echo Dot 3's warning that recent updates may leave an Echo
+  locked (issue #112), and the setup's question before its unlock, are gone. Every model's page, the README and the
+  setup's unlock step now say the same thing: the older the Echo's firmware, the likelier the unlock works; updates
+  close the holes the unlocks use, an unlock that does not take can leave the Echo unusable, and the Echo must never
+  update on the way (no Alexa app, no Wi-Fi until the install puts it there). Whether a version still unlocks is the
+  unlock's XDA thread's to say.
+
 ## 2026-11-23 — Plugins: an update that may do more asks first; room for any number of plugin features
 
 Plugins are experimental; nothing of the plugin system is released yet.

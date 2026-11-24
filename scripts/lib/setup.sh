@@ -668,7 +668,8 @@ wait_adb() {
 # unlock_thread TOOL UNTIL [LINE]...: the unlock by hand, TOOL as $XDA says, until UNTIL ("TWRP is running on the Echo
 # (white ring)"); Enter when done.  Then up to 3 min for the Echo on adb (TWRP, or Fire OS: stock has no adb): an Enter
 # pressed while TWRP still starts must not fail the step, whose retry shows all of this again; none there: where to go
-# on, the thread first, then the model's LINEs (what is known here, as issue #112).  Returns 0 with the Echo on adb.
+# on, the thread first, then the model's LINEs.  Returns 0 with the Echo on adb.  Which firmware versions still unlock
+# is not tracked here (the threads know, as far as anyone does): the person is told only that older is likelier.
 unlock_thread() {
     local tool=$1 until=$2; shift 2
     todo "Unlock the Echo by hand: $tool, as its XDA thread says" \
@@ -678,6 +679,9 @@ unlock_thread() {
         "Which Echos it is for, which files to download, how to get the Echo ready and every command: all of it" \
         "is there, and kept up to date. This setup does not run $tool and does not repeat its steps: R0rt1z2" \
         "asks (since kamakiri-donut v1.1.0) that his unlocks are only ever run by hand, as his threads say." \
+        "" \
+        "The older the Echo's firmware, the likelier the unlock works: updates close the holes it uses. Which" \
+        "versions still unlock is not tracked here, and an unlock that does not take can leave the Echo unusable." \
         "" \
         "${B}Stop once $until$N: this setup does the rest." \
         "Then come back to this window and press Enter: it checks the Echo and goes on from there." \

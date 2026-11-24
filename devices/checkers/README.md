@@ -25,8 +25,10 @@ The unlock and install write to the Echo's flash. These rules keep it recoverabl
   interrupted, and when it is over, is there.
 - **In TWRP, always tap "Keep Read Only"** when it asks "Keep System Read only?". A system TWRP has mounted read-write
   no longer passes the stock boot image's checks, and the stock image is your way back while `/system` is untouched.
-- **Do not join Wi-Fi before the lockdown step.** Fire OS would reach Amazon and could update itself, which can close
-  the unlock.
+- **The older the Echo's firmware, the likelier the unlock works.** Every unlock uses a hole in Amazon's software,
+  and updates close such holes. Which versions still unlock is not tracked here (the XDA thread may know), and an
+  unlock that does not take can leave the Echo unusable. Never let the Echo update: do not set it up with the Alexa
+  app, and keep it off Wi-Fi until the install puts it there.
 - **Once hassmic is on `/system`, only a boot image without `verify` boots it.** The stock `boot.img` would find the
   system's hashes wrong. To go back, see [Going back to stock](#going-back-to-stock).
 

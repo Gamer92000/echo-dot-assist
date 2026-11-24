@@ -102,7 +102,11 @@ by side to copy settings and wake words between them, the log. A press of the ac
 
 ## Requirements
 
-- A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires).
+- A [supported Echo](#supported-echos), and a USB way into it (its page says what: a cable, or wires). **The older
+  its firmware, the likelier the unlock works**: every unlock uses a hole in Amazon's software, and updates close such
+  holes. Which versions still unlock is not tracked here, and an unlock that does not take can leave the Echo
+  unusable. Never let the Echo update: do not set it up with the Alexa app, and keep it off Wi-Fi until the install
+  puts it there.
 - A **Linux PC**, running Linux on the machine itself (not macOS, not a VM or WSL: the unlock needs direct USB; a live
   USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
   about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
