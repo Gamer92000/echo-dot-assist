@@ -96,7 +96,13 @@ static long long raw_us(void)
 /* ---------------------------------------------------------------- time filter (aiosendspin client/time_sync.py) */
 
 static pthread_mutex_t tf_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct { long long last; int count; double offset, drift, poo, pod, pdd; int use_drift; } tf;
+static struct { long long last; int count; double offset, drift, poo, pod, pdd, base; int use_drift; } tf;
+/* The drift's first estimate, (z2 - z1) / dt, only once it can be within 1 % (sd): a server that stalled answered two
+ * exchanges at once, read 40 us apart, and z's ms of difference made it +2300 (CI 2026-11-24: "moved the clock
+ * +843274.7 ms", then a drift of 16 % passed the significance test, used, and the music resynced by -690 ms).  Until
+ * then each sample is weighed into the offset (by its variance; `base`, the time the offset stands for, likewise), so
+ * the baseline grows and a reply read late counts for what its error says.  At 0.1 ms a sample 200 ms apart: at once */
+#define TF_INIT_DRIFT_SD 0.01
 
 static void tf_reset(void) { pthread_mutex_lock(&tf_lock); memset(&tf, 0, sizeof tf); tf.poo = INFINITY; pthread_mutex_unlock(&tf_lock); }
 
@@ -107,8 +113,15 @@ static void tf_update(double z, double max_error, long long t)
     if (t > tf.last) {
         double dt = (double)(t - tf.last), r = (max_error * 0.5) * (max_error * 0.5);
         tf.last = t;
-        if (tf.count == 0) { tf.count = 1; tf.offset = z; tf.poo = r; tf.drift = 0; }
-        else if (tf.count == 1) { tf.count = 2; tf.drift = (z - tf.offset) / dt; tf.offset = z; tf.pdd = (tf.poo + r) / (dt * dt); tf.poo = r; }
+        if (tf.count == 0) { tf.count = 1; tf.offset = z; tf.poo = r; tf.drift = 0; tf.base = (double)t; }
+        else if (tf.count == 1) {
+            double b = (double)t - tf.base;
+            if (tf.poo + r > TF_INIT_DRIFT_SD * TF_INIT_DRIFT_SD * b * b) {
+                double w = tf.poo / (tf.poo + r);
+                tf.offset += w * (z - tf.offset); tf.base += w * ((double)t - tf.base); tf.poo = tf.poo * r / (tf.poo + r);
+            }
+            else { tf.count = 2; tf.drift = (z - tf.offset) / b; tf.offset = z; tf.pdd = (tf.poo + r) / (b * b); tf.poo = r; }
+        }
         else {
             double pred = tf.offset + tf.drift * dt, npdd = tf.pdd + dt * 1e-22, npod = tf.pod + tf.pdd * dt;
             double npoo = tf.poo + 2 * tf.pod * dt + tf.pdd * dt * dt, resid = z - pred;

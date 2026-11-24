@@ -8,7 +8,9 @@ What changed for people using the Echo, newest first. Details and measurements a
   for the time every 3 s as soon as its clock looked right, before it knew how fast the two clocks drift apart; an
   answer read late (the Echo busy for a moment) was then believed nearly as much as the clock, and moved it by up to
   tens of ms: a skip in the music, or the drift learnt the wrong way. Now it asks again before the clock could be more
-  than 1 ms off by then, a few more questions in the first seconds of a stream.
+  than 1 ms off by then, a few more questions in the first seconds of a stream. And two answers that arrive at once
+  (a server busy for a moment as the Echo connects) no longer set a drift between the clocks of thousands of percent,
+  which made the music jump by most of a second.
 
 ## 2026-11-24 — Joining Wi-Fi over USB keeps one network
 

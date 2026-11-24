@@ -888,6 +888,14 @@ Run in this order. Each step says what it proves.
       ±0.3-1.5 ms, one reply 50 ms late, 270 runs): 26 ms off at most, 12 at the 95th percentile; with the pace chosen
       by `tf_error_at` (the clock within 1/2/5 ms at the next exchange, else 200 ms) 1.2 ms, 14 exchanges in the first
       30 s instead of 11.  A move over 5 ms by one exchange is logged.
+      Its first CI run after that (45464536456, sendspin-9) logged the -104's kind again: `-690.0 ms off the schedule,
+      resynced (queued 116 ms, 82 ms since the last write)`, so not a player away, and before it `one time exchange
+      moved the clock +843274.7 ms`: the filter's second sample, whose drift is `(z2 - z1) / dt`, came 40 us after the
+      first (a stalled server answering two at once), a drift of +2300, then 16 % that passed `use_drift`'s test.
+      Shown by holding the receive thread 250 ms before the first reply (both read back to back): resyncs of +40 and
+      +56 ms in 2 of 6 players.  Now the drift's first estimate waits until it can be within 1 % (sd,
+      `TF_INIT_DRIFT_SD`), each sample before weighed into the offset by its variance (`tf.base` the time it stands
+      for): the same hold, no resync, the drift ~1e-5 four samples in; samples ±0.1 ms 200 ms apart start as before.
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
