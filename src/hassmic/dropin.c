@@ -521,7 +521,14 @@ static void send_frame(const int16_t *pcm, int own)
         enc = opus_encoder_create(RATE, 1, OPUS_APPLICATION_VOIP, &e);
         if (!enc) { fprintf(stderr, "drop in: no Opus encoder (%d)\n", e); crypto_wipe(key, sizeof key); return; }
         opus_encoder_ctl(enc, OPUS_SET_BITRATE, BITRATE); opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC, 1);
-        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC); opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
+        opus_encoder_ctl(enc, OPUS_SET_PACKET_LOSS_PERC, LOSS_PERC);
+#ifdef MISTO_BUILD
+        /* Cortex-A8 with the soft-float Opus build: complexity 5 consumed
+         * roughly 58% of a core in a synthetic 16 kHz speech benchmark. */
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 1);
+#else
+        opus_encoder_ctl(enc, OPUS_SET_COMPLEXITY, 5);
+#endif
         opus_encoder_ctl(enc, OPUS_SET_SIGNAL, OPUS_SIGNAL_VOICE);
         micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, 1);
         es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = -70; near_until = 0; listen_on = 0; listen_at = 0; enc_gen = gen;

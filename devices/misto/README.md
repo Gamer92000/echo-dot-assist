@@ -17,6 +17,12 @@ perceived delay; this does not measure end-to-end or DAC latency. A failed Wi-Fi
 switch to a nonexistent network returned to the previous connection; one
 successful switch was confirmed. Wi-Fi persistence after reboot was not tested.
 
+Drop In uses Opus encoder complexity 1 on misto (5 on the original targets) to
+reduce Cortex-A8 CPU use. In one comparison, `hassmic` fell from roughly 65–86%
+to 28–46% CPU during calls, and the user reported clearer speech both ways.
+These are single-device observations, not a guarantee against network loss; the
+lower complexity may affect coding quality. Bitrate and FEC settings are unchanged.
+
 BlueZ 4.101 exposes A2DP source/sink and AVRCP SDP records. The HA pairing
 switch changes BlueZ's pairable/discoverable settings while leaving the radio
 powered. Pairing a phone, reconnecting a bonded phone, and audio profiles still
