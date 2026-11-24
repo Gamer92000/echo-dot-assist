@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Echo Show: the screen follows Wi-Fi motion
+
+- **Echo Show: the screen can follow Wi-Fi motion.** Two new switches on the Screen page under **When idle**, shown
+  while Wi-Fi motion is on (Features). **Motion keeps the screen on**: the screen goes dark, or shows the clock, only
+  once nobody has moved for "Screen sleeps after". **Motion wakes the screen**: a dark screen comes on when someone
+  moves, and the clock gives way to the face. Neither in Do not disturb. Both experimental and off by default: Wi-Fi
+  motion also sees people in the next room.
+
 ## 2026-11-24 — Music in sync through a busy moment
 
 - **A late answer no longer pulls Sendspin's clock off** (Music Assistant's multi-room sync). The Echo asked the server

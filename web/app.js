@@ -216,9 +216,9 @@ const PAGES = [
 ];
 const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust', 'screen_adaptive_colour'];      // the Show's backlight, and its colour where Fire OS has that
 const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
-const IDLE = ['screen_sleep_minutes', 'screen_clock'];                             // the screen's timeout, the clock in place of dark
+const IDLE = ['screen_sleep_minutes', 'screen_clock', 'screen_motion_keep', 'screen_motion_wake'];   // the screen's timeout, the clock in place of dark, Wi-Fi motion
 const MOVED = { plugins: 'plugins', plugins_community: 'plugins', light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
-  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen',
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen', screen_motion_keep: 'screen', screen_motion_wake: 'screen',
   arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice',
   ring_live: 'lights' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
@@ -272,6 +272,8 @@ const HELP = {
   screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
   screen_clock: { help: 'A screen saver: where the screen would go dark (after Screen sleeps after, or 1 minute with the mic off or in Do not disturb), it shows the time across the whole screen instead, with the date under it. Until then the face shows as always. Mic off and Do not disturb get a line under the clock saying so; music playing shows its bar. A touch on the clock brings the face back (that touch does nothing else), and the timeout starts again; so does anything the Echo does: a request, a timer, a Drop In, the volume, music starting. Uses Home Assistant\'s time zone, 12-hour where the face\'s clock is. Only in place of the face: with an app or the music page in front, the screen goes dark as before. Off by default. Brightness follows the Brightness card: Adaptive brightness dims it at night.' },
   screen_sleep_minutes: { help: 'How long the screen stays on after the last thing happened (a request, a touch, the volume, a timer), in minutes; then it goes dark, or shows the clock with Clock when idle on. 0: it never does either, the face stays. With the mic off or in Do not disturb it is 1 minute at most, as on a stock Echo Show; 0 keeps the screen on then too. Running timers on the screen keep it on whatever this says. Default 5, as stock.' },
+  screen_motion_keep: { when: () => !!settingValue('wifi_motion'), tag: 'Experimental', help: 'Wi-Fi motion (Features) counts as something happening: while it sees motion, Screen sleeps after does not run out, so the screen goes dark, or shows the clock, only once nobody has moved for that long (plus the 30 s the sensor itself stays on after the last movement). Over an app too. Motion that starts while the clock shows leaves it there (Motion wakes the screen ends it); from a touch on, it holds the face. Wi-Fi motion sees movement between the Echo and your router, through walls as well, so someone in the next room can keep it on. Not in Do not disturb: the screen sleeps after its minute then as always. Off by default; shown while Wi-Fi motion is on.' },
+  screen_motion_wake: { when: () => !!settingValue('wifi_motion'), tag: 'Experimental', help: 'A dark screen comes on when Wi-Fi motion (Features) starts seeing motion, with whatever was on it, as a touch would; with Clock when idle on, the clock gives way to the face. With Motion keeps the screen on as well, it then stays on while the motion lasts; without, for Screen sleeps after. A screen put out from the drawer comes on again too. Not in Do not disturb, so the night stays dark. Off by default; shown while Wi-Fi motion is on.' },
   screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
   music_on_screen: { help: 'While a track from Music Assistant plays on this Echo, the screen shows the music page (the big cover, title, seek bar and buttons). In place of the face: only where the face is what the screen shows by itself; an app in front (Kiosk Satellite, a dashboard) is left alone. In place of the home app too: also over the app chosen as Home above (or Kiosk Satellite), which comes back when the music stops; other apps are left alone. A request, a call or a ringing timer bring the face as always, and the music page comes back when they are over. It stays until the music stops: a pause keeps it, and so does the gap between two tracks. It goes by itself only if it still shows the Playing tab: browse the library or search on it and it stays, as if opened by hand (Home in the drawer brings the home app back). Pull down the drawer and choose Face or Home, or tap the face button on the music page, and the music page stays away until the music has stopped; a face chosen that way stays as it always has, until Home in the drawer brings the home app back. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
@@ -487,6 +489,8 @@ const SUB = {
   screen_timers: 'Running timers counted down, a ringing one in orange',
   screen_clock: 'The time and date in place of a dark screen',
   screen_sleep_minutes: 'Minutes until it goes dark or shows the clock; 0: never',
+  screen_motion_keep: 'Idle only once nobody moved for that long',
+  screen_motion_wake: 'The screen comes on when someone moves',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
@@ -1183,7 +1187,9 @@ function settingRow(s) {
     if (status) status.replaceChildren(...[info.status()].filter(Boolean));
     if (warns) warns.replaceChildren(...info.warnings().map((t) => h('li', {}, icon('warn'), h('span', {}, t))));
   };
-  controls.set(s.name, { update: (x) => { c.update(x); paint(); }, paint, saved, root: row });
+  const shown = () => { if (info.when && !info.parent) row.classList.toggle('hidden', !info.when()); };   // (a feature's own: its card does it)
+  shown();
+  controls.set(s.name, { update: (x) => { c.update(x); paint(); shown(); }, paint, saved, root: row });
   return row;
 }
 

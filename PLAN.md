@@ -3735,6 +3735,29 @@ Run in this order. Each step says what it proves.
       the clock 59.3 s later, not at once; the drawer 60 s while out, held again closed; a paused music page dark 60 s
       after the last touch.  `service call power 12` answers `00000000 00000001` / `00000000` there, and a
       userActivity leaves a dark screen asleep.
+- [~] Echo Show: the idle screen by Wi-Fi motion (2026-11-15, asked for: idle only after X minutes without motion,
+      the screen on again when someone moves).  Settings `screen_motion_keep` ("Motion keeps the screen on") and
+      `screen_motion_wake` ("Motion wakes the screen"), both off, in screen.c, listed where `wifimotion_present`, the
+      page's rows only while `wifi_motion` is on (HELP `when` on plain rows now: `settingRow`).  `ring_band.c` reads
+      `screen_motion()` once a second (Wi-Fi motion on and moving; a change goes to the UI as `mo <moving> <keep>
+      <wake>`, its own generation: a `ck` would count as the settings changing and end the clock): motion starting
+      wakes a screen that is not on (`isInteractive` != 1, `screen_wake`); while it lasts a userActivity every 10 s
+      and one as it ends, so PowerManager's timeout counts from the sensor's end (30 s after the last movement); not
+      while the timeout is the UI's (the clock), nor in Do not disturb.  The UI (`scene.c` `mo`, `face.c`
+      `motion_holds`): with "keeps" no clock while it moves and the count from its end; motion starting under the
+      clock ends it only with "wakes" (else `mo_skip`: that motion holds nothing until it stops or anything else
+      happens, `scene_active`: a touch, the drawer, a request, an app; "under the clock" only where the clock shows,
+      not under an app past the timeout); neither in Do not disturb (`s->dnd`, also with the mic off, where
+      `face_mode` says M_MUTE).  The band's checks go on once a second while no renderer comes up (that wait was 30 s
+      at a time: a motion wake that late), and the old height back after a failed one starts its renderer anew (it
+      was left without one).  Checked on the PC: `ui_test` (keeps without wakes under the clock, wakes, held past
+      twice the timeout, the count from the end, wakes alone, Do not disturb, a touch on the clock under such motion,
+      motion under an app past the timeout, mic off with Do not disturb), `unit-ring_band` (wake, hold, the end's activity, Do not disturb, keeps alone, no
+      renderer), `fake_screen_words.py` (off by default, `mo` told, the band's wake and hold from a wobbling fake
+      RX_STAT, the timeout from its end, Do not disturb, Wi-Fi motion off), `fake_screen.py`, `fake_web.py`,
+      `fake_ha_esphome_features.py`.  Seen on the contributor's Echo Show 5 2nd gen (PR #190, 2026-11-15): on about
+      a second after walking in, held while moving, dark about a minute after leaving ("Screen sleeps after" not
+      stated).  Open: our own Shows.
 - [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
       `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
       (Brazil's before "America/"); the aligner (no MFA model for them in build.sh) skips them, the page's as the

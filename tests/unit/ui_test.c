@@ -305,6 +305,37 @@ int main(int argc, char **argv)
     nsent = 0; msg("oobe 1"); run(300); assert(front_last() == 0);
     run(70000); assert(!S->saver_on);                           /* (the setup screen: never the clock either) */
     nsent = 0; msg("oobe 0"); run(300); assert(front_last() == 1);
+    /* Wi-Fi motion (mo <moving> <keeps> <wakes>): "keeps" holds the clock back while it moves and counts the timeout
+       from its end; motion under the clock ends it only with "wakes"; neither in Do not disturb */
+    msg("ck 1 1"); run(500); msg("mo 0 1 0"); run(61000); assert(S->saver_on);
+    msg("mo 1 1 0"); run(300); assert(S->saver_on);             /* keeps, not wakes: the clock stays */
+    run(5000); msg("mo 0 1 0"); run(300); assert(S->saver_on);  /* (that motion held nothing either) */
+    nsent = 0; msg("mo 1 1 1"); run(300); assert(!S->saver_on && sent_has("log screen saver: the face again: motion"));
+    run(120000); assert(!S->saver_on);                          /* moving: held, past twice the timeout */
+    msg("mo 0 1 1"); run(59000); assert(!S->saver_on);         /* stopped: the timeout from here */
+    run(2000); assert(S->saver_on);
+    msg("mo 1 0 1"); run(300); assert(!S->saver_on);            /* wakes, not keeps: the face, the timeout from then */
+    run(61000); assert(S->saver_on);                            /* (moving on does not hold it) */
+    msg("mo 0 0 1"); msg("dnd 1"); run(61000); assert(S->saver_on);
+    msg("mo 1 1 1"); run(300); assert(S->saver_on);             /* Do not disturb: the clock stays, nothing held */
+    run(61000); assert(S->saver_on);
+    msg("mo 0 0 0"); msg("dnd 0"); run(300);
+    run(61000); assert(S->saver_on);                            /* keeps alone, motion under the clock: it stays ... */
+    msg("mo 1 1 0"); run(300); assert(S->saver_on);
+    tap(W / 2, (int)(0.5f * H)); run(300); assert(!S->saver_on);   /* ... until a touch: from then the motion holds the face */
+    run(120000); assert(!S->saver_on);
+    msg("mo 0 1 0"); run(59000); assert(!S->saver_on);         /* stopped: the timeout from here */
+    run(2000); assert(S->saver_on);
+    scene_top(S, "com.example.app", now); run(61000); assert(!S->saver_on);   /* an app in front past the timeout: */
+    msg("mo 1 1 0"); run(300); assert(!S->mo_skip);             /* no clock there, so this motion holds (keeps) ... */
+    scene_top(S, UI_HOME_PKG, now); run(300); tap(W / 2, (int)(0.5f * H)); run(300); assert(!S->saver_on);
+    run(120000); assert(!S->saver_on);                          /* ... the face, once back */
+    msg("mo 0 1 0"); run(61000); assert(S->saver_on);
+    msg("mute 1"); msg("dnd 1"); run(61000); assert(S->saver_on);   /* mic off and Do not disturb (face_mode: M_MUTE) */
+    msg("mo 1 1 1"); run(300); assert(S->saver_on);             /* still Do not disturb: the clock stays ... */
+    msg("mute 0"); run(300); assert(!S->saver_on);              /* (mic on: the face, the minute anew) */
+    msg("mute 1"); run(61000); assert(S->saver_on);             /* ... and moving on holds nothing */
+    msg("mo 0 0 0"); msg("mute 0"); msg("dnd 0"); run(300);
     msg("ck 1 0"); run(70000); assert(!S->saver_on);           /* never sleeps: the face stays */
     msg("ck 0 5"); run(500);
     f0 = frames; run(10000); assert(frames - f0 > 2);          /* the eyes blink again */

@@ -15,8 +15,21 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* screen_none.c, its Wi-Fi motion the test's own (screen.h: screen_motion*, read by the band's checks once a second) */
+#define screen_motion screen_motion_none
+#define screen_motion_keep screen_motion_keep_none
+#define screen_motion_wake screen_motion_wake_none
+#include "../../src/hassmic/screen_none.c"
+#undef screen_motion
+#undef screen_motion_keep
+#undef screen_motion_wake
+static volatile int motion, motion_keep, motion_wake;
+int screen_motion(void) { return motion; }
+int screen_motion_keep(int set) { (void)set; return motion_keep; }
+int screen_motion_wake(int set) { (void)set; return motion_wake; }
+
 const struct board board = { .volume_steps = 100 };
-static int muted, dnd_on, spawns_wake, spawns_timeout, last_timeout;
+static volatile int muted, dnd_on, spawns_wake, spawns_act, spawns_timeout, last_timeout;
 int core_muted(void) { return muted; }
 int core_dnd(int set) { (void)set; return dnd_on; }
 static int brightness = 100;
@@ -24,6 +37,7 @@ int core_led_brightness(int set) { (void)set; return brightness; }
 void core_spawn(char *const argv[])
 {
     if (!strcmp(argv[0], "/system/bin/service") && !strcmp(argv[3], "9")) spawns_wake++;
+    if (!strcmp(argv[0], "/system/bin/service") && !strcmp(argv[3], "8")) spawns_act++;   /* userActivity */
     if (!strcmp(argv[0], "/system/bin/settings")) { spawns_timeout++; last_timeout = atoi(argv[4]); }
 }
 void core_run(char *const argv[], char *out, size_t n) { (void)argv; if (n) out[0] = 0; }   /* (isInteractive: not known) */
@@ -62,7 +76,8 @@ static void band_in(const char *dir, char *script, size_t n)
     snprintf(script, n, "%s/ringbar", dir);
     FILE *f = fopen(script, "w");
     fprintf(f, "#!/bin/sh\nif [ \"$1\" = 0 ]; then echo off; echo off >> %s/log; exit 0; fi\n"
-               "ls /proc/$$/fd > %s/fds; echo \"ready %d $1\"; echo \"rows $1\" >> %s/log; exec cat >> %s\n", dir, dir, W, dir, frames);
+               "if [ -e %s/broken ]; then exit 1; fi\n"                 /* (motion_test: no renderer comes up) */
+               "ls /proc/$$/fd > %s/fds; echo \"ready %d $1\"; echo \"rows $1\" >> %s/log; exec cat >> %s\n", dir, dir, dir, W, dir, frames);
     fclose(f); chmod(script, 0755);
     setenv("HASSMIC_FAKE_BAND", script, 1);
 }
@@ -93,6 +108,50 @@ static int again(const char *st)
     check(same_files(a, b), "after a restart: a draft never installed is back to what is");
     ring_band_rows(0); ms(300); rm_rf(dir);
     return fails ? 1 : 0;
+}
+
+/* Wi-Fi motion (screen.h): its start wakes a dark screen ("wakes"), while it lasts userActivity holds the timeout
+ * ("keeps"), one more as it ends; neither in Do not disturb.  Read in the band's checks once a second, also while no
+ * renderer comes up (that wait was 30 s at a time) */
+static int renderers(const char *dir)             /* renderers started: the log's "rows" lines */
+{
+    char p[320], l[64]; int n = 0; snprintf(p, sizeof p, "%s/log", dir);
+    FILE *f = fopen(p, "r"); while (f && fgets(l, sizeof l, f)) n += !strncmp(l, "rows ", 5);
+    if (f) fclose(f);
+    return n;
+}
+static void motion_test(const char *dir)
+{
+#define MWAIT(cond) for (int w_ = 0; w_ < 150 && !(cond); w_++) ms(20)
+    int wk = spawns_wake, ac = spawns_act;
+    motion_keep = motion_wake = 1; motion = 1;
+    MWAIT(spawns_wake > wk && spawns_act >= ac + 2);
+    check(spawns_wake == wk + 1 && spawns_act >= ac + 2, "motion starts: the screen woken (isInteractive unknown here), activity held");
+    ac = spawns_act; motion = 0;
+    MWAIT(spawns_act > ac);
+    check(spawns_act == ac + 1, "motion ends: one more activity, the timeout from now");
+    ms(1500); check(spawns_act == ac + 1 && spawns_wake == wk + 1, "still: nothing more");
+    dnd_on = 1; wk = spawns_wake; ac = spawns_act; motion = 1; ms(2500);
+    check(spawns_wake == wk && spawns_act == ac, "in Do not disturb: no wake, nothing held");
+    motion = 0; ms(1500); dnd_on = 0; ms(1500);
+    motion_wake = 0; wk = spawns_wake; ac = spawns_act; motion = 1;
+    MWAIT(spawns_act > ac);
+    check(spawns_act > ac && spawns_wake == wk, "keeps alone: activity, no wake");
+    motion = 0; ms(1500);
+    motion_keep = 0; motion_wake = 1;
+    /* no renderer for a new height: the checks go on a second at a time */
+    char p[320]; snprintf(p, sizeof p, "%s/broken", dir); FILE *f = fopen(p, "w"); if (f) fclose(f);
+    ring_band_rows(ROWS + 1); ms(1500);
+    wk = spawns_wake; motion = 1;
+    MWAIT(spawns_wake > wk);
+    check(spawns_wake == wk + 1, "no renderer: motion still wakes the screen within a second or two, not 30 s");
+    motion = 0; motion_wake = 0; unlink(p);
+    int before = renderers(dir);
+    ring_band_rows(ROWS);
+    MWAIT(renderers(dir) > before);
+    check(renderers(dir) == before + 1, "the old height back after a failed one: its renderer started anew");
+    ms(300);
+#undef MWAIT
 }
 
 int main(int argc, char **argv)
@@ -268,6 +327,7 @@ int main(int argc, char **argv)
 
     long n = nframes(); ms(500);
     check(nframes() == n, "nothing moving: no frames sent");
+    motion_test(dir);
     ring_band_rows(0); ms(500);
     f = fopen(script, "r"); fclose(f);
     char logp[300], line[64] = ""; snprintf(logp, sizeof logp, "%s/log", dir);

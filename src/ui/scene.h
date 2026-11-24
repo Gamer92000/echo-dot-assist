@@ -61,6 +61,8 @@
  *   wo <words 0|1> <timers 0|1> <hold s>     the settings "Speech on screen", "Timers on screen", "Speech stays for"
  *   ck <on 0|1> <minutes>          the settings "Clock when idle" and "Screen sleeps after" (0 never): the clock across
  *                                  the screen in place of dark, once nothing happened that long (face.c)
+ *   mo <moving 0|1> <keeps 0|1> <wakes 0|1>   Wi-Fi motion and "Motion keeps the screen on", "Motion wakes the screen":
+ *                                  while it moves no clock (keeps), its start ends the clock (wakes); not in DND
  *   wh <text>, wr <text>, ws <ms|-1>   what was said, the reply, and how long ago the satellite was idle again (-1: not
  *                                  yet); sent together, in that order, whenever one changes
  *   tl <n> <seq>\t<left ms> <total s> <active 0|1> <name>...   the running timers (the name: its length where it has none)

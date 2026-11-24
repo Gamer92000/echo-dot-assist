@@ -109,7 +109,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -185,6 +185,10 @@ static const struct setting table[NSET] = {
     /* the screen's timeout in place of stock's 5 min (mic off and Do not disturb: 1 min at most); 0 never: ring_band.c
      * sets it, or with the clock on over our own screen, the UI counts it */
     [SCR_SLEEP]   = { "screen_sleep_minutes", "Screen sleeps after", "Lights", "min", S_INT, 0, 120, 1, 0 },
+    /* screen.c, ring_band.c, the UI's face.c: Wi-Fi motion (wifimotion.c) as activity for that timeout, and a dark
+     * screen woken by motion; listed where the Echo has both, the page shows them while Wi-Fi motion is on */
+    [SCR_MOTION_KEEP] = { "screen_motion_keep", "Motion keeps the screen on", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SCR_MOTION_WAKE] = { "screen_motion_wake", "Motion wakes the screen", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
     [ARB_MODE]    = { "arbitration_mode", "Arbitration mode", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -305,6 +309,8 @@ static int present(enum id i)
     case SCREEN_TIMERS: return screen_timers_on(-1) >= 0;
     case SCR_CLOCK: return screen_clock(-1) >= 0;
     case SCR_SLEEP: return screen_sleep_min(-1) >= 0;
+    case SCR_MOTION_KEEP: return screen_motion_keep(-1) >= 0 && wifimotion_present();
+    case SCR_MOTION_WAKE: return screen_motion_wake(-1) >= 0 && wifimotion_present();
     case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
@@ -451,6 +457,8 @@ int settings_get(const struct setting *s)
     case SCREEN_TIMERS: return screen_timers_on(-1);
     case SCR_CLOCK: return screen_clock(-1);
     case SCR_SLEEP: return screen_sleep_min(-1);
+    case SCR_MOTION_KEEP: return screen_motion_keep(-1);
+    case SCR_MOTION_WAKE: return screen_motion_wake(-1);
     default: return 0;
     }
 }
@@ -540,6 +548,8 @@ static void put(enum id i, int v)
     case SCREEN_TIMERS: screen_timers_on(v); break;
     case SCR_CLOCK: screen_clock(v); break;
     case SCR_SLEEP: screen_sleep_min(v); break;
+    case SCR_MOTION_KEEP: screen_motion_keep(v); break;
+    case SCR_MOTION_WAKE: screen_motion_wake(v); break;
     default: break;
     }
 }

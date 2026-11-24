@@ -617,6 +617,14 @@ satellite of its own has to run without its microphone (as a display) while hass
   music starting. Music playing shows its bar under the clock. With an app or the music page in front the screen goes dark
   as before.
   Brightness follows the Brightness card: **Adaptive brightness** dims the clock at night.
+- **Motion keeps the screen on** and **Motion wakes the screen** (same card, experimental, off by default; shown
+  while [Wi-Fi motion](#wi-fi-motion) is on): a presence sensor of sorts for the screen. With the first, motion counts
+  as something happening: the screen goes dark, or shows the clock, only once nobody moved for **Screen sleeps after**
+  (plus the sensor's own 30 s), over an app too. With the second, a dark screen comes on as motion starts, showing
+  whatever it showed (a screen put out from the drawer too), and the clock gives way to the face; motion under the
+  clock with only the first switched on leaves the clock alone. Neither in Do not disturb, so the night stays dark.
+  Wi-Fi motion sees movement between the Echo and the router, also in the next room, so expect the screen to come on
+  for someone passing there now and then.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
@@ -994,6 +1002,8 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
   Show 5), the module hooks the new one by itself (from the version of 2026-11-17 on, once the Echo restarted; not yet
   seen on an Echo); should no frame reach it for a minute, the sensor shows unknown and the log says why.
 - ESPHome only. It does not use the microphones; muting does not stop it.
+- On an Echo Show it can also keep the screen on and wake it: **Motion keeps the screen on** and **Motion wakes the
+  screen** on the Screen page ([The screen](#the-screen-echo-show)).
 
 ## Settings page
 

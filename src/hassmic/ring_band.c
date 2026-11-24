@@ -591,7 +591,9 @@ static void *band_thread(void *arg)
     static struct rgb row[MAX_W], last[MAX_W];
     int fd = -1, w = 0, have_rows = -1, sent = 0, timeout = 0, fails = 0, waited = 0, off_ui = 0;
     float last_k = -1;                              /* the brightness of the frame sent last */
-    long long last_wake = 0, next_check = 0;
+    long long last_wake = 0, next_check = 0, motion_act = 0, retry_at = 0;
+    int moved = 0, motion_held = 0;                 /* Wi-Fi motion (screen_motion): as last read, holding the screen on */
+    int failed = -1;                                /* the rows no renderer came up for (fails), tried again at retry_at */
     for (;;) {
         pthread_mutex_lock(&lock);
         int want = rows, wake = wake_req; wake_req = 0;
@@ -610,12 +612,38 @@ static void *band_thread(void *arg)
                (asked first): a screen put out from the drawer stays out, whatever userActivity does to a dark one */
             if (t != timeout && timeout == NEVER_MS && screen_interactive() == 1) screen_activity();
             if (t != timeout) { timeout = t; screen_timeout(t); }
+            /* Wi-Fi motion (screen.h): a dark screen woken as it starts, and while it lasts activity every 10 s, so the
+               timeout counts from its end (the sensor's own 30 s after the last movement); never in Do not disturb.
+               Not while the timeout is the UI's (the clock: NEVER here), which hears it as "mo" itself */
+            int mv = screen_motion(), dnd = core_dnd(-1) > 0;
+            if (mv && !moved && !dnd && screen_motion_wake(-1) > 0 && screen_interactive() != 1) {
+                fprintf(stderr, "band: motion wakes the screen\n");
+                last_wake = now; screen_wake();     /* (WAKE_EVERY: a pattern's wake right after waits) */
+            }
+            int hold = mv && !dnd && screen_motion_keep(-1) > 0 && t != NEVER_MS;
+            if (hold != motion_held)
+                fprintf(stderr, "band: motion %s\n", hold ? "keeps the screen on" : !mv ? "no more: the timeout from now"
+                        : "holds the screen no more (the clock's turn, Do not disturb or switched off): the timeout from now");
+            if ((hold && now >= motion_act) || (motion_held && !hold)) {
+                screen_activity();                  /* (a dark screen stays asleep under it: checkers, 2026-11-12) */
+                motion_act = now + 10000;
+            }
+            moved = mv; motion_held = hold;
             next_check = now + 1000;
         }
         if (wake && now - last_wake >= WAKE_EVERY) { last_wake = now; screen_wake(); }
+        if (want != have_rows && fails && want == failed && now < retry_at) {
+            /* no renderer for these rows: again at retry_at, meanwhile a second at a time for the checks above (Wi-Fi
+               motion's wake would be up to 30 s late); a new height ("Light band") tries again at once */
+            pthread_mutex_lock(&lock);
+            struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 1;
+            if (rows == want && !wake_req) pthread_cond_timedwait(&cv, &lock, &ts);
+            pthread_mutex_unlock(&lock);
+            continue;
+        }
         if (want != have_rows) {                    /* (re)start the renderer for the rows set */
             if (fd >= 0) close(fd);                 /* it ends at the end of its input; the layer goes with it */
-            fd = -1; w = 0; sent = 0;
+            fd = -1; w = 0; sent = 0; have_rows = -1;   /* (closed: the old height back after a failed one starts it anew) */
             int rc = ringbar(want, &fd, &w);
             if (rc == -2) {                         /* the screen UI on its way (screen.c gives it 30 s): soon again */
                 if (!waited++) fprintf(stderr, "band: waiting for the screen UI\n");
@@ -626,12 +654,9 @@ static void *band_thread(void *arg)
                 continue;
             }
             waited = 0; off_ui = rc == 1;
-            if (rc < 0) {
+            if (rc < 0) {                           /* (the wait above, until retry_at) */
                 if (!fails++) fprintf(stderr, "band: no renderer, trying again every 30 s\n");
-                pthread_mutex_lock(&lock);          /* a new height ("Light band") tries again at once */
-                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_sec += 30;
-                if (rows == want) pthread_cond_timedwait(&cv, &lock, &ts);
-                pthread_mutex_unlock(&lock);
+                failed = want; retry_at = now_ms() + 30000;
                 continue;
             }
             fails = 0; have_rows = want;
