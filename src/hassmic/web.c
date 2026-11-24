@@ -2441,7 +2441,10 @@ static const struct pl_rule { int same, other, own, from_own; const char *why; }
     [PL_SECOND]     = { T_NOW,   T_CHECKED, T_CHECKED, T_NOW,   "a browser is installing a plugin just now: try again in two minutes" },
 };
 #define PL_OVERTAKEN "another install took this one's place before it was accepted: nothing was installed. Upload or fetch the package again"
-static int ASK_DELAY_MS;        /* HASSMIC_PLUGIN_ASK_DELAY: /install sleeps between its check and its ask (tests/fake_plugins_race.py) */
+/* HASSMIC_PLUGIN_ASK_DELAY=<ms>[:<file>]: /install sleeps between its check and its ask, that long, or with a file for
+ * as long as it exists, that long at most, and says so (tests/fake_plugins_race.py: the window held open until what it
+ * tests in it is done, not for a time a busy machine overran) */
+static int ASK_DELAY_MS; static char ASK_DELAY_FILE[200];
 /* HASSMIC_PLUGIN_SYNC_DELAY=<ms>:<file>: while the file exists a synced install sleeps, that long at most, between
  * its note (pending) and the install (tests/fake_plugins_sync.py) */
 static int SYNC_DELAY_MS; static char SYNC_DELAY_FILE[200];
@@ -3684,7 +3687,11 @@ static void plugins_api(int fd, struct req *r)
              * the slot still is this claim, held in CHECKING, with the digest listed (GEN, LISTED: read above,
              * under lk).  What the check said about the button decides only which way is tried: the store looks
              * again when it writes (ps_stage_install), and installs without a press only what needs none then */
-            if (ASK_DELAY_MS) usleep((useconds_t)ASK_DELAY_MS * 1000);
+            if (ASK_DELAY_MS) {
+                fprintf(stderr, "plugins: (test) the install's ask held%s\n", ASK_DELAY_FILE[0] ? " while the file is there" : "");
+                if (!ASK_DELAY_FILE[0]) usleep((useconds_t)ASK_DELAY_MS * 1000);
+                else for (int ms = 0; ms < ASK_DELAY_MS && !access(ASK_DELAY_FILE, F_OK); ms += 20) usleep(20000);
+            }
             if (!button) {
                 pthread_mutex_lock(&lk); int go = pl_mine(pub) && !memcmp(pl.digest, listed, 32) && pl_move(gen, PL_CHECKING, PL_INSTALLING); pthread_mutex_unlock(&lk);
                 if (!go) snprintf(err, sizeof err, "%s", PL_OVERTAKEN);
@@ -4159,7 +4166,7 @@ int web_start(int p, const struct web_hooks *h)
     }
     if ((e = getenv("HASSMIC_LOGIN_RATE"))) { int a, b; if (sscanf(e, "%d:%d", &a, &b) == 2 && a > 0 && b > 0) { ASK_ADDR = a; ASK_ALL = b; } }
     if ((e = getenv("HASSMIC_PLUGIN_SLOT"))) { int c, u, f; if (sscanf(e, "%d:%d:%d", &c, &u, &f) == 3 && c >= 0 && u >= 0 && f > 0) { CHECKED_MS = c; UPLOAD_MS = u; FETCH_MS = f; } }
-    if ((e = getenv("HASSMIC_PLUGIN_ASK_DELAY")) && atoi(e) > 0) ASK_DELAY_MS = atoi(e);
+    if ((e = getenv("HASSMIC_PLUGIN_ASK_DELAY")) && atoi(e) > 0) { ASK_DELAY_MS = atoi(e); if (strchr(e, ':')) snprintf(ASK_DELAY_FILE, sizeof ASK_DELAY_FILE, "%s", strchr(e, ':') + 1); }
     if ((e = getenv("HASSMIC_PLUGIN_OWN_DELAY")) && atoi(e) > 0) OWN_DELAY_MS = atoi(e);
     if ((e = getenv("HASSMIC_PLUGIN_SYNC_DELAY")) && sscanf(e, "%d:%199s", &SYNC_DELAY_MS, SYNC_DELAY_FILE) != 2) SYNC_DELAY_MS = 0;
     if ((e = getenv("HASSMIC_PLUGIN_NONCE_MS")) && atoi(e) > 0) ACC_NONCE_MS = atoi(e);

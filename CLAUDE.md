@@ -1208,7 +1208,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `SEND`, the package; `scripts/ota-push.sh --plugin`, `otatool.py plugin`, the C otatool too).  The engine setting
   at start is read as written first (`settings_peek_raw`): `plugin:<id>` is a value also when that plugin needs
   a newer hassmic.  `HASSMIC_PLUGIN_FRESH`, `HASSMIC_PLUGIN_LEAST`, `HASSMIC_PLUGIN_SLOT=<checked ms>:<upload
-  ms>:<fetch ms>` (the table's times), `HASSMIC_PLUGIN_ASK_DELAY=<ms>` (slept between `/install`'s check and its
+  ms>:<fetch ms>` (the table's times), `HASSMIC_PLUGIN_ASK_DELAY=<ms>[:<file>]` (slept between `/install`'s check and its
   ask), `HASSMIC_PLUGIN_OWN_DELAY=<ms>` (between a push's check and its install) for tests.
   The push port and libcurl's loader: "Push updates", "Online updates".  Crash marks of the second kind (`core <id>`,
   `state/plugins/.cores`, `core_note`, `HASSMIC_PLUGIN_CORE=<count>:<ms>`): hassmic fell in the core's code on a
