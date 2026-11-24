@@ -290,7 +290,8 @@ int main(void)
 
     char c[12][16] = { "#0000ff", "", "ff0000" }, e[120];
     check(ringlive_frame(c, 3, 1, 0, e, sizeof e) == 0 && ringlive_active(), "a frame from Home Assistant");
-    msleep(120); get(t, sizeof t);
+    /* waited for, not slept: the first frame of a run comes after the marker's fsyncs (a busy disk: hundreds of ms) */
+    for (int i = 0; i < 200; i++) { msleep(10); get(t, sizeof t); if (strcmp(t, dark)) break; }
     /* LED 1 = the fill's start, LED 11 of the driver; LED 3 = driver's 1 */
     check(strlen(t) == 73 && !strcmp(t + 66, "0000FD\n") && !strncmp(t + 6, "FD0000", 6),
           "written: LED 1 (blue) on the driver's 11, LED 3 (red) on its 1, at level 100's most");
