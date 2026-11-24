@@ -1483,6 +1483,7 @@ const FINDABLE = [
   ['Sounds', 'voice', 'sounds', 'wake sound chime earcon ringtone your own upload replace'],
   ['Sound packs', 'voice', 'sound-packs', 'sets themes share file soundpack'],
   ['Wi-Fi', 'system', 'wifi', 'network switch password ssid'],
+  ['Network address', 'system', 'address', 'static fixed ip address dhcp subnet mask gateway router dns'],
   ['Music Assistant on the screen', 'media', 'mass', 'token library browse queue speakers groups api', () => !!state.mass],
   ['Home app', 'screen', 'home-app', 'kiosk satellite face launcher start screen'],
   ['Settings file', 'system', 'settings-file', 'export import backup preset'],
@@ -3587,6 +3588,183 @@ function wifiDialog() {
   echo.call('GET', '/api/wifi').then((r) => { d.w = r.json(); paintList(); }).catch(() => {}).finally(() => scan());
 }
 
+// ---------------------------------------------------------------- the address (wifi.c; root's wifi.sh tries it: issue #191)
+
+// what wifi.c and root take: four numbers 0 to 255, no leading zeros
+const ipNum = (s) => {
+  const p = String(s).trim().split('.');
+  if (p.length !== 4 || p.some((x) => !/^(0|[1-9]\d{0,2})$/.test(x) || +x > 255)) return null;
+  return ((+p[0] << 24) | (+p[1] << 16) | (+p[2] << 8) | +p[3]) >>> 0;
+};
+const unicastIp = (n) => n !== null && (n >>> 24) !== 0 && (n >>> 24) !== 127 && (n >>> 24) < 224;
+// a subnet mask as its prefix (255.255.255.0 is 24; "/24" and "24" are taken too); null where it is no home network's
+const prefixOf = (s) => {
+  const t = String(s).trim().replace(/^\//, '');
+  if (/^\d{1,2}$/.test(t)) return +t >= 8 && +t <= 30 ? +t : null;
+  const n = ipNum(t); if (n === null) return null;
+  const p = 32 - Math.log2(((~n) >>> 0) + 1);
+  return Number.isInteger(p) && p >= 8 && p <= 30 ? p : null;
+};
+const maskOf = (p) => { const m = (0xffffffff << (32 - p)) >>> 0; return [24, 16, 8, 0].map((x) => (m >>> x) & 255).join('.'); };
+// what is wrong with a fixed address, in wifi.c's words (it checks again, and root after it); null when nothing is
+function addrProblem(f) {
+  const ip = ipNum(f.ip), pre = prefixOf(f.mask), gw = ipNum(f.gw), d1 = ipNum(f.dns1), d2 = f.dns2 ? ipNum(f.dns2) : undefined;
+  if (!unicastIp(ip)) return 'The address is not one a device can have (four numbers 0 to 255, as 192.168.1.50).';
+  if (pre === null) return 'The subnet mask is not one of a home network (255.0.0.0 to 255.255.255.252).';
+  if (!unicastIp(gw)) return 'The router\'s address is not one a device can have.';
+  if (!unicastIp(d1) || (d2 !== undefined && !unicastIp(d2))) return 'A DNS server\'s address is not one a device can have.';
+  const m = (0xffffffff << (32 - pre)) >>> 0, host = (~m) >>> 0, hi = (ip & host) >>> 0, hg = (gw & host) >>> 0;
+  if (((ip & m) >>> 0) !== ((gw & m) >>> 0)) return 'The router is not in the Echo\'s network: with that subnet mask the two addresses must begin alike.';
+  if (ip === gw) return 'That is the router\'s own address.';
+  if (!hi || hi === host) return 'That address is the network\'s own (the first or the last of it): no device can have it.';
+  if (!hg || hg === host) return 'The router\'s address is the network\'s own (the first or the last of it).';
+  return null;
+}
+// why root went back (wifi.sh address()), for a fixed address and for DHCP
+const ADDR_WHY = {
+  offline: () => 'The Echo is on no Wi-Fi network right now.',
+  inuse: (f) => `Another device answers at ${f.ip} already. Pick an address nobody has: one outside the range your router hands out.`,
+  noaddress: (f) => f ? `The Echo could not take ${f.ip}.` : 'No address came from the router (DHCP).',
+  nogateway: (f) => f ? `On ${f.ip}, the router at ${f.gw} did not answer: is that its address, and is the subnet mask right?` : 'The Echo got an address, but the router did not answer.',
+  unreached: (f) => `Nothing reached the Echo at ${f.ip} within two minutes: neither this page nor Home Assistant.`,
+  bad: () => 'The Echo did not take the settings.',
+};
+
+let addrCtl;
+function addressRow() {
+  const now = h('div', { class: 'row-val' }), btn = h('button', { onclick: addressDialog }, icon('pen'), 'Change…');
+  addrCtl = { paint: () => {
+    const w = state.wifi;
+    btn.disabled = !w;
+    now.replaceChildren(...(w ? [w.fixed ? 'Fixed' : 'Automatic (DHCP)', h('span', { class: 'row-val-sub' }, w.ip || location.hostname)]
+      : [h('span', { class: 'row-val-sub' }, 'Shows once the Echo has looked for networks')]));
+  } };
+  return infoRow('Network address', 'From your router, or one you fix', 'Automatic: your router hands the Echo its address (DHCP), as it does for most devices; a reservation in the router keeps it the same. Fixed: the Echo takes the address you give it on this Wi-Fi network, without asking the router. Pick one outside the range the router hands out, or two devices may end up with the same address. A new address is tried first: the Echo keeps it only once this page or Home Assistant reaches it there within two minutes, and goes back to what it had otherwise. A fixed address belongs to its network: a switch to another one goes back to automatic.',
+    btn, null, now);
+}
+
+// The dialog: automatic or fixed (filled in with what the Echo has now), then the change, followed from here: at the
+// old address while it answers, at the new one once it does there (the same browser key, so signed calls work there;
+// asking there is also what tells the Echo it was reached).
+function addressDialog() {
+  const m = modal('Network address', 'address');
+  const d = { w: null, fixed: false, busy: false, closed: false };
+  m.dlg.oncancel = (e) => { if (d.busy) e.preventDefault(); };
+  m.onclose = () => { d.closed = true; load().catch(() => {}); };
+  const field = (id, label, ph) => {
+    const i = h('input', { type: 'text', id, inputmode: 'decimal', autocomplete: 'off', spellcheck: 'false', maxlength: '15', placeholder: ph || '' });
+    i.oninput = () => paint();
+    return { i, el: h('div', { class: 'field' }, h('label', { for: id }, label), i) };
+  };
+  const F = { ip: field('addr-ip', 'Address', '192.168.1.50'), mask: field('addr-mask', 'Subnet mask', '255.255.255.0'),
+    gw: field('addr-gw', 'Router (gateway)', '192.168.1.1'), dns1: field('addr-dns1', 'DNS server', '192.168.1.1'), dns2: field('addr-dns2', 'Second DNS server', 'Optional') };
+  const vals = () => Object.fromEntries(Object.entries(F).map(([k, f]) => [k, f.i.value.trim()]));
+  const msg = h('p', { class: 'help ask-msg' });
+  const seg = ['Automatic (DHCP)', 'Fixed'].map((t, i) => h('button', { type: 'button', onclick: () => { d.fixed = !!i; paint(); if (i) F.ip.i.focus(); } }, t));
+  const save = h('button', { type: 'button', class: 'primary', onclick: () => run() }, 'Save');
+  const pool = (
+    callout('info', h('p', {}, 'Pick an address outside the range your router hands out (its DHCP pool, in the router\'s settings), or two devices may end up with the same one. The other fields are what the Echo has now: they rarely need a change.')));
+  const segBox = h('div', { class: 'seg', role: 'group', 'aria-label': 'Network address' }, seg);
+  const toAuto = h('p', { class: 'help', style: 'margin:0' }, 'The router hands the Echo its address again: it may be another one than now.');
+  const intro = h('p', { class: 'help', style: 'margin:0' }, 'The Echo tries a new address first and keeps it only once this page or Home Assistant reaches it there; if nothing does within two minutes, it goes back to what it has now by itself.');
+  function paint() {
+    const a = (d.w && d.w.address) || { mode: 'auto' }, here = a.mode === 'fixed' && a.here;
+    seg.forEach((b, i) => { const on = i === +d.fixed; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
+    const v = vals(), bad = d.fixed ? addrProblem(v) : null;
+    const same = d.fixed ? here && v.ip === a.ip && prefixOf(v.mask) === a.prefix && v.gw === a.gateway && v.dns1 === a.dns[0] && (v.dns2 || undefined) === a.dns[1] : !here;
+    msg.textContent = d.fixed && Object.values(v).slice(0, 4).every(Boolean) ? bad || '' : '';
+    msg.classList.toggle('f-bad', !!bad);
+    save.disabled = !d.w || !!bad || same || (d.fixed && !Object.values(v).slice(0, 4).every(Boolean));
+    form.replaceChildren(...[intro, segBox, ...(d.fixed ? [...Object.values(F).map((f) => f.el), msg, pool] : [here ? toAuto : null, msg])].filter(Boolean));
+  }
+  const form = h('div', { style: 'display:grid;gap:14px' });
+  m.body.append(form);
+  m.foot.append(h('button', { type: 'button', onclick: () => m.dlg.close() }, 'Cancel'), save);
+  echo.call('GET', '/api/wifi').then((r) => {
+    d.w = r.json();
+    const a = d.w.address || {}, c = d.w.current || {}, fx = a.mode === 'fixed' && a.here;
+    d.fixed = fx;
+    F.ip.i.value = fx ? a.ip : c.ip || ''; F.mask.i.value = fx ? maskOf(a.prefix) : c.netmask || '';
+    F.gw.i.value = fx ? a.gateway : c.gateway || ''; F.dns1.i.value = (fx ? a.dns[0] : (c.dns || [])[0]) || c.gateway || '';
+    F.dns2.i.value = (fx ? a.dns[1] : (c.dns || [])[1]) || '';
+    paint();
+  }).catch((e) => { msg.textContent = errText(e); });
+  paint();
+  m.show();
+
+  const step = h('div', { class: 'wifi-step' }), setStep = (t) => step.replaceChildren(h('span', { class: 'spin' }), h('span', {}, t));
+  function done(kind, r, f) {
+    d.busy = false; m.head.querySelector('.icon-btn').classList.remove('hidden');
+    const close = h('button', { type: 'button', class: 'primary', onclick: () => m.dlg.close() }, 'Close');
+    const link = (ip) => ip && ip !== location.hostname ? h('p', {}, h('a', { href: `http://${ip}:${echoPort()}/` }, 'Open its settings page there'), act(' (the action button approves this browser there once more).')) : null;
+    if (kind === 'ok') {
+      m.body.replaceChildren(callout('ok', h('p', {}, f ? `The Echo keeps ${f.ip} on this network now.` : `The Echo takes its address from the router again${r.ip ? `: ${r.ip} now` : ''}.`), link(f ? f.ip : r.ip)),
+        h('p', { class: 'help' }, 'Home Assistant finds it at a new address by itself: the Echo announces it on the network.'));
+    } else if (kind === 'failed') {
+      const why = (ADDR_WHY[r.reason] || (() => r.state === 'interrupted' ? 'It was cut short (did the Echo restart?).' : 'It did not work.'))(f);
+      m.body.replaceChildren(...[callout('bad', h('p', {}, why), h('p', {}, r.ip ? `The Echo is back on ${r.ip}, as before.` : 'The Echo went back to what it had before.')), link(r.ip)].filter(Boolean));
+    } else if (kind === 'lost') {
+      m.body.replaceChildren(callout('info', h('p', {}, f ? `The Echo has not answered here nor at ${f.ip} for a while. `
+        : 'The Echo has most likely taken another address from your router, and this page cannot follow it there. ',
+        'Find its address in Home Assistant: on the Echo\'s device page, under ', h('b', {}, 'Web UI address'), '.')));
+    } else m.body.replaceChildren(callout('bad', h('p', {}, r)));
+    m.foot.replaceChildren(close);
+  }
+  // the Echo at ip, if it is this one there: the answer to GET /api/wifi, else null
+  async function at(ip) {
+    try {
+      const base = baseOf(ip), hello = await (await fetch(base + '/api/hello', { cache: 'no-store', signal: within(3000) })).json();
+      if (hello.pub !== echo.hello.pub) return null;                // another device there: not this Echo
+      return (await new Echo(base, hello).call('GET', '/api/wifi', '', within(3000))).json();
+    } catch (e) { return null; }
+  }
+  // Where DHCP put it: the other Echos of its network hear its beacons (every 20 to 40 s) from the new address and
+  // list it in their hello
+  async function found() {
+    for (const ip of knownIps()) {
+      if (ip === location.hostname) continue;
+      try {
+        const hello = await (await fetch(baseOf(ip) + '/api/hello', { cache: 'no-store', signal: within(3000) })).json();
+        const me = (hello.members || []).find((x) => x.node === echo.hello.node);
+        if (me && me.ip && me.ip !== location.hostname) return me.ip;
+      } catch (e) { /* that one is away */ }
+    }
+    return null;
+  }
+  // the Echo, here or at its new address: the answer to GET /api/wifi, or null where it answers nowhere
+  async function look(f) {
+    try { return (await echo.call('GET', '/api/wifi', '', within(3000))).json(); } catch (e) { if (e.message === 'forged') throw e; }
+    if (f) return f.ip === location.hostname ? null : at(f.ip);
+    d.moved = d.moved || await found();
+    return d.moved ? at(d.moved) : null;
+  }
+  async function run() {
+    const v = vals(), f = d.fixed ? { ...v, prefix: prefixOf(v.mask) } : null;
+    d.busy = true; m.head.querySelector('.icon-btn').classList.add('hidden');
+    m.body.replaceChildren(step);
+    m.foot.replaceChildren(h('span', { class: 'help' }, 'Keep this open: the Echo keeps a new address only once something reaches it there, and this page asks there.'));
+    setStep('Asking the Echo…');
+    let id;
+    try { id = (await echo.call('POST', '/api/wifi/address', f ? `fixed ${f.ip} ${f.prefix} ${f.gw} ${f.dns1} ${f.dns2 || '-'}` : 'auto')).json().id; }
+    catch (e) { done('error', errText(e).replace(/^Error: /, '')); return; }
+    // wifi.sh: 30 s for the address and the router, 2 min to be reached, 45 s back
+    const t0 = Date.now();
+    let quiet = 0;
+    while (Date.now() - t0 < 240000 && !d.closed) {
+      await sleep(2000);
+      let w;
+      try { w = await look(f); } catch (e) { done('error', errText(e)); return; }
+      const r = w && w.address_result && w.address_result.id === id ? w.address_result : null;
+      if (!w) { if (++quiet > 3) setStep('The Echo does not answer right now: it is changing its address.'); continue; }
+      quiet = 0;
+      if (!r || r.state === 'applying') setStep(f ? `Setting ${f.ip}…` : 'Asking the router for an address…');
+      else if (r.state === 'waiting') setStep(`On ${f.ip} now: waiting for this page or Home Assistant to reach it there…`);
+      else { done(r.state === 'ok' ? 'ok' : 'failed', r, f); return; }
+    }
+    if (!d.closed) done('lost', null, f);
+  }
+}
+
 function buildSystem(el, list) {
   const file = h('input', { type: 'file', accept: '.conf,.txt,text/plain', class: 'hidden' });
   importMsg = h('pre', { class: 'help import-msg' });
@@ -3605,6 +3783,7 @@ function buildSystem(el, list) {
   const named = (id, row) => { row.id = id; return row; };
   el.append(flow([
     titled('This Echo', nameRow(), named('note', noteRow()), state.wifi !== undefined ? named('wifi', wifiRow()) : null,
+      state.wifi !== undefined ? named('address', addressRow()) : null,
       list.filter((s) => !s.name.startsWith('kiosk_') || state.kiosk_app).map(settingRow)),
     titled('Where software comes from', named('sources', sourcesBox)),
     titled('When something is wrong', named('log', logRow()),
@@ -3757,6 +3936,7 @@ function renderSystem() {
   if (nameCtl) nameCtl.paint();
   if (noteCtl) noteCtl.paint();
   if (wifiCtl) wifiCtl.paint();
+  if (addrCtl) addrCtl.paint();
   const s = state.adb;
   // what the Echo says a press would serve now (state.button): this page's adb, or it is not said to wait
   const b = state.button || { holds: s.waiting ? 'adb' : 'none', mine: s.waiting, left_s: 0 }, own = s.waiting && b.holds === 'adb' && b.mine;

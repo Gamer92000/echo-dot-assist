@@ -91,7 +91,8 @@ make unit                                         # C unit tests; microWakeWord 
                                                   # one wait for the button, nobody else's login in the time after each
                                                   # (one_wait: contested, run out, approved; adb; "off"), the count of asks
 .venv/bin/python tests/fake_web_artifacts.py      # models copied from one Echo to another through the page, root's installer
-.venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli;
+                                                   # the fixed address (both worlds, netwatch's keep, the way back)
 .venv/bin/python tests/fake_wifi_join.py          # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py            # microWakeWord: models from the page, the engine switch, real detections on the PC
 .venv/bin/python tests/fake_plugins.py            # plugins: hassmic under the launcher with a stand-in wake word plugin (docs/plugins.md)

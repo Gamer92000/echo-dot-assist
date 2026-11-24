@@ -2,6 +2,23 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — A fixed network address
+
+- **The Echo can keep a fixed IP address** (issue #191), set on the settings page: System, "Network address",
+  Automatic (from your router, as before) or Fixed, with the address, subnet mask, router and DNS servers filled in
+  from what the Echo has now. Handy where the router has no room for another reservation. The Echo tries the address
+  first: it makes sure no other device answers there, takes it, checks the router answers, and keeps it only once the
+  settings page or Home Assistant reaches it there within two minutes; otherwise it goes back to what it had and the
+  page says why. The page follows it to the new address. A fixed address belongs to its Wi-Fi network: switching to
+  another network goes back to automatic, and a factory reset forgets it. On every model: the Dots and the Echo 2 use
+  Amazon's own static mode of the firmware, the Echo Shows and the Echo Input Android's (the network's own IP
+  settings). After a restart a Dot first takes an address from the router for a few seconds, then its fixed one.
+- **The guided setup asks for it too** (`scripts/setup.sh`): just before the install, "Fixed address (Enter: from the
+  router, as now)", the mask, router and DNS servers offered as the Echo has them. It is set once the satellite runs,
+  the same way as from the settings page; the PC running the setup is what reaches the Echo at the new address, so it
+  should be on the Echo's network. Setup from a phone (Improv, the Home Assistant app) cannot carry an address: set it
+  on the settings page afterwards.
+
 ## 2026-11-24 — Updates and plugins from a server of your own
 
 - **Online updates and the plugin index can come from a server of your own** (issue #175). The System page has a new

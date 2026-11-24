@@ -36,7 +36,8 @@
  *   Amazon itself (davs.c): POST /api/davs/login starts a code pair login (the code on the page, GET /api/davs tells
  *   where it stands), /api/davs/fetch downloads an artifact; installing is the artifacts install.  The tokens of the
  *   registration never reach the page — plain HTTP.
- *   Wi-Fi (wifi.c): GET /api/wifi, POST /api/wifi/scan and /api/wifi/join, signed; root scans and switches.  The one
+ *   Wi-Fi (wifi.c): GET /api/wifi, POST /api/wifi/scan, /api/wifi/join and /api/wifi/address, signed; root scans,
+ *   switches and sets the address.  The one
  *   secret that comes from the page, the network's password, travels sealed (unseal below), and only the PSK made from
  *   it goes on to root.
  *   The timer's own sound (sounds.c): POST /api/timer-sound, a WAV the page made of the file picked, signed; the
@@ -2229,6 +2230,8 @@ static void mass_api(int fd, struct req *r)
  * /api/wifi/scan   POST  root scans                                              -> {"id"}
  * /api/wifi/join   POST  "<ssid hex> <password sealed, hex | ->": root switches,  -> {"id"}
  *                        and goes back to the network it was on if the Echo does not get on the new one
+ * /api/wifi/address POST "auto" | "fixed <ip> <prefix> <gateway> <dns> <dns2|->": the address on this network,
+ *                        tried and kept once the Echo was reached there (issue #191)   -> {"id"}
  * All signed; 409 while root is busy switching or a request waits. */
 static void wifi_api(int fd, struct req *r)
 {
@@ -2253,6 +2256,12 @@ static void wifi_api(int fd, struct req *r)
             rc = wifi_join(ssid, (size_t)sl, (const char *)pass, &id, &busy, err, sizeof err);
         }
         crypto_wipe(pass, sizeof pass); crypto_wipe(sealed, sizeof sealed);
+    }
+    else if (write && !strcmp(r->path, "/api/wifi/address")) {
+        char spec[160];
+        snprintf(spec, sizeof spec, "%s", r->body ? r->body : "");
+        spec[strcspn(spec, "\r\n")] = 0;
+        rc = wifi_address(spec, &id, &busy, err, sizeof err);
     }
     else snprintf(err, sizeof err, "not found");
     if (!rc) { snprintf(o, sizeof o, "{\"id\":%u}", id); respond_sjson(fd, r, 200, o); return; }

@@ -1393,6 +1393,29 @@ Run in this order. Each step says what it proves.
       on donut/biscuit/radar) + `state_setup_discovery_beacon` (all three). Page header, per Echo in the list, HA button
       (`LIST_BUTTON` 61 / `BUTTON_COMMAND` 62, device class identify, diagnostic). fake_web: page, unsigned, HA button.
       Not seen on a device yet.
+- [x] Fixed network address (issue #191, 2026-11-24; asked more than once: routers whose reservation list is full).
+      System page "Network address", every model.  Root's wifi.sh `address`: refused where another device answers ARP
+      for it, set, the router's ARP within 30 s, then up to 120 s for a TCP connection on the new address that was not
+      there as it was set (`/proc/net/tcp`, ESTABLISHED or TIME_WAIT; the page answers one request a connection and
+      closes first, so its connections sit in TIME_WAIT on the Echo), else back to what it had.  The Dots: Amazon's
+      `dhcpcd-static` init service (donut, biscuit, radar, cannoli: `/system/bin/dhcpcd_static.sh`, label
+      dhcpcd-static_exec, `dhcpcd -S ...` from `dhcp.wlan0.*`; never used by stock that we found).  Dot 2, 2026-11-24
+      by hand: 192.168.103.250/22 in a second, routes, resolv.conf (8.8.8.8 added third by Amazon's hook), github.com
+      resolved; back to `dhcpcd-wlan0`: its lease (BOUND) at once; init's stop kills it outright, so the address goes
+      by `ifconfig 0.0.0.0`.  Then the whole chain from the page (this build, ota-push): kept in 14 s, the page followed
+      it there, hassmic announced the new address (netaddr), Home Assistant back by itself.  After a reboot: back on
+      the fixed address at boot+34 s by netwatch's keep, but wifisvc (still running) started its dhcpcd again and keep
+      set it once more at +50 s: keep now waits until wifisvc is stopped.  Back to DHCP from the page: 2 s, the old
+      lease.  Android: checkers (Android 7) took `addOrUpdateNetwork` with a `StaticIpConfiguration` (dumpsys: IP
+      assignment STATIC) and stayed on its lease; `reassociate()` -> the fixed address ~14 s later (route in table
+      wlan0, DNS from it).  Back to DHCP the same way: its DhcpClient asked for the address it had and the router gave
+      it (192.168.103.212, then .213: the fixed one).  Whole chain on checkers through the API from a page: kept in
+      32 s; DHCP again by root's request.  `mkwifictl.py --framework`: every signature on checkers, cronos, crown,
+      athena (Android 9), cupcake.  Not tried: athena and cupcake on a device; the Show's own dialog in a browser (its
+      voucher login does not finish in headless Chromium; the dialog itself was run on the Dot 2).
+      The guided setup asks too (`fixed_ask` with the settings to start with, defaults from the Echo's lease;
+      `fixed_set` after the preset: the request over adb, the PC's own GETs of the new address as the reach).  Its
+      `fixed_set` against the Dot 2 over USB: kept, said so.  Improv (the phone's setup) has no field for it.
 - [~] Wi-Fi switch on the settings page (2026-10-07, asked: scan plus a name typed by hand, password before or after
       picking, back to the old network if the new one fails, warn about the new address). hassmic (puffin) may not talk
       to wpa_supplicant: `state/wifi-request` for root (`main.sh` ota_watch, every 2 s) -> `scripts/device/wifi.sh` in the

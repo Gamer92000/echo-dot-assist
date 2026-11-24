@@ -100,7 +100,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_web_artifacts.py  # models copied Echo to Echo through the page, root's installer, after a restart
 .venv/bin/python tests/fake_web_ring.py       # light ring designs: library, assignments, apply with the test as root,
                                              # the turned files -G makes, what plays, root failing, caps
-.venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli
+.venv/bin/python tests/fake_web_wifi.py       # Wi-Fi switch: sealed password, PSK, root's wifi.sh against a fake wpa_cli;
+                                             # the fixed address (issue #191): refusals, tried, kept once reached, back,
+                                             # netwatch's keep (WIFI_TCP: a stand-in /proc/net/tcp)
 .venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
@@ -1328,6 +1330,21 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   marks `dhcp.<if>.result`, restarts init's `dhcpcd-<if>` (not `dhcpcd -n`: it waited for a carrier for good), waits
   for the hook to write it) and its router answers ARP; else it removes it and selects the old one. Talks to wpa_supplicant's global socket when the interface's is gone. netwatch
   leaves wifisvc alone while `lock/` exists and runs `wifi.sh status` on every address change; `clean` at the firewall start.
+  The fixed address (issue #191, System page "Network address", `POST /api/wifi/address` "auto" | "fixed <ip>
+  <prefix> <gw> <dns> <dns2|->", `wifi_address`, checked there and again by root's `fixed_ok`): request "address ...",
+  root's `address()` refuses one another device answers ARP for, sets it, waits for the router (`static_up`), then
+  `REACH_SECS` (120) for a TCP connection to or from the new address that was not in the snapshot taken as it was set
+  (`reached`, `/proc/net/tcp`, ESTABLISHED or TIME_WAIT: the page's one-request connections), else back to what it
+  had; the record `wifi/address` ("fixed <ip> <prefix> <gw> <dns> <dns2|-> <ssid hex>", root's; none = DHCP),
+  `address-result`.  The Dots: init's `dhcpcd-static` (Amazon's `dhcpcd_static.sh`, values from the `dhcp.wlan0.*`
+  properties) in place of `dhcpcd-wlan0` (`dhcp_off` stops both); netwatch runs `wifi.sh keep` (once wifisvc is
+  stopped) to put it back after wifisvc's DHCP and to drop it on another network.  Android: wifictl `ip` (the
+  network's `StaticIpConfiguration`, `setIpAssignment`) then `reassoc`: checkers stores it and takes it only at a
+  reassociation.  A switch that works drops the record (it was the old network's); `back()` sets it again; `forget`
+  removes it.  The page follows the Echo to the new address with the same browser key (`new Echo(base, hello)`), and
+  after DHCP finds it through the other Echos' hello members.  The guided setup asks for one (`scripts/lib/setup.sh`
+  `fixed_ask` before the install, `fixed_set` once the satellite runs: the same request as root's, written over adb;
+  the PC asks the new address for the page's hello while root waits; `make unit-setup_fixed`).  Improv carries none.
 - **Setup (OOBE) and factory reset** (`improv.c`, `main.c`): not set up = from an install or a reset until Home
   Assistant's voice assistant subscribed (`core_link` ready -> `state/adopted`; an existing `state/api_key` counts);
   stock's orange `setup-mode` spinner meanwhile (`core_oobe`).  `improv.c` = Improv Wi-Fi over BLE on `ble.c`'s peripheral role (advertising +

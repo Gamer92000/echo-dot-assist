@@ -12,6 +12,10 @@ int    wifi_scan(unsigned *id, int *busy, char *err, size_t errsz);
 /* Ask root to switch to SSID (1..32 bytes) with PASS: "" for an open network, 8..63 printable characters, or the PSK as
  * 64 hex digits.  The PSK is derived here (PBKDF2), so the password itself goes nowhere.  As wifi_scan otherwise */
 int    wifi_join(const uint8_t *ssid, size_t n, const char *pass, unsigned *id, int *busy, char *err, size_t errsz);
+/* Ask root for the address on the network the Echo is on (issue #191): SPEC "auto" (DHCP) or "fixed <ip> <prefix 8..30>
+ * <gateway> <dns> <dns2|->".  Checked here first (ERR in words for the page), then by root, which tries it and keeps it
+ * only once the Echo was reached on it.  As wifi_scan otherwise */
+int    wifi_address(const char *spec, unsigned *id, int *busy, char *err, size_t errsz);
 /* For Improv (improv.c), which waits for the answers itself: */
 struct wifi_net { uint8_t ssid[32]; size_t n; int signal, b24, b5; const char *sec; };     /* sec: open psk sae eap wep owe */
 /* the networks of scan ID, strongest first, one per name; -1 while that scan has not answered */
@@ -21,8 +25,10 @@ int    wifi_seen(const uint8_t *ssid, size_t n);
 /* switch ID: 0 under way, 1 on the network (IP its address), -1 failed (WHY: wifi.sh's reason, "unanswered" if root
  * never took the request) */
 int    wifi_join_result(unsigned id, char *ip, size_t cap, char *why, size_t wcap);
-/* {"current":{"ssid","state","ip"}|null,"busy","pending":{"kind","id","stale"}|null,"scan":{"id","networks":[...]}|null,
- *  "result":{"id","state","ssid","hex","ip","saved","reason","back"}|null}: see wifi.c */
+/* {"current":{"ssid","hex","state","ip","netmask","gateway","dns":[]}|null,"busy","pending":{"kind","id","stale"}|null,
+ *  "scan":{"id","networks":[...]}|null,"result":{"id","state","ssid","hex","ip","saved","reason","back"}|null,
+ *  "address":{"mode":"auto"}|{"mode":"fixed","ip","prefix","gateway","dns":[],"ssid","here"},
+ *  "address_result":{"id","state","ip","reason"}|null}: see wifi.c */
 size_t wifi_status_json(char *out, size_t cap);
 /* {"ssid","ip"} of the network the Echo is on, or null: for the settings page's state */
 size_t wifi_current_json(char *out, size_t cap);

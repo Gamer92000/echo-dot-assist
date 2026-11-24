@@ -420,7 +420,7 @@ host: $(HOST_TESTS) $(OUT)/hassmic-qemu
 UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/logread.c src/hassmic/noise.c src/third_party/monocypher.c
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight alexaoff \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff \
 	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall
 unit: $(addprefix unit-,$(UNIT_TESTS))
 # the plugins' launcher on the PC: the protocol, the sandbox as far as x86_64 shows it (a static test program)
@@ -611,6 +611,9 @@ unit-web_loudness:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_loudness_test.py; elif [ -n "$$CI" ]; then echo "web loudness: node missing"; exit 1; else echo "web loudness: node missing, skipped"; fi
 unit-setup_wipe:
 	bash tests/unit/setup_wipe_test.sh
+# the guided setup's fixed address (issue #191): its checks against the page's, and fixed_set against stand-ins
+unit-setup_fixed:
+	bash tests/unit/setup_fixed_test.sh
 # a fork's own releases (scripts/fork-release.sh, keys/release.conf, secrets/fork.conf), against a stand-in gh
 unit-fork_release:
 	bash tests/unit/fork_release_test.sh

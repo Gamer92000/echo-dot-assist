@@ -711,7 +711,8 @@ wifi_awake() {
     awake_said=$r
 }
 
-# While the settings page switches networks (wifi.sh holds its lock), the link is that script's business: no wifisvc.
+# While the settings page switches networks or sets the address (wifi.sh holds its lock), the link is that script's
+# business: no wifisvc.
 # Whenever the address changes, wifi.sh writes down which network the Echo is on, for the page: wpa_supplicant can also
 # move to another saved network by itself when the one it is on goes away.
 netwatch() {
@@ -742,6 +743,12 @@ netwatch() {
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         psk_only
+        # a fixed address (issue #191, wifi.sh keep): wifisvc's dhcpcd-wlan0 (a boot, a lost network) gives way to it;
+        # the Dots only (Android's framework keeps it with the network), and only where one is set or still runs.  Not
+        # while wifisvc runs: it starts its dhcpcd again (Dot 2, 2026-11-24: set at boot+34 s, DHCP again, set once
+        # more at boot+50 s once the look above had stopped wifisvc)
+        [ -z "$ANDROID" ] && [ -f $D/wifi.sh ] && { [ -f $WIFI/address ] || [ "$(getprop init.svc.dhcpcd-static)" = running ]; } &&
+            { [ -z "$WIFI_SERVICE" ] || [ "$(getprop init.svc.$WIFI_SERVICE)" != running ]; } && sh $D/wifi.sh keep
         android_tell
         ledc_watch
         alexa_back

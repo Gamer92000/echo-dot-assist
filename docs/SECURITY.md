@@ -168,7 +168,7 @@ leaves it.
 ## hassmic and root
 
 hassmic runs as a user of its own, not as root, so that a flaw in it does not hand over the whole Echo. Root acts on its
-requests (updates, models, Wi-Fi, the light ring, adb, restarts, the clock) only through files in hassmic's folder and
+requests (updates, models, Wi-Fi and the network address, the light ring, adb, restarts, the clock) only through files in hassmic's folder and
 treats them as hostile. It moves each request into a folder of its own before it looks at it, and takes it only as a
 plain file with no other name (no link, no FIFO, no hard link to a file of root's); models are read as hassmic's user.
 The update and model folders are checked to be hassmic's own, not a link to elsewhere. Root writes its answers in its

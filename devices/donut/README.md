@@ -249,7 +249,8 @@ scripts/wifi-join.sh                                     # refuses to run withou
 
 - **Do not reboot before step 5**: the Wi-Fi profile survives a reboot, this lock does not. Blocking the Echo's
   internet at the router is a good idea anyway.
-- Give the Echo a fixed address (DHCP reservation).
+- Give the Echo a fixed address: a DHCP reservation in your router, or, once it is installed, one of its own on its
+  settings page (System, Network address; `scripts/setup.sh` asks for one).
 - "Local" = private ranges, link-local, multicast, so Home Assistant may sit in another local subnet or VLAN.
 
 ### 5. Install it, adopt it in Home Assistant

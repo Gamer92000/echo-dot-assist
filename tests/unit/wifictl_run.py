@@ -29,6 +29,53 @@ class Config:                                                  # android.net.wif
     def __init__(self):
         self.networkId, self.SSID, self.preSharedKey, self.hiddenSSID = -1, None, None, False
         self.status, self.allowedKeyManagement = 2, set()
+        self.ipAssignment, self.staticIp = "UNASSIGNED", None
+
+    def setIpAssignment(self, a):
+        assert isinstance(a, Enum) and a.n in ("STATIC", "DHCP"), a
+        self.ipAssignment = a.n
+
+    def setStaticIpConfiguration(self, s):
+        assert s is None or isinstance(s, StaticIp), s
+        self.staticIp = s
+
+
+class JList:                                                   # java.util.ArrayList
+    JAVA = "java.util.ArrayList"
+
+    def __init__(self):
+        self.items = []
+
+    def add(self, x):
+        self.items.append(x); return True
+
+
+class Inet:                                                    # java.net.Inet4Address, from getByName
+    JAVA = "java.net.Inet4Address"
+
+    def __init__(self, s):
+        parts = s.split(".")
+        assert len(parts) == 4 and all(p.isdigit() and int(p) < 256 for p in parts), f"getByName({s!r}) would look it up"
+        self.s = s
+
+
+class LinkAddress:                                             # android.net.LinkAddress(String "a.b.c.d/n")
+    JAVA = "android.net.LinkAddress"
+
+    def __init__(self, s):
+        a, n = s.split("/")
+        Inet(a); assert 0 <= int(n) <= 32
+        self.s = s
+
+
+class StaticIp:                                                # android.net.StaticIpConfiguration
+    JAVA = "android.net.StaticIpConfiguration"
+
+    def __init__(self):
+        self.ipAddress, self.gateway, self.dnsServers = None, None, JList()
+
+    def view(self):
+        return (self.ipAddress.s, self.gateway.s, [d.s for d in self.dnsServers.items])
 
 
 class Info:                                                    # android.net.wifi.WifiInfo
@@ -88,6 +135,7 @@ class Wifi:
         if not n: return False
         self.nets.remove(n); self.calls.append(("remove", i)); return True
     def reconnect(self): self.calls.append("reconnect")
+    def reassociate(self): self.calls.append("reassociate")
     def setWifiEnabled(self, pkg, on): self.enabled = on; self.calls.append(("wifi", pkg, on)); return True
 
 
@@ -120,6 +168,7 @@ class Wifi9(Wifi):
     def enableNetwork(self, i, others, pkg): self._p(pkg); return Wifi.enableNetwork(self, i, others)
     def removeNetwork(self, i, pkg): self._p(pkg); return Wifi.removeNetwork(self, i)
     def reconnect(self, pkg): self._p(pkg); self.calls.append("reconnect")
+    def reassociate(self, pkg): self._p(pkg); self.calls.append("reassociate")
     def setWifiEnabled(self, pkg, on): self._p(pkg); return Wifi.setWifiEnabled(self, pkg, on)
 
 
@@ -139,9 +188,10 @@ class Audio:
 
 
 class JavaEnv(dexrun.JavaEnv):
-    CLASSES = (Config, Info, Scan, Wifi, Slice, Audio)
+    CLASSES = (Config, Info, Scan, Wifi, Slice, Audio, JList, Inet, LinkAddress, StaticIp)
     NAMES = ("android.os.ServiceManager", "android.os.SystemProperties", "android.net.wifi.IWifiManager$Stub", "android.media.IAudioService$Stub",
-             "android.os.IBinder", "android.net.wifi.ScanSettings", "android.os.WorkSource")
+             "android.os.IBinder", "android.net.wifi.ScanSettings", "android.os.WorkSource",
+             "android.net.IpConfiguration$IpAssignment", "java.net.InetAddress", "java.lang.Object")
 
     def __init__(self, wifi, audio=None):
         super().__init__(mk.PROG)
@@ -157,6 +207,10 @@ class JavaEnv(dexrun.JavaEnv):
             assert args == ["binder:wifi"]; return self.wifi
         if cls == "android.media.IAudioService$Stub":
             assert args == ["binder:audio"]; return self.audio
+        if cls == "android.net.IpConfiguration$IpAssignment":
+            assert name == "valueOf" and args[0] in ("STATIC", "DHCP", "UNASSIGNED"); return Enum(args[0])
+        if cls == "java.net.InetAddress":
+            assert name == "getByName"; return Inet(args[0])
         return super().static_call(cls, name, args)
 
 
@@ -230,6 +284,20 @@ def main():
           "volume-max: voice call, system and music at their maximum, as \"root\" (no Wi-Fi asked)")
     out, _, _ = run(w, "reassociate")
     check(out == ["OK"] and w.calls[-1] == "reconnect", "reassociate: reconnect")
+    out, _, _ = run(w, "reassoc")
+    check(out == ["OK"] and w.calls[-1] == "reassociate", "reassoc: reassociate")
+    # a fixed address on network 1, its key kept (the privileged list's own config goes back in)
+    n1 = w.net(1); n1.preSharedKey = "k" * 64
+    out, _, _ = run(w, "ip", "1", "192.168.1.50/24", "192.168.1.1", "192.168.1.1", "9.9.9.9")
+    c1 = w.net(1)
+    check(out == ["1"] and c1 is n1 and c1.ipAssignment == "STATIC" and c1.staticIp.view() == ("192.168.1.50/24", "192.168.1.1", ["192.168.1.1", "9.9.9.9"])
+          and w.calls[-1][:3] == ("add", '"Café"', "k" * 64), "ip: StaticIpConfiguration on the network, STATIC, its key kept, the id printed")
+    out, _, _ = run(w, "ip", "1", "10.0.0.7/8", "10.0.0.1", "10.0.0.1")
+    check(out == ["1"] and w.net(1).staticIp.view() == ("10.0.0.7/8", "10.0.0.1", ["10.0.0.1"]), "ip: one DNS server")
+    out, _, _ = run(w, "ip", "1", "auto")
+    check(out == ["1"] and w.net(1).ipAssignment == "DHCP" and w.net(1).staticIp is None, "ip auto: DHCP, no static configuration")
+    out, _, _ = run(w, "ip", "9", "auto")
+    check(out == ["FAIL"], "ip of no such network: FAIL")
     # Android 9: the same verbs through the signatures with a package name; every call must carry "android"
     w9 = Wifi9()
     out, _, _ = run(w9, "wifi-on")
@@ -257,6 +325,12 @@ def main():
     check(out == ["OK"] and not w9.nets, "api 28: remove (id, package)")
     out, _, _ = run(w9, "reassociate")
     check(out == ["OK"] and w9.calls[-1] == "reconnect", "api 28: reassociate")
+    out, _, _ = run(w9, "add", "486f6d65", psk)
+    out, _, _ = run(w9, "ip", out[0], "192.168.1.50/24", "192.168.1.1", "192.168.1.1")
+    check(out == ["1"] and w9.net(1).ipAssignment == "STATIC" and w9.net(1).staticIp.view()[0] == "192.168.1.50/24",
+          "api 28: ip through the privileged slice and addOrUpdateNetwork(config, package)")
+    out, _, _ = run(w9, "reassoc")
+    check(out == ["OK"] and w9.calls[-1] == "reassociate", "api 28: reassoc(package)")
     check(set(w9.pkgs) == {"android"}, "api 28: every call carried the package")
     check.done("wifictl.dex: all verbs as expected")
 

@@ -1130,6 +1130,22 @@ why. Once the new one works it forgets the old ones. Expect a new IP address: fi
 Assistant (which finds the Echo again within a few minutes if it reaches that network), and approve the browser there
 once more. WPA2 and open networks only; a WPA2/WPA3 mixed network joins as WPA2 (tried on an Echo 2).
 
+**Network address** (System; issue #191): Automatic, the router hands the Echo its address (DHCP; a reservation in the
+router keeps it the same), or Fixed: the address, subnet mask, router and one or two DNS servers, filled in from what
+the Echo has now. Pick an address outside the range your router hands out (its DHCP pool), or two devices can end up
+with the same one. The Echo tries it before keeping it: if another device already answers at that address it refuses
+at once; else it takes the address, waits up to 30 s for the router to answer there, then up to two minutes for
+something to reach it there (the settings page, which asks at the new address by itself, or Home Assistant, which
+finds it again by its announcement). Only then is it kept; otherwise the Echo goes back to what it had (the fixed
+address before, or DHCP) and the page says why. Back to Automatic the same way; the router may hand out another
+address then, which the page finds through your other Echos when it can. The fixed address is the Wi-Fi network's: a
+switch to another network goes back to Automatic (a failed switch comes back to it), and a factory reset forgets it.
+How: on the Dots and the Echo 2, Amazon's own static mode of the firmware (`dhcpcd-static`) in place of its DHCP
+client; after a restart the Echo takes an address from the router for some seconds before its fixed one is back. On
+the Echo Shows and the Echo Input, Android's own IP settings of the network, which it keeps by itself. The guided
+setup (`scripts/setup.sh`) asks for one just before the install and sets it the same way once the satellite runs (the
+PC is what reaches it there, so it should be on the Echo's network); setup from a phone cannot carry an address.
+
 **Log** (System): `boot.log` with a filter, the older part, and a download for bug reports ([reading it](../README.md#when-something-is-wrong)). The Sendspin token is
 blanked; the rest travels unencrypted, like the whole page.
 
