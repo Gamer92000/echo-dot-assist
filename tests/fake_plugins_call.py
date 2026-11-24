@@ -221,13 +221,21 @@ async def main():
         check(await until(lambda: "p- call_incoming" in ui()[u1:] and "p+ call_connected" in ui()[u1:], 1) and not any("live: " in l for l in plog()[n0:]),
               f"... the ring's light and the screen leave ringing at the press, before the far side is in: {re.findall(r'(?:p[+-]) call[^\n]*', ui()[u1:])}")
         check((fp.plug(b, "testcall") or {}).get("call") == "answered", "its card: answered here, connecting")
-        # the cut, as the earcon thread logs it, and the far side's CALL_LIVE (1.5 s after the answer), each waited for:
-        # the cut comes before it is live, and no ringtone starts between the two.  It was looked at once after 0.8 s,
-        # which a loaded runner's earcon thread did not always make with its line (CI, 2026-11-24)
-        await until(lambda: "earcon: cut at" in text()[l1:], 5); await says("live: ", n0, 5)
-        seg = text()[l1:]; cut, live = seg.find("earcon: cut at"), seg.find("plugin testcall: live: ")
-        check(cut >= 0 and live > cut and "until stopped" not in seg[cut:live],
-              f"... and the ringtone is cut at the press, not played again while it connects ({cut}, {live})")
+        # The far side's CALL_LIVE (1.5 s after the answer) waited for, then the log read: from the answer on no ringtone
+        # starts, and the one playing then was cut ("earcon: cut at"), unless the press came in the loop's pause after
+        # one (main.c: 300 ms after each), when the last began a whole second (its length) or more before the answer.
+        # It was looked at once after 0.8 s, which a loaded runner's earcon thread did not always make with its line,
+        # and in the pause there is no cut to log (CI, 2026-11-24: one of two flaky runs)
+        await says("live: ", n0, 5); await until(lambda: "earcon: cut at" in text()[l1:], 1)
+        t = text(); ans = t.find("testcall: the call answered here", l1); live = t.find("plugin testcall: live: ", max(ans, 0))
+        cut = t.find("earcon: cut at", l1, live if live > 0 else len(t))
+        def at(k):                                  # the stamp of the line that holds position k
+            m = re.match(r"boot\+(\d+\.\d+) ", t[t.rfind("\n", 0, k) + 1:])
+            return float(m.group(1)) if m else None
+        last = t.rfind("until stopped", 0, ans)
+        paused = cut < 0 and last >= 0 and at(last) is not None and at(ans) is not None and at(ans) - at(last) >= 1.0
+        check(ans >= l1 and live > ans and "until stopped" not in t[ans:live] and (cut >= 0 or paused),
+              f"... and the ringtone is cut at the press, not played again while it connects ({cut - l1 if cut >= 0 else cut}, {live - l1}, paused {paused})")
         check(await says("live: 0 (0)", n0, 4) and await logged("testcall: the call is live (answered here)", l0), "then live")
         await act("try", what="slow")
         check(await says("room: 50 frames", n0, 5), "the room reaches it once answered")

@@ -757,7 +757,10 @@ def main():
         for n in cccd: phone.write(cccd[n], b"\x01\x00")
         check(phone.read(hd["state"]) == bytes([0x0b, prot.State.AUTHORIZATION_REQUIRED]), "...a phone that connects is asked for the button again")
         key(138, 1); key(138, 0)
-        check(phone.until(hd["state"], bytes([prot.State.AUTHORIZED])) and count("improv: authorized for") == 3, "...and the button works for it: authorized")
+        # (the log line waited for: hassmic's stderr reaches the file through its log reader, and the phone's
+        # notification came first on a loaded runner; counted exact once there)
+        check(phone.until(hd["state"], bytes([prot.State.AUTHORIZED])) and wait(lambda: count("improv: authorized for") >= 3, 3)
+              and count("improv: authorized for") == 3, "...and the button works for it: authorized")
         open(online, "w").close(); ctl.disconnect()
 
         # ---- the network comes back by itself and a phone just stays connected: its wait for the button is not
@@ -820,7 +823,8 @@ def main():
         check(phone.until(hd["error"], bytes([prot.Error.NOT_AUTHORIZED])), "...and its switch: not authorized")
         # the time a press opens is the Echo's: the phone that was there, or one that connects within it, none after
         key(138, 1); key(138, 0)
-        check(phone.until(hd["state"], bytes([prot.State.AUTHORIZED])) and count("improv: authorized for") == au + 1, "the action button with the phone connected and waiting: authorized")
+        check(phone.until(hd["state"], bytes([prot.State.AUTHORIZED])) and wait(lambda: count("improv: authorized for") >= au + 1, 3)
+              and count("improv: authorized for") == au + 1, "the action button with the phone connected and waiting: authorized")
         ctl.disconnect()
         check(wait(lambda: adv_state() == prot.State.AUTHORIZED, 2), "the phone leaves within the button's time: advertised as authorized")
         ctl.connect(); phone = Phone(ctl)
