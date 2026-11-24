@@ -3745,11 +3745,19 @@ Run in this order. Each step says what it proves.
       and one as it ends, so PowerManager's timeout counts from the sensor's end (30 s after the last movement); not
       while the timeout is the UI's (the clock), nor in Do not disturb.  The UI (`scene.c` `mo`, `face.c`
       `motion_holds`): with "keeps" no clock while it moves and the count from its end; motion starting under the
-      clock ends it only with "wakes" (else `mo_skip`: that motion holds nothing until it stops); neither in Do not
-      disturb.  Checked on the PC: `ui_test` (keeps without wakes under the clock, wakes, held past twice the timeout,
-      the count from the end, wakes alone, Do not disturb), `fake_screen_words.py` (off by default, `mo` told, the
-      band's wake and hold from a wobbling fake RX_STAT, the timeout from its end, Do not disturb, Wi-Fi motion off),
-      `fake_screen.py`, `fake_web.py`, `fake_ha_esphome_features.py`, `unit-ring_band`.  Open: seen on an Echo Show.
+      clock ends it only with "wakes" (else `mo_skip`: that motion holds nothing until it stops or anything else
+      happens, `scene_active`: a touch, the drawer, a request, an app; "under the clock" only where the clock shows,
+      not under an app past the timeout); neither in Do not disturb (`s->dnd`, also with the mic off, where
+      `face_mode` says M_MUTE).  The band's checks go on once a second while no renderer comes up (that wait was 30 s
+      at a time: a motion wake that late), and the old height back after a failed one starts its renderer anew (it
+      was left without one).  Checked on the PC: `ui_test` (keeps without wakes under the clock, wakes, held past
+      twice the timeout, the count from the end, wakes alone, Do not disturb, a touch on the clock under such motion,
+      motion under an app past the timeout, mic off with Do not disturb), `unit-ring_band` (wake, hold, the end's activity, Do not disturb, keeps alone, no
+      renderer), `fake_screen_words.py` (off by default, `mo` told, the band's wake and hold from a wobbling fake
+      RX_STAT, the timeout from its end, Do not disturb, Wi-Fi motion off), `fake_screen.py`, `fake_web.py`,
+      `fake_ha_esphome_features.py`.  Seen on the contributor's Echo Show 5 2nd gen (PR #190, 2026-11-15): on about
+      a second after walking in, held while moving, dark about a minute after leaving ("Screen sleeps after" not
+      stated).  Open: our own Shows.
 - [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
       `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
       (Brazil's before "America/"); the aligner (no MFA model for them in build.sh) skips them, the page's as the

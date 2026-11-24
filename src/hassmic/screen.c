@@ -112,8 +112,9 @@ static int words_on, words_hold = 8, timers_show;               /* (lock) */
 /* The idle screen (screen.h): the screen saver and its timeout, told to the UI with the words' settings (ck, at
  * wo_gen); the timeout read by ring_band.c too.  5 min: stock's screen_off_timeout_standard, what the Echo did before */
 static int clock_big, sleep_min = 5;                            /* (lock) */
-/* Wi-Fi motion as the idle screen's (screen.h): the settings, told with ck; moving, told as mo at mo_gen (not with ck: the
- * UI takes a ck as the settings changing, which ends the clock) */
+/* Wi-Fi motion as the idle screen's (screen.h): moving and the settings, told as mo at mo_gen, and again after every ck
+ * (a change of the settings is one of wo_gen's); moving not with ck: the UI takes a ck as the settings changing, which
+ * ends the clock */
 static int motion_keep, motion_wake, moving;                    /* (lock) */
 static unsigned mo_gen, mo_sent;
 static atomic_int ui_front;                                     /* the UI's "front": its face in front, the timeout the UI's */

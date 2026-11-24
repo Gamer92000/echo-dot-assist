@@ -206,8 +206,17 @@ async def main(e):
     check(e.log().count("band: motion wakes the screen") == n and e.log().count("band: motion keeps the screen on") == 1,
           "in Do not disturb: no wake, nothing held")
     await until(lambda: last("mo ") == "mo 0 1 1", 10)
-    e.page.set(do_not_disturb="off", wifi_motion="off")
-    check(await until(lambda: last("mo ") == "mo 0 1 1", 5), f"Wi-Fi motion off: never moving: {last('mo ')}")
+    e.page.set(do_not_disturb="off")
+    await walk()
+    check(last("mo ") == "mo 1 1 1", f"moving again: {last('mo ')}")
+    wobbling = True
+    async def wobble():                                          # on moving while Wi-Fi motion is switched off
+        while wobbling:
+            e.rx_stat(random.randint(106, 118)); await asyncio.sleep(0.1)
+    task = asyncio.ensure_future(wobble())
+    e.page.set(wifi_motion="off")
+    check(await until(lambda: last("mo ") == "mo 0 1 1", 5), f"Wi-Fi motion off while it moves: not moving: {last('mo ')}")
+    wobbling = False; await task; e.rx_stat(112)
 
     # the date's language: "Language you speak", told as "lg"; Automatic: the zone's, else none ("-": English)
     e.page.set(speech_language="ro")

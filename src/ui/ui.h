@@ -166,10 +166,10 @@ struct scene {
      * screen's timeout ("Screen sleeps after", minutes, 0 never); the last thing that happened, and whether the
      * clock shows (a touch on it only wakes the face) */
     int clock_big, saver_min, saver_on, saver_was, front_sent; long long active_at;
-    /* "mo": Wi-Fi motion now and its two settings (face.c: while it moves with "keeps", no clock; as it starts with
-     * "wakes", the clock gives way to the face); motion that began under the clock without "wakes" leaves it, and
-     * does not hold the screen until it stops (mo_skip) */
-    int moving, mo_keep, mo_wake, mo_skip;
+    /* "mo": Wi-Fi motion now and "keeps" (face.c: while it moves, no clock; "wakes", as it starts under the clock, ends
+     * it: scene.c); motion that began under the clock without "wakes" leaves it, and holds nothing until it stops or
+     * anything else happens (mo_skip, cleared by scene_active: a touch, the drawer, a request...) */
+    int moving, mo_keep, mo_skip;
     char lang[8];                       /* "lg": the language spoken at home, for the date (lang.c); "" English */
     char name[64], timers[256], peer[64], home[96], act[64], web[96];
     /* music as Sendspin tells it (scene.h: mt, mp, mc, art) */
