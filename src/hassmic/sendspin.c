@@ -311,8 +311,12 @@ static void *player_thread(void *arg)
             double e; tf_synced(&e); stat_t = raw_us();
             /* the rate: what the music plays at, the output's clock (the error's share of it besides: the queue's slots
              * read skewed); integral: what was learnt of it, kept */
-            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs\n",
-                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs);
+            /* mixer: how far the queue's model was moved towards the mixer's own count (audio_mixer.c, issue #225):
+             * what the output fell behind (+) or ran ahead since the stream's start, which the error alone never shows */
+            long long st = music_steered_us(); char steer[40] = "";
+            if (st != MUSIC_UNSTEERED) snprintf(steer, sizeof steer, ", mixer %+.2f ms", st / 1000.0);
+            fprintf(stderr, "sendspin: sync err %+.2f ms, clock ±%.2f ms, queued %zu KB, rate %+.0f ppm (integral %+.0f), %d resyncs%s\n",
+                    servo.smooth * 1e3, e / 1000, q_bytes / 1024, rate_sum / rate_n * 1e6, servo.drift * 1e6, resyncs, steer);
             rate_sum = 0; rate_n = 0;
             if (++stats % 60 == 0) { drift_of[routed] = servo.drift; drift_save(drift_of, drift_kept); }      /* 10 min */
         }

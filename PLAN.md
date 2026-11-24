@@ -847,6 +847,27 @@ Run in this order. Each step says what it proves.
       within ±115 ppm (slow excursions: ~1.5 ms early for 30-60 s, twice, then back), mean drift ~+10 ppm. One resync,
       +24.3 ms 0.4 s into a stream that resumed 0.5 s after Music Assistant reconnected, its clock still ±5.33 ms
       (±0.1 after a minute): older builds snap the same. Still to see: the sink's resampler (no PC test reaches it)
+      **The mixer's queue steered by its own count (2026-11-24, issue #225).** Two Echo 2s (radar) in one MA group
+      drifted apart audibly over 46 min while both logged `sync err ±0.00 ms, rate +25 ppm`; pause/resume brought them
+      back. On the mixer `music_queued_us` was a model only (written minus `CLOCK_MONOTONIC_RAW` at the nominal rate),
+      blind to an output that drains at a rate of its own or stalls. Measured on biscuit (`MixerGetNumBytes` against
+      the model, 48 kHz stereo silence written as sendspin.c does, the model held at 120 ms, 560 s): the count read
+      51-125 ms against the model's 95-145, their difference -58..-68 ms at every 10 s reading with no trend, the
+      mixer taking the stream at +0.05 ppm against `CLOCK_MONOTONIC_RAW` (least squares over 20 ms readings): the Dot
+      2's output is the CPU's clock, exactly; radar is the same MT8163V and codec, so a rate of its own is unlikely
+      there too, but stalls (xruns under load) or a path of its own are not ruled out, and nothing of radar was
+      measured. Now `mixsteer.h` (audio_mixer.c's music, Bluetooth speaker and plugin streams; not Voip): the count
+      minus the model is learnt 2 to 10 s after a stream's first write as its reference, then the model's t0 follows
+      it with a 20 s time constant, at most 10 ms a second; readings at random 10-30 ms intervals (read every 20 ms
+      on a 5 ms grid, the count's 10 ms steps biased the mean by 2-4 ms as a 25 ppm drift moved across them, in the
+      unit test); a count that never moved while the reference was taken steers nothing.  `make unit-mixsteer`
+      (12 seeds): an exact output moves < 1 ms in 30 min; ±25, +350, -1500 ppm followed within the 20 s lag (0.5,
+      7, 30 ms) + 1; an 80 ms stall followed, a 500 ms one at 10 ms/s. On biscuit with the header (the probe steering
+      as audio_mixer.c does, 850 s; a second probe beside it, 1490 s, drained at -0.01 ppm): the reference at 10.0 s,
+      moved within -0.28..+0.32 ms all along, no trend. The
+      log: Sendspin's 10 s line ends in `mixer %+.2f ms` (the model moved since the reference, on the mixer only),
+      and `audio: music stream: the mixer counts -x ms against the model, its reference` at each stream's 10 s.
+      Asked of the reporter: those two lines from both Echos while they drift.
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.

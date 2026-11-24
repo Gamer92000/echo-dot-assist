@@ -569,6 +569,7 @@ void      music_close(void) { s_close(&music, 0); }
  * steady latency.  Timed before that, a stream's first chunk was off by it.  150 ms: more than that, and within the
  * slots (PLAY_NBUF x 20 ms), so writing it never waits. */
 long long music_prime_us(void) { return 150000; }
+long long music_steered_us(void) { return MUSIC_UNSTEERED; }   /* the queue is the output's own: nothing to steer */
 
 /* The Bluetooth speaker stream: what a phone plays to the Echo (a2dp.c), the mixer's Bluetooth stream on the Dots.
  * Here a player of its own beside music, on the music stream like everything of ours.  Until it was there (-1) the

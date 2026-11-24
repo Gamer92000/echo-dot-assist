@@ -421,7 +421,7 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/logrea
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe firmware kiosk backlight alexaoff \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall
+	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall
 unit: $(addprefix unit-,$(UNIT_TESTS))
 # the plugins' launcher on the PC: the protocol, the sandbox as far as x86_64 shows it (a static test program)
 # and both seccomp programs, ARM's too, run in an interpreter against the table they were made from
@@ -682,6 +682,10 @@ unit-dropin:
 unit-resample:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/resample_test.c src/hassmic/resample.c -lm -o build/resample_test && build/resample_test
+# the Dots' music queue model steered towards the mixer's count (issue #225)
+unit-mixsteer:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/mixsteer_test.c -lm -o build/mixsteer_test && build/mixsteer_test
 # the page's band (web/ring.js) against ring_band.c's, pixel for pixel
 unit-band_map:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/band_map_test.py; elif [ -n "$$CI" ]; then echo "band map: node missing"; exit 1; else echo "band map: node missing, skipped"; fi

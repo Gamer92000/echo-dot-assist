@@ -2,6 +2,18 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Dots and Echo 2: Sendspin sees its own output fall behind
+
+- **A Sendspin group of Echos with Amazon's mixer (Dots, Echo 2) can no longer drift apart unseen** (issue #225). On
+  these Echos hassmic worked out how much music was still waiting to play from what it had written and the time that
+  had passed, assuming the speaker plays at exactly its sample rate. If an Echo's output ran at a rate of its own, or
+  the mixer stalled for a moment, that Echo fell behind (or ran ahead) while its log still said "sync err 0.00 ms".
+  It now checks that figure against the mixer's own count of what it has not played yet and follows it slowly, so the
+  sync works from what the Echo really plays. On an Echo Dot 2 the two agreed to within a millisecond for 25 minutes,
+  so nothing changes there; whether it is what made two Echo 2s drift apart is for their logs to show:
+  Sendspin's line every 10 seconds now ends in `mixer +x.xx ms`, how far the output fell behind (+) or ran ahead
+  since the music started.
+
 ## 2026-11-24 — Echo Show: Play works again after AirPlay into its group
 
 - **The Show's music screen no longer says "This Echo has no queue in Music Assistant yet" after AirPlay ends**

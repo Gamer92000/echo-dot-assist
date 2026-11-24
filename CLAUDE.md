@@ -526,7 +526,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (beacons, discovery, tags, handoff, pairing) at that fraction; rounds and the window keep theirs. Page: two cards with pros and cons (`HELP.arbitration_mode.modes`).
 - **Music**: `sendspin.c` (Music Assistant Sendspin player over `ws.c`/`noise.c`/`net.c`/`hash.c`, decodes via
   `dr_flac`/`minimp3`/libopus; in sync by a rate of its own, `resample.c`: a PI servo on the error steering a cubic
-  resampler, never frames skipped or repeated, which ticked on the Show 5's clock 350 ppm off; snap past 20 ms; a drift
+  resampler, never frames skipped or repeated, which ticked on the Show 5's clock 350 ppm off; snap past 20 ms; on the
+  mixer the queue is a model at the nominal rate steered by `MixerGetNumBytes`, `mixsteer.h`, issue #225; a drift
   learnt per route, the Echo's speaker or a Bluetooth one, kept in `state/sendspin.drift`, held 5 s after a snap; a
   fresh output primed with silence first, `music_prime_us()`: Android's AudioTrack takes its buffer at once as it
   starts, ~137 ms on the Show 5, which the queue leaves out; the A2DP sink resamples through resample.c too). `a2dp.c` + `a2dp_codecs.c` + `sbc.c` = Bluetooth A2DP sink (SBC, AAC via firmware FFmpeg

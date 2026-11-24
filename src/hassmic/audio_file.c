@@ -188,6 +188,7 @@ int       music_open(unsigned rate, unsigned channels)
     return r;
 }
 long long music_prime_us(void) { return music.burst_us ? 150000 : 0; }   /* as audio_android.c's, where there is a burst */
+long long music_steered_us(void) { return MUSIC_UNSTEERED; }   /* no mixer to ask */
 long long music_queued_us(void) { return s_queued_us(&music); }
 int       music_write(const void *data, size_t len) { return s_write(&music, data, len); }
 void      music_close(void) { s_close(&music); }

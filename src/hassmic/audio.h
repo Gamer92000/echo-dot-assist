@@ -3,6 +3,7 @@
 #define AUDIO_H
 #include <stddef.h>
 #include <stdint.h>
+#include <limits.h>
 
 #define CAP_RATE 16000
 
@@ -26,6 +27,10 @@ void      music_close(void);
 /* Silence a freshly opened music output wants before music_queued_us says what is in front of the speaker: 0 where
  * the queue drains as it plays (the Dots' mixer); audio_android.c's player takes AudioTrack's buffer's worth at once */
 long long music_prime_us(void);
+/* How far the music queue's model was moved since its reference (audio_mixer.c, mixsteer.h: the mixer's own count
+ * against the model), for the log; MUSIC_UNSTEERED where nothing steers it (other backends, before the reference) */
+#define MUSIC_UNSTEERED LLONG_MIN
+long long music_steered_us(void);
 
 /* What the music and Bluetooth streams' PCM is multiplied by before the mixer gets it: 1, or less while the volumes
  * are separate and MainVolume is louder than the music's (main.c); audio_call_gain the same for the Voip stream (Drop
