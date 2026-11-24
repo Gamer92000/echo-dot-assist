@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Music in sync through a busy moment
+
+- **A late answer no longer pulls Sendspin's clock off** (Music Assistant's multi-room sync). The Echo asked the server
+  for the time every 3 s as soon as its clock looked right, before it knew how fast the two clocks drift apart; an
+  answer read late (the Echo busy for a moment) was then believed nearly as much as the clock, and moved it by up to
+  tens of ms: a skip in the music, or the drift learnt the wrong way. Now it asks again before the clock could be more
+  than 1 ms off by then, a few more questions in the first seconds of a stream.
+
 ## 2026-11-24 — Joining Wi-Fi over USB keeps one network
 
 - **`scripts/wifi-join.sh` no longer piles up saved Wi-Fi networks on the Dots** (issue #213). Every run used to add

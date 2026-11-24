@@ -877,6 +877,17 @@ Run in this order. Each step says what it proves.
       log: Sendspin's 10 s line ends in `mixer %+.2f ms` (the model moved since the reference, on the mixer only),
       and `audio: music stream: the mixer counts -x ms against the model, its reference` at each stream's 10 s.
       Asked of the reporter: those two lines from both Echos while they drift.
+      **The time exchange's pace by the clock's predicted error (2026-11-24, CI's flakes).** The next client/time came
+      3 s later once `sqrt(poo)` (the offset's error now) was under 1 ms, with the drift known from a few exchanges
+      200 ms apart: over the 3 s the prior grew to several ms (an unloaded PC run: 3.4 ms at the fourth exchange), and
+      a reply the receive thread read late (half its delay in z, the same in e) was weighted by that prior: the clock
+      moved by up to the prior's width.  CI's parallel run: `sendspin-9` learnt +6.9 ppm against an output 500 ppm
+      slow (a ~3 ms shift in its last 3 s suffices: the integral learns from 5 s on), `sendspin` one resync of -104 ms
+      (a 96 ms chunk dropped whole, 105 ms of tone missing; a player thread away longer than the queue gives the same
+      line, which now says which: queued and the time since the last write).  Simulated (this filter, exchanges
+      ±0.3-1.5 ms, one reply 50 ms late, 270 runs): 26 ms off at most, 12 at the 95th percentile; with the pace chosen
+      by `tf_error_at` (the clock within 1/2/5 ms at the next exchange, else 200 ms) 1.2 ms, 14 exchanges in the first
+      30 s instead of 11.  A move over 5 ms by one exchange is logged.
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
