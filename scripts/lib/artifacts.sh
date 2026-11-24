@@ -61,7 +61,7 @@ update_block() {
         "ashell iptables -S hassmic_out | grep -q 'uid-owner.*-j DROP'" "" 60 120 ||
         { fail "the update block is not in place: unplug the Echo's power and run this again"; return 1; }
 }
-satellite_up() { waitfor "Waiting for the satellite|Satellite running" '[ -n "$(ashell pidof hassmic)" ]' "" 60 180; }
+satellite_up() { waitfor "Waiting for the satellite|Satellite running" satellite_running "" 60 180; }
 
 # install_whisper ID: into $D/whisper, apart from the wake words: the model carries a stray pryon.manifest (speaker ID)
 # that the scan of $D/models would take for one.  The hassmic started afterwards loads it.

@@ -764,6 +764,18 @@ root_thread() {
 # ashell CMD: adb shell, output without the carriage returns
 ashell() { adb shell "$@" | tr -d '\r'; }
 
+# satellite_running: the satellite's own hassmic runs.  pidof alone does not say so: at the satellite's start main.sh
+# runs hassmic as root for other jobs, -G (the light ring's 2422 files, then sysinstall.sh copies them with no
+# hassmic running at all) and -S (the avahi service file), and an update's staging runs -T.  On a first boot the copy
+# takes long: radar was up at boot + 129 s, and the "stays up" check had seen -G, then nothing (issue #224).  The
+# daemon is the one started with -P (main.sh's loop, always) and without -S; its log reader is a fork of it.  Command
+# lines read on the PC: the Echo's shells differ in what they have, cat they all have.  A pid gone is an empty line.
+satellite_running() {
+    adb shell 'for p in $(pidof hassmic); do cat /proc/$p/cmdline; echo; done' 2>/dev/null | tr '\0\r' '  ' |
+        grep ' -P ' | grep -v -q -E ' -S( |$)'
+}
+stays_up() { sleep 10; satellite_running; }
+
 # network_lock, network_wifi: every model's step_network after copying hassmic over, in two parts that can also be
 # called one by one (issue #49).  The lock: lockdown.sh closes adb over Wi-Fi, which stock opens at every boot, and
 # restarts adbd a second after it ends to do so (so not over adb over Wi-Fi: that connection would be gone for good).
@@ -846,14 +858,15 @@ install_satellite() {
     else task "Installing (the Echo reboots)" scripts/install-system.sh || return 1; fi
     [ -n "$DRY" ] || sleep 10
     wait_adb device || return 1
-    # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop
-    waitfor "Waiting for the satellite to start|Satellite started" '[ -n "$(ashell pidof hassmic)" ]' "" 60 180 &&
-        task "Checking it stays up" sh -c 'sleep 10; adb shell pidof hassmic | grep -q .' ||
+    # main.sh restarts a hassmic that dies, so it has to be seen twice, 10 s apart, to not be a crash loop.  A first
+    # boot installs the light ring's set before hassmic starts (radar: up at boot + 129 s), hence 240 s
+    waitfor "Waiting for the satellite to start|Satellite started" satellite_running "" 60 240 &&
+        task "Checking it stays up" stays_up ||
         { [ -n "$DRY" ] || { info "end of its log:"; ashell tail -8 /data/local/hassmic/boot.log | sed 's/^/    /'; }; return 1; }
     if [ -n "$PRESET" ]; then
         if task "Handing over the settings from $(basename "$PRESET")" push_preset "$PRESET" &&
            waitfor "Waiting for the satellite to take them|Settings taken" \
-               '[ -n "$(ashell pidof hassmic)" ] && [ -n "$(ashell ls $PRESET_ON_ECHO.applied 2>/dev/null)" ]' "" 30 90; then
+               'satellite_running && [ -n "$(ashell ls $PRESET_ON_ECHO.applied 2>/dev/null)" ]' "" 30 90; then
             [ -n "$DRY" ] || info "$(ashell "grep 'settings: preset applied' /data/local/hassmic/boot.log" | tail -1)"
         else
             warn "the settings were not taken; set them on the settings page"

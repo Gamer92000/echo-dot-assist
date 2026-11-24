@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Setup: a first boot that installs the light ring is no failure
+
+- **The guided setup no longer reports "Checking it stays up" failed on an Echo that is fine** (issue #224). On its
+  first boot after the install the Echo copies the light ring's animations before the satellite starts (an Echo 2nd
+  gen: about two minutes), and the setup took the tool that makes those files for the satellite, then saw nothing
+  while they were copied. It now waits for the satellite itself, up to four minutes.
+
 ## 2026-11-24 — One word on firmware and the unlock, for every model
 
 - **No list of which firmware versions still unlock.** The Echo Dot 3's warning that recent updates may leave an Echo
