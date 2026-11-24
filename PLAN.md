@@ -4256,6 +4256,20 @@ word and echo cancellation in a room, all checked on our unit (2026-11-15).
       buffers registered.  `ledctrl -s setup-mode` is accepted with the HAL answering.  Custom LED designs stay
       unported (the ACS `.animation_bin` format); stock animations are ledcontroller's again.
 
+- [x] **Installs by others, 2026-11-20/21 (issues #213, #216), and the README after them (PR #212, issue #221).**
+      #213: a factory-new 2022 unit (antirback tee 2, lk 1) stopped at `mcupm_a` as the README says, with
+      `scp_a` != `scp_b` and `mcupm_a` != `mcupm_b` (slots of different eras, unlike #200's identical pairs);
+      `cannoli-upgrade`, then the BL2 step (the zero-padded readback hash matched on all four), then the install.
+      #216: a Dot on NS6573/7577N (built 2026-06-12, U-Boot 2019.04-ge2847f4130) stopped at `tee1`: both TEEs
+      differed from 8349's, `mcupm_a` and `scp_a` matched; `cannoli-upgrade` and the install, and the ring worked
+      without the BL2 step.  So the upgrade is for any build before 8349, not the launch firmware only, and a TEE
+      that differs says nothing about BL2: the README now words both so.  #221 (and #213's "`--ota-parts` needs
+      assembling"): the README ran `payload_dump.py` on the OTA download, a zip around `payload.bin` (stored, not
+      compressed), which fails the `CrAU` check; `payload_dump.py` now reads the payload inside the zip in place
+      (same images as from the bare `payload.bin`, compared on 8349), and the README unpacks the builder's
+      `work/inputs/stock.zip` into `firmware/cannoli/unpack/parts`, which `--ota-parts` takes whole.  PR #212's
+      point, kept: every block of the README says which checkout it runs in (`cd ../<checkout>` first).
+
 - [x] **Setup from a phone (Improv) on cannoli, 2026-11-15, after a reset, the HA app on Android.**  Three faults, the
       BLE side fine throughout (phone connected, credentials taken, the trailing space a phone keyboard adds dropped).
       1. `wifi.sh lease()` went by `init.svc.dhcpcd-wlan0`, which init sets only at a service's first start: none on

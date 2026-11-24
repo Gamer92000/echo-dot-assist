@@ -2,6 +2,18 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-24 — Echo Dot 5: clearer install steps
+
+- **Every step of the Echo Dot 5's install says where it runs** (`devices/cannoli/README.md`, thanks to PR #212): each
+  block of commands starts by changing into the checkout it belongs to, so no step depends on where the one before
+  left you.
+- **Unpacking Amazon's update for the Dot 5 works as written** (issue #221). `tools/payload_dump.py` now takes the
+  update file as downloaded (a zip with `payload.bin` inside), and the README unpacks the copy the OS builder already
+  downloaded; before, the command failed with an `AssertionError`.
+- **The "Unsupported firmware prerequisite" fix is for any firmware older than 8349**, not factory-fresh Dots only
+  (issue #216: a Dot from June 2026 needed it too). The light ring fix is a separate one, needed only where the ring
+  stays dark after the install.
+
 ## 2026-11-24 — A fixed network address
 
 - **The Echo can keep a fixed IP address** (issue #191), set on the settings page: System, "Network address",
