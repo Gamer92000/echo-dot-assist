@@ -3407,16 +3407,17 @@ const wifiPassProblem = (p) => !p || /^[0-9a-fA-F]{64}$/.test(p) ? null
 
 // The access point the Echo is on and its last move between those of the network (root's roam.sh, issue #234)
 const wifiBand = (f) => (f >= 5925 ? '6 GHz' : f >= 4900 ? '5 GHz' : '2.4 GHz');
-const wifiWhen = (t) => { const d = new Date(t * 1000); return t < 1767225600 ? 'since the start' : d.toDateString() === new Date().toDateString()
-  ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
-const WIFI_HOW = { roam: 'moved by the Echo', ap: 'moved by the access point', self: 'joined again' };
+// the Echo's clock before Home Assistant set it says 1970 or so: no time then
+const wifiWhen = (t) => { const d = new Date(t * 1000); return t < 1767225600 ? 'earlier' : d.toDateString() === new Date().toDateString()
+  ? `at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : `on ${d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`; };
+const WIFI_HOW = { roam: 'Moved here', ap: 'Moved here by the access point', self: 'Joined again' };
 function wifiAp(w) {
   const ap = w.ap, last = (w.moves || []).slice(-1)[0];
   if (!ap) return [];
   const out = [h('span', { class: 'row-val-sub' }, ap.signal ? wifiSig(ap.signal) : null,
-    `Access point ${ap.bssid} · ${wifiBand(ap.freq)}${ap.signal ? ` · ${ap.signal} dBm` : ''}`)];
-  if (last) out.push(h('span', { class: 'row-val-sub' }, `Last move ${wifiWhen(last.at)} (${WIFI_HOW[last.how]}): from ${last.from_signal} dBm on ${wifiBand(last.from_freq)} to ${last.to_signal} dBm on ${wifiBand(last.to_freq)}`
-    + (last.ms >= 0 ? `, ${last.ms} ms` : '')));
+    `${ap.bssid} · ${wifiBand(ap.freq)}${ap.signal ? ` · ${ap.signal} dBm` : ''}`)];
+  if (last) out.push(h('span', { class: 'row-val-sub', title: last.ms >= 0 ? `The move took ${last.ms} ms` : null },
+    `${WIFI_HOW[last.how]} ${wifiWhen(last.at)}, from ${last.from_signal} dBm (${wifiBand(last.from_freq)})`));
   return out;
 }
 
