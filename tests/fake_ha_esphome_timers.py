@@ -289,7 +289,9 @@ async def main(e):
     check(z == {"zone": "Europe/Berlin", "how": "home", "country": "DE", "home": "DE", "wifi": "NL", "language": "de"}, f"the page: what Automatic stands on: {z}")
     # (the line comes after state/zone, through the log's reader process: waited for, never read in the same breath)
     await until(lambda: "of the country of Home Assistant's home location, DE" in echo_log(), 5)
-    check("of the country of Home Assistant's home location, DE" in echo_log() and not any(c in echo_log() for c in ("50.93", "6.96")),
+    # (what each line says, its stamp left off: "boot+146.960" holds "6.96", and failed CI on a run that was fine)
+    said = re.sub(r"(?m)^(boot\+[0-9.]+|\d{4}-\d\d-\d\d [0-9:.]+Z) ", "", echo_log())
+    check("of the country of Home Assistant's home location, DE" in said and not any(c in said for c in ("50.93", "6.96")),
           "the log names the country, never the home's coordinates")
     # the first zone written was already the home's (the zone waited for zone.home's answer after the time's): one line
     check(echo_log().count("time zone: Europe/") == 1 and "Amsterdam" not in echo_log(), f"one zone worked out at the start, not first without the home: {re.findall(r'time zone: Europe/.*', echo_log())}")
