@@ -25,6 +25,7 @@
 #include "wifimotion.h"
 #include "statefile.h"
 #include "buttons.h"
+#include "hfp.h"
 #include <ctype.h>
 #include <limits.h>
 #include <math.h>
@@ -110,7 +111,7 @@ static int colour_actual(void)
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -233,6 +234,9 @@ static const struct setting table[NSET] = {
     /* dropin.c keeps them in memory, state/config on disk */
     [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
+    /* hfp.c keeps it: the Echo as a phone's hands-free unit (issue #233).  A feature: Home Assistant's "Phone call"
+     * entities; off by default, as the hands-free record makes every phone paired after it send its calls here */
+    [BT_CALLS]    = { "bluetooth_calls", "Phone calls over Bluetooth", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     /* call.c keeps it: a call's microphone from Amazon's call pipeline (micHfp) or the assistant's (micAsr); only where
      * the backend has the first (the Dots' mixer) */
     [CALL_MIC]    = { "call_mic", "Call microphone", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
@@ -295,7 +299,8 @@ static int present(enum id i)
     case RING_LIVE: return ringlive_available();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
-    case CALL_MIC: return callmic_present() && dropin_running();
+    case BT_CALLS: return ble_present() && hfp_present();
+    case CALL_MIC: return callmic_present() && (dropin_running() || (ble_present() && hfp_present()));
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
     case MULTI_PRESS: return !board.action_combo;               /* the Shows: no action key, the volume pair stands in */
@@ -436,6 +441,7 @@ int settings_get(const struct setting *s)
     case RING_LIVE: return ring_live;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
+    case BT_CALLS: return hfp_enable(-1);
     case CALL_MIC: return call_mic_source(-1) ? 0 : 1;
     case SPK_GAIN: return spkgain_get();
     case DUCK: return duck_db;
@@ -527,6 +533,7 @@ static void put(enum id i, int v)
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
+    case BT_CALLS: hfp_enable(v); break;
     case CALL_MIC: call_mic_source(v == 0); break;
     case SPK_GAIN: spkgain_set(v); break;
     case DUCK: duck_db = v; break;

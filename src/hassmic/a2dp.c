@@ -47,6 +47,7 @@
 #include "settings.h"
 #include "a2dp_codec.h"
 #include "resample.h"
+#include "scoaudio.h"
 #include "statefile.h"
 
 #define MAX_LINKS 3                     /* a phone playing to us, the speaker we play to, one more */
@@ -65,11 +66,14 @@ enum { EV_INQUIRY_COMPLETE = 0x01, EV_CONN_COMPLETE = 0x03, EV_CONN_REQUEST, EV_
 enum { OP_INQUIRY = 0x0401, OP_INQUIRY_CANCEL, OP_CREATE_CONN = 0x0405, OP_DISCONNECT = 0x0406, OP_ACCEPT = 0x0409, OP_REJECT, OP_LINK_KEY_REPLY, OP_LINK_KEY_NEG, OP_PIN_REPLY, OP_PIN_NEG,
        OP_AUTH = 0x0411, OP_ENCRYPT = 0x0413, OP_REMOTE_NAME = 0x0419, OP_IO_CAP_REPLY = 0x042b, OP_CONFIRM_REPLY, OP_CONFIRM_NEG, OP_IO_CAP_NEG = 0x0434,
        OP_LINK_POLICY = 0x080f, OP_LOCAL_NAME = 0x0c13, OP_SCAN_ENABLE = 0x0c1a, OP_CLASS = 0x0c24, OP_INQUIRY_MODE = 0x0c45,
-       OP_EIR = 0x0c52, OP_SSP_MODE = 0x0c56, OP_READ_BUFFER = 0x1005 };
-enum { PSM_SDP = 0x0001, PSM_AVCTP = 0x0017, PSM_AVDTP = 0x0019 };
+       OP_EIR = 0x0c52, OP_SSP_MODE = 0x0c56, OP_READ_BUFFER = 0x1005, OP_ACCEPT_SYNC = 0x0429, OP_REJECT_SYNC = 0x042a };
+enum { EV_SYNC_COMPLETE = 0x2c, EV_SYNC_CHANGED = 0x2d };
+enum { PSM_SDP = 0x0001, PSM_RFCOMM = 0x0003, PSM_AVCTP = 0x0017, PSM_AVDTP = 0x0019 };
 
 static void (*notify)(void);
 static int started;
+static int hf_shown = -1;                       /* class of device and EIR as sent: with phone calls (1) or not, -1 not yet */
+static int class_eir(void);
 
 static long long ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
 static unsigned u16(const unsigned char *p) { return p[0] | p[1] << 8; }
@@ -142,19 +146,23 @@ static void set_pairing(int on)
 
 /* ---------------------------------------------------------------- commands asked for by events (sent in upkeep) */
 
-static struct { unsigned op, n; unsigned char p[24]; } pend[16];
+/* p: the largest a command here takes, Enhanced Accept Synchronous Connection (address + 57 bytes, scoaudio.c) */
+static struct { unsigned op, n; unsigned char p[72]; } pend[16];
 static int npend;
 
-static void later(unsigned op, const void *p, unsigned n)
+static int later(unsigned op, const void *p, unsigned n)       /* 0 queued, -1 dropped */
 {
-    if (npend == (int)(sizeof pend / sizeof *pend) || n > sizeof pend[0].p) { fprintf(stderr, "a2dp: command %04x dropped\n", op); return; }
+    if (npend == (int)(sizeof pend / sizeof *pend) || n > sizeof pend[0].p) { fprintf(stderr, "a2dp: command %04x dropped\n", op); return -1; }
     pend[npend].op = op; pend[npend].n = n; memcpy(pend[npend].p, p, n); npend++;
+    return 0;
 }
 
-static void later_addr(unsigned op, const unsigned char *addr, const void *extra, unsigned n)
+static int later_addr(unsigned op, const unsigned char *addr, const void *extra, unsigned n)
 {
-    unsigned char b[24]; memcpy(b, addr, 6); if (n) memcpy(b + 6, extra, n);
-    later(op, b, 6 + n);
+    unsigned char b[sizeof pend[0].p];
+    if (6 + n > sizeof b) { fprintf(stderr, "a2dp: command %04x dropped\n", op); return -1; }
+    memcpy(b, addr, 6); if (n) memcpy(b + 6, extra, n);
+    return later(op, b, 6 + n);
 }
 
 /* ---------------------------------------------------------------- links, ACL, L2CAP */
@@ -247,7 +255,7 @@ static void conn_request(struct link *l, unsigned id, const unsigned char *d, si
 {
     if (n < 4) return;
     unsigned psm = u16(d), rcid = u16(d + 2); struct chan *c = NULL;
-    if (psm != PSM_SDP && psm != PSM_AVDTP && psm != PSM_AVCTP) { conn_response(l, id, 0, rcid, 2, 0); return; }  /* not supported */
+    if (psm != PSM_SDP && psm != PSM_AVDTP && psm != PSM_AVCTP && !(psm == PSM_RFCOMM && hfp_listed())) { conn_response(l, id, 0, rcid, 2, 0); return; }  /* not supported */
     for (int i = 0; i < MAX_CHANS && !c; i++) if (!l->ch[i].used) c = &l->ch[i];
     if (!c) { conn_response(l, id, 0, rcid, 4, 0); return; }                                           /* no resources */
     memset(c, 0, sizeof *c);
@@ -344,6 +352,7 @@ static void sig_rx(struct link *l, const unsigned char *p, size_t n)
 /* ---------------------------------------------------------------- SDP server */
 
 struct attr { unsigned id; const unsigned char *v; unsigned n; };
+static unsigned char hf_features[3] = { 0x09, 0x00, 0x05 };    /* the Hands-Free record's SupportedFeatures (uint16) */
 #define A(id, ...) { id, (const unsigned char[]){ __VA_ARGS__ }, sizeof (const unsigned char[]){ __VA_ARGS__ } }
 static const unsigned char a_browse[] = { 0x35, 0x03, 0x19, 0x10, 0x02 },                  /* PublicBrowseRoot */
     a_avctp[] = { 0x35, 0x10, 0x35, 0x06, 0x19, 0x01, 0x00, 0x09, 0x00, 0x17,               /* L2CAP, PSM AVCTP */
@@ -368,6 +377,12 @@ static const struct attr r_sink[] = {                  /* A2DP sink 1.3, speaker
     A(0x0004, 0x35, 0x10, 0x35, 0x06, 0x19, 0x01, 0x00, 0x09, 0x00, 0x19, 0x35, 0x06, 0x19, 0x00, 0x19, 0x09, 0x01, 0x03),
     { 0x0005, a_browse, sizeof a_browse }, A(0x0009, 0x35, 0x08, 0x35, 0x06, 0x19, 0x11, 0x0d, 0x09, 0x01, 0x03),
     A(0x0100, 0x25, 0x0c, 'A', 'u', 'd', 'i', 'o', ' ', 'S', 'o', 'u', 'r', 'c', 'e'), A(0x0311, 0x09, 0x00, 0x01),
+}, r_hf[] = {                                           /* Hands-Free 1.7 (hfp.c), RFCOMM channel HFP_CHANNEL; its features
+                                                           hfp_sdp_features(), written into hf_features at every look */
+    A(0x0000, 0x0a, 0x00, 0x01, 0x00, 0x05), A(0x0001, 0x35, 0x06, 0x19, 0x11, 0x1e, 0x19, 0x12, 0x03),
+    A(0x0004, 0x35, 0x0c, 0x35, 0x03, 0x19, 0x01, 0x00, 0x35, 0x05, 0x19, 0x00, 0x03, 0x08, HFP_CHANNEL),
+    { 0x0005, a_browse, sizeof a_browse }, A(0x0009, 0x35, 0x08, 0x35, 0x06, 0x19, 0x11, 0x1e, 0x09, 0x01, 0x07),
+    A(0x0100, 0x25, 0x0a, 'H', 'a', 'n', 'd', 's', '-', 'F', 'r', 'e', 'e'), { 0x0311, hf_features, 3 },
 };
 #undef A
 static const struct { unsigned handle; const struct attr *a; int n; unsigned uuids[6]; } records[] = {
@@ -375,8 +390,15 @@ static const struct { unsigned handle; const struct attr *a; int n; unsigned uui
     { 0x00010002, r_target, sizeof r_target / sizeof *r_target, { 0x110c, 0x0100, 0x0017, 0x1002, 0x110e } },
     { 0x00010003, r_control, sizeof r_control / sizeof *r_control, { 0x110e, 0x110f, 0x0100, 0x0017, 0x1002 } },
     { 0x00010004, r_source, sizeof r_source / sizeof *r_source, { 0x110a, 0x0100, 0x0019, 0x1002, 0x110d } },
+    { 0x00010005, r_hf, sizeof r_hf / sizeof *r_hf, { 0x111e, 0x1203, 0x0100, 0x0003, 0x1002 } },
 };
 #define NREC (int)(sizeof records / sizeof *records)
+#define REC_HF 4
+static int rec_mask(void)                               /* the records listed now (the controller thread) */
+{
+    unsigned f = hfp_sdp_features(); hf_features[1] = f >> 8; hf_features[2] = f;
+    return hfp_listed() ? (1 << NREC) - 1 : ((1 << NREC) - 1) & ~(1 << REC_HF);
+}
 
 /* data element header: type, length of the data; returns the header's length, 0 if malformed */
 static size_t de(const unsigned char *p, size_t n, unsigned *type, size_t *len)
@@ -406,7 +428,7 @@ static int sdp_match(const unsigned char **pp, size_t *np)
 {
     unsigned t; size_t len, h = de(*pp, *np, &t, &len), i;
     if (!h || t != 6) return -1;
-    const unsigned char *p = *pp + h; int all = (1 << NREC) - 1;
+    const unsigned char *p = *pp + h; int all = rec_mask();
     for (i = 0; i < len; ) {
         unsigned ut; size_t ul, uh = de(p + i, len - i, &ut, &ul);
         if (!uh || ut != 3) return -1;
@@ -496,7 +518,7 @@ static void sdp_rx(struct link *l, struct chan *c, const unsigned char *p, size_
     if (pdu == 0x04) {                                      /* ServiceAttribute: handle, max, IDs, continuation */
         if (qn < 4) { sdp_error(l, c, tid, 0x0003); return; }
         unsigned h = (unsigned)q[0] << 24 | q[1] << 16 | q[2] << 8 | q[3];
-        for (int i = 0; i < NREC; i++) if (records[i].handle == h) m = 1 << i;
+        for (int i = 0; i < NREC; i++) if (records[i].handle == h) m = 1 << i & rec_mask();
         if (!m) { sdp_error(l, c, tid, 0x0002); return; }
         q += 4; qn -= 4;
     } else if ((m = sdp_match(&q, &qn)) < 0) { sdp_error(l, c, tid, 0x0003); return; }
@@ -1411,6 +1433,7 @@ static void maybe_tell(struct link *l)
 
 static void chan_opened(struct link *l, struct chan *c)
 {
+    if (c->psm == PSM_RFCOMM) { hfp_rfcomm_up((int)(l - links), l->addr); return; }
     if (c->psm == PSM_AVCTP && !l->avctp) { l->avctp = c->lcid; l->vol_label = -1; atomic_fetch_add(&avrcp_links, 1);
                                             fprintf(stderr, "a2dp: %012llx: remote control\n", (unsigned long long)l->addr); }
     if (c->psm != PSM_AVDTP) return;
@@ -1427,6 +1450,7 @@ static void chan_opened(struct link *l, struct chan *c)
 
 static void chan_closed(struct link *l, struct chan *c)
 {
+    if (c->psm == PSM_RFCOMM) { hfp_rfcomm_down((int)(l - links)); return; }
     if (c->lcid == l->avctp) {
         l->avctp = 0; atomic_fetch_sub(&avrcp_links, 1);
         if (l == out.l && out.absvol != A_UNKNOWN) { out.absvol = A_UNKNOWN; btout_absvol(0, 0); }
@@ -1447,6 +1471,7 @@ static void l2_rx(struct link *l, const unsigned char *p, size_t n)
     if (cid == 0x0001) { sig_rx(l, p, n); return; }
     if (!(c = chan_by(l, cid)) || !c->cfg_in || !c->cfg_out) return;
     if (c->psm == PSM_SDP) sdp_rx(l, c, p, n);
+    else if (c->psm == PSM_RFCOMM) hfp_rfcomm_rx((int)(l - links), p, n);
     else if (cid == l->av_sig) { if (is_speaker(l)) out_rx(l, p, n); else av_rx(l, p, n); }
     else if (cid == l->avctp) avrcp_rx(l, p, n);
     else if (av.l == l && cid == av.media) media_rx(p, n);
@@ -1506,6 +1531,14 @@ int a2dp_event(const unsigned char *e, size_t n)
     case EV_CONN_REQUEST:                                   /* address, class of device, link type */
         if (qn < 10) return 1;
         {   uint64_t a = addr_of(q); int free_slot = 0;
+            if (q[9] == 0 || q[9] == 2) {                       /* SCO / eSCO: a phone's call audio (hfp.c), CVSD */
+                int codec = hfp_sco_request(a, q[9] == 2);
+                if (codec) {                                    /* (scoaudio.c knows what this model's chip takes) */
+                    unsigned char s[64]; int n; unsigned op = sco_accept_params(codec, q[9] == 2, s, &n);
+                    if (later_addr(op, q, s, n)) hfp_sco_unanswered();     /* (its end is then no link of ours) */
+                } else { unsigned char why = 0x0d; later_addr(OP_REJECT_SYNC, q, &why, 1); }
+                return 1;
+            }
             for (int i = 0; i < MAX_LINKS; i++) free_slot |= !links[i].used;
             if (q[9] == 1 && free_slot && (pairing || key_for(a))) { unsigned char role = 0x01; later_addr(OP_ACCEPT, q, &role, 1); }
             else {
@@ -1538,7 +1571,12 @@ int a2dp_event(const unsigned char *e, size_t n)
         }
         { unsigned char d[3]; put16(d, u16(q + 1)); d[2] = 0x14; later(OP_DISCONNECT, d, 3); }  /* no room after all */
         return 1; }
+    case EV_SYNC_COMPLETE:                                  /* status, handle, address, link type, ... */
+        if (qn >= 9) hfp_sco_up(q[0], u16(q + 1) & 0x0fff, addr_of(q + 3), qn >= 17 ? q[16] : 2);   /* (air mode at 16) */
+        return 1;
+    case EV_SYNC_CHANGED: return 1;
     case EV_DISCONNECT:
+        if (qn >= 4 && !q[0] && !link_by(u16(q + 1) & 0x0fff) && hfp_sco_down(u16(q + 1) & 0x0fff)) return 1;
         if (qn < 4 || q[0] || !(l = link_by(u16(q + 1) & 0x0fff))) return 0;
         fprintf(stderr, "a2dp: %012llx disconnected (0x%02x)\n", (unsigned long long)l->addr, q[3]);
         link_gone(l);
@@ -1617,8 +1655,14 @@ int a2dp_event(const unsigned char *e, size_t n)
 int a2dp_upkeep(void)
 {
     avrcp_upkeep();
+    if (hfp_upkeep() < 0 || class_eir() < 0) return -1;
     if (out_upkeep() < 0) return -1;
-    for (int i = 0; i < npend; i++) if (hci_cmd(pend[i].op, pend[i].p, pend[i].n) < 0) { npend = 0; return -1; }
+    for (int i = 0; i < npend; i++) {
+        int st = hci_cmd(pend[i].op, pend[i].p, pend[i].n);
+        if (st < 0) { npend = 0; return -1; }
+        /* a chip that refuses Enhanced Accept outright sends no Synchronous Connection Complete: hfp.c's fallback */
+        if (st && pend[i].op == 0x043e) { fprintf(stderr, "a2dp: Enhanced Accept refused (0x%02x)\n", st); hfp_sco_up(st, 0, addr_of(pend[i].p), 3); }
+    }
     npend = 0;
     int r = atomic_exchange(&pair_req, -1);
     if (r >= 0) set_pairing(r);
@@ -1649,15 +1693,34 @@ int a2dp_busy(void)
 {
     int b = pair_until != 0 || npend > 0 || atomic_load(&out_searching) || out.paging || (out.on && out.addr) || out.l;
     for (int i = 0; i < MAX_LINKS; i++) b |= links[i].used && (links[i].pend_until || links[i].avctp_at);
-    return b;
+    return b || hfp_busy() || hfp_listed() != hf_shown;
 }
 
 void a2dp_lost(void)
 {
+    hfp_lost();
     for (int i = 0; i < MAX_LINKS; i++) if (links[i].used) link_gone(&links[i]);
     for (struct frag *f = fhead, *n; f; f = n) { n = f->next; free(f); }
     fhead = NULL; ftail = &fhead; npend = 0; scan_mode = -1;
     out.paging = 0; inquiring = 0;
+}
+
+/* Class of device and extended inquiry response, as the phone call feature has it now (hf_shown: what was sent, -1
+ * nothing yet).  Audio + rendering, loudspeaker; telephony too with calls.  The EIR names the Echo and the A2DP sink
+ * (and Hands-Free) UUIDs, so phones show what it is before they connect */
+static int class_eir(void)
+{
+    int hf = hfp_listed();
+    if (hf == hf_shown) return 0;
+    const char *name = core_name; size_t nl = strlen(name) < 232 ? strlen(name) : 232;
+    unsigned char cod[3] = { 0x14, 0x04, 0x24 | (hf ? 0x40 : 0) }, b[241];
+    if (hci_cmd(OP_CLASS, cod, 3) < 0) return -1;
+    memset(b, 0, sizeof b); b[1] = nl + 1; b[2] = 0x09; memcpy(b + 3, name, nl);
+    { unsigned char *u = b + 3 + nl; u[0] = hf ? 5 : 3; u[1] = 0x03; u[2] = 0x0b; u[3] = 0x11; if (hf) { u[4] = 0x1e; u[5] = 0x11; } }
+    b[0] = 0;                                               /* FEC not required */
+    if (hci_cmd(OP_EIR, b, 241) < 0) return -1;
+    hf_shown = hf;
+    return 0;
 }
 
 int a2dp_setup(void)
@@ -1671,18 +1734,27 @@ int a2dp_setup(void)
     credits = acl_num;
     memset(b, 0, sizeof b); memcpy(b, name, nl);
     if (hci_cmd(OP_LOCAL_NAME, b, 248) < 0) return -1;
-    { unsigned char cod[3] = { 0x14, 0x04, 0x24 };          /* audio + rendering; audio/video, loudspeaker */
-      unsigned char one = 1, two = 2, pol[2] = { 0x05, 0x00 };   /* link policy: role switch, sniff */
-      if (hci_cmd(OP_CLASS, cod, 3) < 0 || hci_cmd(OP_SSP_MODE, &one, 1) < 0 || hci_cmd(OP_INQUIRY_MODE, &two, 1) < 0 ||
+    { unsigned char one = 1, two = 2, pol[2] = { 0x05, 0x00 };   /* link policy: role switch, sniff */
+      if (hci_cmd(OP_SSP_MODE, &one, 1) < 0 || hci_cmd(OP_INQUIRY_MODE, &two, 1) < 0 ||
           hci_cmd(OP_LINK_POLICY, pol, 2) < 0) return -1; }
-    /* extended inquiry response: the name and the A2DP sink UUID, so phones show a speaker before they connect */
-    memset(b, 0, 241); b[1] = nl + 1; b[2] = 0x09; memcpy(b + 3, name, nl);
-    { unsigned char *u = b + 3 + nl; u[0] = 3; u[1] = 0x03; u[2] = 0x0b; u[3] = 0x11; }
-    b[0] = 0;                                               /* FEC not required */
-    if (hci_cmd(OP_EIR, b, 241) < 0) return -1;
+    hf_shown = -1;
+    if (class_eir() < 0 || sco_chip_setup() < 0) return -1;
     fprintf(stderr, "a2dp: ready as \"%s\", ACL %u x %u\n", name, acl_num, acl_len);
     return 0;
 }
+
+/* ---------------------------------------------------------------- for hfp.c (hci.h) */
+
+void a2dp_rfcomm_send(int link, const void *frame, size_t n)
+{
+    if (link < 0 || link >= MAX_LINKS || !links[link].used) return;
+    struct link *l = &links[link];
+    for (int i = 0; i < MAX_CHANS; i++)
+        if (l->ch[i].used && l->ch[i].psm == PSM_RFCOMM && l->ch[i].cfg_in && l->ch[i].cfg_out) { l2_send(l, l->ch[i].rcid, frame, n); return; }
+}
+void a2dp_later(unsigned op, const void *par, unsigned n) { later(op, par, n); }
+unsigned a2dp_link_handle(int link) { return link >= 0 && link < MAX_LINKS && links[link].used ? (unsigned)links[link].handle : 0; }
+const char *a2dp_link_name(int link) { return link >= 0 && link < MAX_LINKS && links[link].used ? links[link].name : ""; }
 
 /* ---------------------------------------------------------------- API */
 

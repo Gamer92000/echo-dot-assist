@@ -12,6 +12,11 @@ for i in range(n):
     rr = 14000 * math.sin(2 * math.pi * 440 * t) * (1 if t < 2 else 3) + 6000 * math.sin(2 * math.pi * 9000 * t)
     out += struct.pack('>hh', *(max(-32768, min(32767, int(v))) for v in (l, rr)))
 open(sys.argv[1], 'wb').write(out)
+w = 16000; m = bytearray(struct.pack('>6I', 0x2e736e64, 24, 0xffffffff, 3, w, 1))
+for i in range(w * 3):                  # mSBC's: a speech band sweep, noise, a loud stretch
+    t = i / w
+    m += struct.pack('>h', max(-32768, min(32767, int(12000 * math.sin(2 * math.pi * (80 + 2500 * t) * t) * (1 if t < 2 else 2.5) + random.uniform(-1500, 1500)))))
+open(sys.argv[1].replace('in', 'wide'), 'wb').write(m)
 open(sys.argv[1].replace('in', 'mono'), 'wb').write(struct.pack('>6I', 0x2e736e64, 24, 0xffffffff, 3, 48000, 1) + b''.join(out[24 + 4 * i:26 + 4 * i] for i in range(n)))
 PY
 cc -O2 -Wall -Isrc/hassmic tests/unit/sbc_test.c src/hassmic/sbc.c -lm -o build/sbc_test
@@ -41,4 +46,23 @@ print("%s encoder bitpool %s: SNR %.1f dB, libsbc's encoder %.1f dB" % ("ok  " i
 sys.exit(not ok)
 PY
 done
+# mSBC (HFP's wideband speech): libsbc's frames through our decoder, ours through libsbc's (CRC checked), the CRC
+cc -O2 -Wall -Isrc/hassmic tests/unit/msbc_test.c src/hassmic/sbc.c -lm -o build/msbc_test
+sbcenc -m $d/wide.au > $d/ref.msbc 2>/dev/null && sbcdec -m -f $d/ref.msbc.au $d/ref.msbc >/dev/null 2>&1
+build/msbc_test dec $d/ref.msbc $d/ref.msbc.au || fail=1
+build/msbc_test crc $d/ref.msbc || fail=1
+build/msbc_test enc $d/wide.au $d/ours.msbc && sbcdec -m -f $d/ours.msbc.au $d/ours.msbc >/dev/null 2>&1
+python3 - $d/wide.au $d/ours.msbc.au $d/ref.msbc.au $d/ours.msbc <<'PY' || fail=1
+import array, math, os, sys
+def pcm(p):
+    b = open(p, 'rb').read(); a = array.array('h', b[int.from_bytes(b[4:8], 'big'):]); a.byteswap(); return a
+x, ours, ref = (pcm(p) for p in sys.argv[1:4])
+def snr(d, lag=73):                     # 73 samples of filter delay, as SBC's
+    n = min(len(x), len(d) - lag); s = sum(v * v for v in x[:n]); e = sum((d[lag + i] - x[i]) ** 2 for i in range(n))
+    return 10 * math.log10(s / max(e, 1))
+frames = os.path.getsize(sys.argv[4]) // 57
+a, b = snr(ours), snr(ref); ok = len(ours) == frames * 120 and frames >= 399 and a > b - 0.5
+print("%s mSBC encoder: %d frames, SNR %.1f dB, libsbc's encoder %.1f dB" % ("ok  " if ok else "FAIL", frames, a, b))
+sys.exit(not ok)
+PY
 exit $fail

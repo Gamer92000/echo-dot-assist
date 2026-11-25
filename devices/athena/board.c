@@ -85,4 +85,10 @@ const struct board board = {
     .speaker_gain_stock = 100,
     .speaker_gain_steps = 2,
     .speaker_gain_limit = 118,
+    /* phone calls (docs/re-hfp.md): from the firmware, not run here.  MediaTek's MT8183 HAL with its BTSCO path and the
+     * kernel's legacy front ends VOIP_Call_BT_Playback / _Capture (mtk-soc-pcm-bt-dai.c, the DAI BT interface); an
+     * MT7663 behind the newer btmtksdio (v0.0.1.13), which sets the chip's PCM side itself after every reset, as on
+     * cannoli.  Its BTCVSD block is the integrated core's, which this board does not use */
+    .sco = SCO_PCM, .sco_play = "VOIP_Call_BT_Playback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .sco_msbc_chip = 1,             /* not run here: an MT7663 as cannoli's, measured there (2026-11-25) */
 };

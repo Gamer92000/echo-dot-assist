@@ -1,4 +1,5 @@
-/* SBC (A2DP specification, appendix B / section 12): decoder for the Bluetooth speaker, encoder for playing to one. */
+/* SBC (A2DP specification, appendix B / section 12): decoder for the Bluetooth speaker, encoder for playing to one;
+ * mSBC (HFP 1.7, 5.7) both ways for a phone call's wideband audio (scoaudio.c). */
 #ifndef SBC_H
 #define SBC_H
 #include <stddef.h>
@@ -25,4 +26,12 @@ struct sbc_enc {
 int    sbc_enc_init(struct sbc_enc *e, unsigned rate, int bitpool);   /* -1: rate is not an SBC one */
 size_t sbc_enc_len(int bitpool);
 size_t sbc_encode(struct sbc_enc *e, const int16_t *pcm, uint8_t *out);
+
+/* mSBC: SBC at 16 kHz, mono, 15 blocks, 8 subbands, loudness, bitpool 26: a frame of MSBC_FRAME bytes (syncword 0xAD,
+ * two reserved bytes 0) for MSBC_SAMPLES samples, 7.5 ms.  Decoding checks the CRC (the air is not L2CAP): 0 = no
+ * frame there.  Encoding takes an sbc_enc from sbc_enc_init(e, 16000, 26) */
+#define MSBC_FRAME   57
+#define MSBC_SAMPLES 120
+size_t msbc_decode(struct sbc *s, const uint8_t *p, size_t n, int16_t *out);
+size_t msbc_encode(struct sbc_enc *e, const int16_t *pcm, uint8_t *out);
 #endif

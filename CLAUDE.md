@@ -13,7 +13,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`; every Echo on Fire OS or Vega OS and its status in `devices/MODELS.md`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-hfp.md` (phone calls over Bluetooth: where each chip puts a call's audio), `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
 corpus, tables generated into `wake-word-end/`), `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`, `kiosk-satellite.md`: Kiosk Satellite next to hassmic on the Shows).
 
@@ -68,6 +68,12 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
+.venv/bin/python tests/fake_hfp.py            # phone calls over Bluetooth (hfp.c): a phone behind a fake controller (pty,
+                                             # HASSMIC_BT_DEV): SDP, RFCOMM, the AT exchange, ring, answer, end, dial, the
+                                             # handset and "take it here", do not disturb, the audio both ways as SCO
+                                             # data over HCI (HASSMIC_SCO=hci); remote volume, a second call (+CCWA,
+                                             # CHLD, +CLCC answered from the fake's call list); codec negotiation and
+                                             # mSBC both ways (sbcenc/sbcdec -m); the feature off
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
 .venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
@@ -603,10 +609,44 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `HASSMIC_VOIP_FAIL` (a file: the Voip stream fails, 7d), `HASSMIC_FAKE_LISTEN` (the front end's listening mode
   logged); Android: none.  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
   (`listen_on`, `near_until`): reset, the core never heard "off" and kept the front end listening for the call.
+- **Phone calls over Bluetooth** (`hfp.c`, `scoaudio.c`, `cvsd.c`, `msbc.c`; docs/re-hfp.md; issue #233): the Echo as a
+  phone's hands-free unit (HFP 1.7 HF), setting `bluetooth_calls` (Features, off).  CVSD everywhere; mSBC (wideband)
+  where the host codes the link (`sco_wideband()`: ebc, hci): AT+BAC=1,2, +BCS answered, the link's air mode decides
+  (`hfp_sco_up`'s `air`), "take it here" as AT+BCC; `msbc.c` the H2 framing (lost and broken frames), `sbc.c`
+  `msbc_decode`/`msbc_encode` (held to libsbc by `make unit-sbc`; `make unit-msbc` the framing).  On a PCM path the
+  chip codes mSBC itself where `board.sco_msbc_chip` (measured: cannoli's MT7663, donut's and checkers' MT7668; on by those on cupcake, cronos, crown, athena):
+  `sco_accept_params` gives Enhanced Accept (0x043e, data path 1, 16 kHz linear, transport unit 16 (the MT7668 sets
+  up no link with 0), T2; byte for byte what `src/tools/scoprobe.c`'s air `msbc -U 16` measured, held by `make
+  unit-scoaudio`, and through a2dp.c's command queue (72 bytes a command) by fake_hfp.py with `HASSMIC_SCO_CHIP_MSBC`),
+  the PCM devices at 16 kHz; an mSBC link that fails twice (or its Enhanced Accept refused: a2dp.c hands the
+  command's status to `hfp_sco_up`) offers CVSD alone (AT+BAC=1) for the rest of the connection.  Remote volume: `+VGS` sets `core_call_volume` only while a
+  call's audio is here, main.c's `mix_apply` hands the call's volume to `hfp_call_volume` (stored; upkeep sends
+  AT+VGS).  A second call: AT+CHLD=?, AT+CCWA=1, +CLCC where the phone has enhanced call status (the indicators
+  cannot say which call is which after a swap: `ind_moved` guesses, +CLCC corrects), AT+CHLD=2 (`hfp_switch`: HA's
+  "Switch phone call", the action button with one waiting), AT+CHLD=1 ending beside a held one; HA's "Phone call
+  waiting" (`hfp_second`).  On a2dp.c's links (hooks in
+  `hci.h`): a Hands-Free SDP record (RFCOMM channel `HFP_CHANNEL`), PSM 3, the class of device's telephony bit and the
+  EIR's UUID, all only while it is on; RFCOMM as responder (the phone opens it), credit flow, the AT exchange of the
+  service level connection, calls from the phone's indicators.  call.c's claim `CALL_HFP`: ringing (not with do not
+  disturb or the mics off: `core_call_refusal`), answered here (`ANSWER_MS` for the audio link), connected (the
+  synchronous link up: call.c's media in `CALL_CODEC_PCM`), on the phone (nothing shown).  `core_call_button` /
+  `_answer` / `_hangup` reach `hfp_*`; Home Assistant's "Phone call", "Phone caller", "Phone", answer / end / take-here
+  buttons and the action `phone_call` (number), answering and dialling over the keyed link only
+  (`core_phone_changed` -> `proto->phone_changed`).  No chip moves SCO data over HCI: `scoaudio.c` takes the audio
+  where `board.sco` says (`sco_play`/`sco_cap`: PCM devices by name, found in /proc/asound/pcm as MediaTek's HAL does,
+  `make unit-scoaudio`; `sco_route` controls, `bt_sco_cmd` the chip's PCM setup after every
+  reset, MT7668: 0xfc72 03 10 00 4a), raw ALSA ioctls at 8 kHz (`pcm`: cannoli, donut, checkers; from the firmware
+  only, never run: cronos, crown, athena, cupcake: its bootloader, not its device tree, muxes the 2nd I2S), or biscuit's (and radar's, from the firmware)
+  BTCVSD `/dev/ebc` with the air's CVSD coded in `cvsd.c` (`ebc`; device.conf group media; the device closed by the
+  last of its two threads: a free under a blocked write was a kernel oops and a reboot), or H4 type 3 on the PC
+  (`hci`, `HASSMIC_SCO=hci`; `audio_sco_native()` 0 in audio_file.c).  Probes: `src/tools/scoprobe.c` (a
+  synchronous link between two Echos on raw HCI), `ebcprobe.c` (`/dev/ebc`).  `make unit-cvsd`, `tests/fake_hfp.py`.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
-  10-30 % of Wi-Fi broadcasts (unicast is retried), i.e. the other Echos' claims.
+  10-30 % of Wi-Fi broadcasts (unicast is retried), i.e. the other Echos' claims.  After every reset the controller's
+  address is checked against the idme's (`board.bt_mac`) and set with MediaTek's 0xfc1a where it differs: cannoli's
+  MT7663 is left at 00:0c:43:29:50:01 by its driver, the same on every Echo Dot 5.
 - **State files** (`statefile.c`, issue #46): every file hassmic keeps or hands to root is written through
   `statefile_open`/`_commit` or `statefile_write` (temp file, fsync, rename, fsync of the folder): `/data` is ext4,
   a rename without them can reach the flash before the data, and a hard reset left empty files (#36). New writers too.
@@ -1654,7 +1694,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
-  the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
+  the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `scoprobe`, `ebcprobe`, `dha_test` not in `all`).
 
 Boot integration (`scripts/system/`, rc in `devices/<codename>/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on /system), which picks the factory
 copy or a verified update and runs `main.sh` (updatable): `main.sh firewall` (egress lock re-asserted in a loop, root side

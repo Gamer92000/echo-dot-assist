@@ -43,4 +43,8 @@ const struct board board = {
      * (from the firmware only, not tried on an Echo 2) */
     .speaker_gain = "HP Driver Gain Volume",
     .speaker_gain_stock = 6,
+    /* phone calls (docs/re-hfp.md): biscuit's hardware here (MT8163, Bluetooth integrated behind WMT, WMT_SOC.cfg; the
+     * same audio.primary.mt8163_headless.so, AudDrv_BTCVSD in the kernel and mediatek,audio_bt_cvsd in its device
+     * tree, /dev/ebc media:media): the air's CVSD through /dev/ebc as on biscuit.  From the firmware, not run here */
+    .sco = SCO_EBC,
 };

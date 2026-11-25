@@ -1,0 +1,22 @@
+00-00: DLM Playback (*) :  : playback 1
+00-01: DL2 Playback (*) :  : playback 1
+00-02: DL3 Playback (*) :  : playback 1
+00-03: DL6 Playback (*) :  : playback 1
+00-04: UL2 Capture (*) :  : capture 1
+00-05: UL3 Capture (*) :  : capture 1
+00-06: UL4 Capture (*) :  : capture 1
+00-07: UL5 Capture (*) :  : capture 1
+00-08: UL8 Capture (*) :  : capture 1
+00-09: UL9 Capture (*) :  : capture 1
+00-10: UL10 Capture (*) :  : capture 1
+00-11: UL1 Capture (*) :  : capture 1
+00-12: HOSTLESS_VA (*) :  : capture 1
+00-13: VA_Capture (*) :  : capture 1
+00-14: ADSP_PCM_PLAYBACK (*) :  : playback 1
+00-15: ADSP_Hostless_Playback (*) :  : playback 1
+01-00: DSP_ASR_STREAM voice-dsp-soc-dummy-dai-0 :  : capture 1
+01-01: DSP_VOIP_STREAM voice-dsp-soc-dummy-dai-1 :  : capture 1
+01-02: DSP_TD_STREAM voice-dsp-soc-dummy-dai-2 :  : capture 1
+01-03: DSP_DEBUG_STREAM voice-dsp-soc-dummy-dai-3 :  : capture 1
+01-04: DSP_DC_STREAM voice-dsp-soc-dummy-dai-4 :  : capture 1
+01-05: DSP_USBB_STREAM voice-dsp-soc-dummy-dai-5 :  : capture 1

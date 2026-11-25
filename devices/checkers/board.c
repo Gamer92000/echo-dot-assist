@@ -91,4 +91,9 @@ const struct board board = {
     .speaker_gain_stock = 29,
     .speaker_gain_steps = 2,
     .speaker_gain_db = 3,
+    /* phone calls (docs/re-hfp.md): the MT7668 on MediaTek's DAI BT, the HAL's VOIP_Call_BT_Playback / _Capture.  The
+     * chip's PCM side as cannoli's newer driver sets it for the MT7668 (0xfc72), without which nothing comes in */
+    .sco = SCO_PCM, .sco_play = "VOIP_Call_BT_Playback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .bt_sco_cmd = (const unsigned char[]){ 0x72, 0xfc, 4, 0x03, 0x10, 0x00, 0x4a },
+    .sco_msbc_chip = 1,             /* the MT7668 codes mSBC from VOIP_Call_BT_* at 16 kHz, set up and accepted (2026-11-25) */
 };

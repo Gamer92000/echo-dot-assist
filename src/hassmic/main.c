@@ -74,6 +74,7 @@
 #include "core.h"
 #include "ota.h"
 #include "plugin.h"
+#include "hfp.h"
 #include "plugmsg.h"
 #include "plugin_fetch.h"
 #include "plugin_index.h"
@@ -1327,6 +1328,7 @@ int core_call_button(void)
     int who = call_claimed();
     if (who == CALL_DROPIN) return dropin_running() && dropin_button();
     if (who >= CALL_PLUGIN) return plugin_call_button();
+    if (who == CALL_HFP) return hfp_button();
     return 0;
 }
 
@@ -1335,6 +1337,7 @@ int core_call_answer(void)
     int who = call_claimed();
     if (who == CALL_DROPIN) return dropin_running() && dropin_answer();
     if (who >= CALL_PLUGIN) return plugin_call_answer();
+    if (who == CALL_HFP) return hfp_answer();
     return 0;
 }
 
@@ -1344,7 +1347,16 @@ int core_call_hangup(const char *why)
     int who = call_claimed();
     if (who == CALL_DROPIN && dropin_running()) { dropin_hangup(why); return 1; }
     if (who >= CALL_PLUGIN) return plugin_call_hangup(!strcmp(why, "the screen") ? PM_HANGUP_SCREEN : PM_HANGUP_SPOKEN);
+    if (who == CALL_HFP) return hfp_hangup(why);
     return 0;
+}
+
+/* hfp.c: a phone's call over Bluetooth changed what Home Assistant's "Phone call" entities show */
+void core_phone_changed(void)
+{
+    pthread_mutex_lock(&core_lock);
+    if (connected && proto->phone_changed) proto->phone_changed();
+    pthread_mutex_unlock(&core_lock);
 }
 
 int core_call_status(char *peer, size_t cap)
@@ -3538,6 +3550,7 @@ static void mix_apply(void)                  /* lock held: the mixer's volumes a
     atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_now(VOL_SOUNDS)) * 65536));
     atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_now(VOL_TIMERS)) * 65536));
     audio_call_gain(mix_gain(kind_now(VOL_CALLS)));
+    hfp_call_volume(kind_now(VOL_CALLS));          /* a phone's call: its speaker gain follows (only stored here) */
 }
 
 static void tts_kind(int media)              /* the playback thread, at each start of the TTS stream */
@@ -3605,6 +3618,24 @@ int core_even_volume(int set)
     return vol_even;
 }
 int core_kind_volume(int k, int set) { if (set >= 0) { kinds[k].level = clamp100(set); mix_apply(); } return kinds[k].level; }
+
+int core_call_volume(int v)
+{
+    pthread_mutex_lock(&core_lock);
+    if (v >= 0) {
+        v = clamp100(v);
+        if (!vol_split) { if (v != core_volume()) core_set_volume(v); }
+        else if (kinds[VOL_CALLS].linked) { if (v != kind_volume(VOL_CALLS)) core_set_volume(v - kinds[VOL_CALLS].offset); }
+        else if (v != kinds[VOL_CALLS].level) {
+            kinds[VOL_CALLS].level = v; mix_apply(); volume_led(v, 0);
+            fprintf(stderr, "volume: calls %d\n", v);
+            settings_save(); core_settings_changed();
+        }
+    }
+    v = kind_now(VOL_CALLS);
+    pthread_mutex_unlock(&core_lock);
+    return v;
+}
 int core_kind_linked(int k, int set)
 {
     if (set >= 0 && (set != 0) != kinds[k].linked) {

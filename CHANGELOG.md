@@ -2,6 +2,27 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-25 — Phone calls over Bluetooth
+
+- **The Echo as your phone's speakerphone** (issue #233; Echo Dot 2, Echo Dot 3, Echo Dot 5, Echo Show 5, and from
+  their firmware also the Echo 2nd gen, Echo Show 5 2nd gen, Echo Show 8 1st and 2nd gen and Echo Input (its jack or
+  a Bluetooth speaker), not tried on those yet). Turn on
+  **Phone calls over Bluetooth** (Features), pair the phone with Home Assistant's "Bluetooth pairing" switch, and its
+  calls ring on the Echo: the action button answers and ends them, "stop" and "hang up" end them, and the call talks
+  through the Echo's speaker and call microphone. In Home Assistant: "Phone call", "Phone caller", "Phone", buttons to
+  answer, end and take a call here, and an action that has the phone call a number. Off by default. A phone paired
+  before must be paired again.
+- **The phone's volume keys work during a call**, and the Echo's volume buttons (or Home Assistant) move the phone's
+  call volume too.
+- **A second call**: a call that comes in during a call shows in Home Assistant's "Phone call waiting"; the action
+  button answers it and puts the first one on hold, "Switch phone call" goes back and forth, and ending one brings the
+  held one back.
+- **Wideband (HD voice) calls** where the phone offers it (mSBC): measured on the Echo Dot 2, Dot 3, Dot 5 and Echo
+  Show 5, and on by the same chips on the Echo 2nd gen, Echo Input, Echo Show 5 2nd gen and Echo Show 8.
+- **Echo Dot 5: Bluetooth now uses the Echo's own address.** Every Echo Dot 5 had the same Bluetooth address (the
+  chip's default, 00:0C:43:29:50:01), so phones and Home Assistant could mix two of them up. A phone paired with an
+  Echo Dot 5 before must be paired again.
+
 ## 2026-11-25 — Echo Show: Screen off stays off, motion with Wyoming too
 
 - **Screen off from the drawer now stays off** with **Motion wakes the screen** on: someone moving no longer turns it

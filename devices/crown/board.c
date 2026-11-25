@@ -78,4 +78,9 @@ const struct board board = {
     .speaker_gain_steps = 2,
     .speaker_gain_db = 3,
     .speaker_gain_min_db = -6,                                      /* 30 is loud at full volume on this Show: 2026-10-15 */
+    /* phone calls (docs/re-hfp.md): checkers' path, from the firmware, not run here: the same MT8163 HAL, the same
+     * machine driver links (VOIP_Call_BT_Playback / _Capture), an MT7668 behind the old btmtksdio (v0.0.1.00) */
+    .sco = SCO_PCM, .sco_play = "VOIP_Call_BT_Playback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .bt_sco_cmd = (const unsigned char[]){ 0x72, 0xfc, 4, 0x03, 0x10, 0x00, 0x4a },
+    .sco_msbc_chip = 1,             /* not run here: checkers' MT7668 and links, measured there (2026-11-25) */
 };

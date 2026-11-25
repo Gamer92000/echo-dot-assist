@@ -71,6 +71,7 @@
 #include "core.h"
 #include "ble_crypto.h"
 #include "hci.h"
+#include "scoaudio.h"
 #include "statefile.h"
 
 #define SCAN_INTERVAL 512                       /* 320 ms, units of 0.625 ms */
@@ -89,10 +90,10 @@
 #define GATT_BREAK_MS 3000                      /* then scanning at least this long: ~9 scan intervals, so a device that
                                                  * advertises every second or faster is seen a few times */
 
-enum { H4_CMD = 1, H4_ACL = 2, H4_EVT = 4 };
+enum { H4_CMD = 1, H4_ACL = 2, H4_SCO = 3, H4_EVT = 4 };
 enum { EV_DISCONNECT = 0x05, EV_ENC_CHANGE = 0x08, EV_ENC_REFRESH = 0x30, EV_CMD_COMPLETE = 0x0e, EV_CMD_STATUS = 0x0f, EV_NUM_COMPLETED = 0x13, EV_LE_META = 0x3e };
 enum { LE_CONN_COMPLETE = 0x01, LE_ADV_REPORT = 0x02, LE_CONN_UPDATED = 0x03, LE_LTK_REQUEST = 0x05, LE_PK_COMPLETE = 0x08, LE_DHKEY_COMPLETE = 0x09 };
-enum { OP_DISCONNECT = 0x0406, OP_EVENT_MASK = 0x0c01, OP_RESET = 0x0c03, OP_READ_LOCAL_CMDS = 0x1002, OP_READ_BUFFER = 0x1005, OP_LE_EVENT_MASK = 0x2001,
+enum { OP_READ_BDADDR = 0x1009, OP_MTK_SET_BDADDR = 0xfc1a, OP_DISCONNECT = 0x0406, OP_EVENT_MASK = 0x0c01, OP_RESET = 0x0c03, OP_READ_LOCAL_CMDS = 0x1002, OP_READ_BUFFER = 0x1005, OP_LE_EVENT_MASK = 0x2001,
        OP_LE_READ_BUFFER = 0x2002, OP_LE_ADV_PARAMS = 0x2006, OP_LE_ADV_DATA = 0x2008, OP_LE_SCAN_RSP = 0x2009, OP_LE_ADV_ENABLE = 0x200a, OP_LE_SCAN_PARAMS = 0x200b, OP_LE_SCAN_ENABLE = 0x200c, OP_LE_CONNECT = 0x200d,
        OP_LE_CONNECT_CANCEL = 0x200e, OP_LE_CONN_UPDATE = 0x2013, OP_LE_START_ENC = 0x2019, OP_LE_LTK_NEG = 0x201b,
        OP_LE_READ_PK = 0x2025, OP_LE_DHKEY = 0x2026 };
@@ -108,6 +109,16 @@ enum { ATT_FIND_TYPE_REQ = 0x06, ATT_FIND_TYPE_RSP };
 enum { HCI_E_UNKNOWN_CONN = 0x02, HCI_E_TIMEOUT = 0x08, HCI_E_LIMIT = 0x09, HCI_E_USER_ENDED = 0x13 };
 
 static int fd = -1, wake[2] = { -1, -1 };
+/* one H4 packet whole: the controller thread's commands and ACL, and a call's SCO data from scoaudio.c's thread (the
+ * PC's hci path) through one lock, so no packet lands inside another */
+static pthread_mutex_t wmu = PTHREAD_MUTEX_INITIALIZER;
+static int hwrite(const void *b, size_t n)
+{
+    pthread_mutex_lock(&wmu);
+    ssize_t w = write(fd, b, n);
+    pthread_mutex_unlock(&wmu);
+    return w == (ssize_t)n ? 0 : -1;
+}
 static const struct ble_handler *H;
 static atomic_int want_on, want_active, scanning;
 static atomic_int shown;                        /* what HA and the log were told (ble_scanning): 0 off, 1 passive, 2 active */
@@ -217,7 +228,7 @@ static void acl_flush(void)
         if (!(fhead = f->next)) ftail = &fhead;
         struct conn *c = by_handle(f->handle);
         if (c) {
-            if (write(fd, f->b, f->len) != (ssize_t)f->len) fprintf(stderr, "bluetooth: ACL write failed\n");
+            if (hwrite(f->b, f->len)) fprintf(stderr, "bluetooth: ACL write failed\n");
             else { credits--; c->unacked++; }
         }
         free(f);
@@ -1184,11 +1195,12 @@ static int pump(int ms)
         if (have < 1) break;
         if (in[0] == H4_EVT) { if (have < 3) break; len = 3 + in[2]; }
         else if (in[0] == H4_ACL) { if (have < 5) break; len = 5 + u16(in + 3); }
+        else if (in[0] == H4_SCO) { if (have < 4) break; len = 4 + in[3]; }    /* a call's audio over HCI (scoaudio.c) */
         else { memmove(in, in + 1, --have); continue; }        /* not a packet start: resync (after a partial drain) */
         if (len > sizeof in) return -1;
         if (have < len) break;
         memcpy(pkt, in, len); memmove(in, in + len, have - len); have -= len;      /* handlers may pump again */
-        if (pkt[0] == H4_EVT) event(pkt + 1, len - 1); else acl_rx(pkt + 1, len - 1);
+        if (pkt[0] == H4_EVT) event(pkt + 1, len - 1); else if (pkt[0] == H4_SCO) sco_hci_rx(pkt + 1, len - 1); else acl_rx(pkt + 1, len - 1);
     }
     if (nbatch && ms_since(&batch_t0) >= 100) flush_batch();
     return 0;
@@ -1202,7 +1214,7 @@ static int cmd(unsigned op, const void *par, unsigned n)
     if (n > 255) return -1;
     if (n) memcpy(b + 4, par, n);
     cc_op = -1;
-    if (write(fd, b, 4 + n) != (ssize_t)(4 + n)) return -1;
+    if (hwrite(b, 4 + n)) return -1;
     struct timespec t0; now(&t0);
     while (cc_op != (int)op)
         if (ms_since(&t0) > 2000 || pump(100) < 0) { fprintf(stderr, "bluetooth: no answer to command %04x\n", op); return -1; }
@@ -1252,6 +1264,18 @@ static int setup(void)
         ((st = cmd(OP_LE_EVENT_MASK, le_mask, 8)) && (st < 0 || (st = cmd(OP_LE_EVENT_MASK, le_mask40, 8))))) {
         if (st > 0) fprintf(stderr, "bluetooth: command %04x refused, HCI status 0x%02x\n", cc_op, st);    /* timeouts say so in cmd() */
         return -1;
+    }
+    /* The public address the idme gives (board.bt_mac).  Cannoli's btmtksdio leaves its MT7663 at 00:0c:43:29:50:01 after
+     * every reset, the same on every Echo Dot 5: phones and Home Assistant met them all under one address.  Stock's vendor
+     * library sets it (GORMcmd_HCC_Set_Local_BD_Addr, 0xfc1a, the six bytes as HCI has them); the other models' drivers
+     * do it themselves, and there the controller says the idme's already (measured 2026-11-25: on cannoli 0xfc1a, then
+     * Read BD_ADDR gives the idme's) */
+    if (bdaddr[0] && cmd(OP_READ_BDADDR, NULL, 0) == 0 && memcmp(cc_ret, own_addr, 6)) {
+        unsigned char was[6]; memcpy(was, cc_ret, 6);
+        int r = cmd(OP_MTK_SET_BDADDR, own_addr, 6);
+        if (r < 0) return -1;
+        fprintf(stderr, "bluetooth: the controller was at %02x:%02x:%02x:%02x:%02x:%02x: %s\n", was[5], was[4], was[3], was[2], was[1], was[0],
+                r ? "its vendor command for the address refused" : "set to the idme's");
     }
     if (cmd(OP_LE_READ_BUFFER, NULL, 0) == 0 && u16(cc_ret)) { acl_len = u16(cc_ret); acl_num = cc_ret[2]; }
     else if (cmd(OP_READ_BUFFER, NULL, 0) == 0) { acl_len = u16(cc_ret); acl_num = u16(cc_ret + 3); }    /* shared with BR/EDR */
@@ -1626,7 +1650,7 @@ void ble_server_drop(void) { atomic_store(&drop_srv, 1); poke(); }
 /* hci.h: for a2dp.c on this thread */
 int hci_cmd(unsigned op, const void *par, unsigned n) { return cmd(op, par, n); }
 const unsigned char *hci_ret(void) { return cc_ret; }
-int hci_write(const void *b, size_t n) { return write(fd, b, n) == (ssize_t)n ? 0 : -1; }
+int hci_write(const void *b, size_t n) { return hwrite(b, n); }
 void hci_poke(void) { poke(); }
 
 void ble_start(const struct ble_handler *h)

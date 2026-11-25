@@ -2,7 +2,7 @@
  * SBC decoder, straight from the A2DP specification: frame header, bit allocation (12.6.3), dequantisation, joint stereo
  * and the synthesis filter bank (12.6.4) in floating point.  Checked against BlueZ's libsbc (sbcdec) in tests/unit.
  * A2DP guarantees whole frames per media packet, so there is no resynchronisation and the CRC is not checked (L2CAP is
- * reliable).
+ * reliable); mSBC's frames come over the air as they are, and their CRC is checked.
  */
 #include "sbc.h"
 #include <math.h>
@@ -123,11 +123,22 @@ static void synthesis(float *v, int nsb, const float *s, int16_t *out, int strid
     }
 }
 
-size_t sbc_decode(struct sbc *s, const uint8_t *p, size_t n, int16_t *out, unsigned *samples)
+/* CRC-8, polynomial x^8 + x^4 + x^3 + x^2 + 1, initial 0x0f, over bytes 1-2 and the first `bits` bits from byte 4 */
+static uint8_t crc8(const uint8_t *p, size_t bits)
 {
-    if (n < 4 || p[0] != 0x9c) return 0;
-    int fs = p[1] >> 6, blocks = 4 * ((p[1] >> 4 & 3) + 1), mode = p[1] >> 2 & 3, snr = p[1] >> 1 & 1, nsb = p[1] & 1 ? 8 : 4;
-    int nch = mode ? 2 : 1, bitpool = p[2];
+    unsigned c = 0x0f;
+    for (size_t i = 8; i < 32 + bits; i++) {
+        if (i >= 24 && i < 32) continue;                /* the CRC itself */
+        unsigned b = p[i >> 3] >> (7 - (i & 7)) & 1;
+        c = (c << 1 ^ ((c >> 7 ^ b) ? 0x1d : 0)) & 0xff;
+    }
+    return c;
+}
+/* One frame of the given parameters, its header (and the CRC where CHECK) already read: section 12.6 */
+static size_t decode(struct sbc *s, const uint8_t *p, size_t n, int fs, int blocks, int mode, int snr, int nsb, int bitpool,
+                     int check, int16_t *out, unsigned *samples)
+{
+    int nch = mode ? 2 : 1;
     size_t len = 4 + (size_t)(4 * nsb * nch) / 8;
     if (mode <= 1) len += (blocks * nch * bitpool + 7) / 8;
     else len += ((mode == 3 ? nsb : 0) + blocks * bitpool + 7) / 8;
@@ -136,6 +147,7 @@ size_t sbc_decode(struct sbc *s, const uint8_t *p, size_t n, int16_t *out, unsig
     struct bits b = { p, 32 }; int join = 0, sf[2][8], bits[2][8];
     if (mode == 3) { for (int sb = 0; sb < nsb - 1; sb++) join |= get(&b, 1) << sb; get(&b, 1); }
     for (int ch = 0; ch < nch; ch++) for (int sb = 0; sb < nsb; sb++) sf[ch][sb] = get(&b, 4);
+    if (check && crc8(p, b.pos - 32) != p[3]) return 0;
     if (mode <= 1) for (int ch = 0; ch < nch; ch++) {            /* each channel on its own */
         int one[2][8], ob[2][8];
         memcpy(one[0], sf[ch], sizeof one[0]);
@@ -162,6 +174,21 @@ size_t sbc_decode(struct sbc *s, const uint8_t *p, size_t n, int16_t *out, unsig
     s->rate = rates[fs]; s->channels = nch;
     *samples = blocks * nsb;
     return len;
+}
+
+size_t sbc_decode(struct sbc *s, const uint8_t *p, size_t n, int16_t *out, unsigned *samples)
+{
+    if (n < 4 || p[0] != 0x9c) return 0;
+    return decode(s, p, n, p[1] >> 6, 4 * ((p[1] >> 4 & 3) + 1), p[1] >> 2 & 3, p[1] >> 1 & 1, p[1] & 1 ? 8 : 4, p[2], 0, out, samples);
+}
+
+/* mSBC's fixed parameters (HFP 1.7, 5.7.4): 16 kHz, 15 blocks, mono, loudness, 8 subbands, bitpool 26.  The air is
+ * not reliable as L2CAP is: the CRC is checked, a frame that fails it is a lost one */
+size_t msbc_decode(struct sbc *s, const uint8_t *p, size_t n, int16_t *out)
+{
+    unsigned samples;
+    if (n < MSBC_FRAME || p[0] != 0xad || p[1] || p[2]) return 0;
+    return decode(s, p, n, 0, 15, 0, 0, 8, 26, 1, out, &samples) == MSBC_FRAME ? MSBC_FRAME : 0;
 }
 
 /* ---------------------------------------------------------------- encoder
@@ -209,51 +236,40 @@ static void put(uint8_t *p, size_t *pos, unsigned v, int n)
     while (n--) { if (v >> n & 1) p[*pos >> 3] |= 0x80 >> (*pos & 7); (*pos)++; }
 }
 
-/* CRC-8, polynomial x^8 + x^4 + x^3 + x^2 + 1, initial 0x0f, over bytes 1-2 and the first `bits` bits from byte 4 */
-static uint8_t crc8(const uint8_t *p, size_t bits)
-{
-    unsigned c = 0x0f;
-    for (size_t i = 8; i < 32 + bits; i++) {
-        if (i >= 24 && i < 32) continue;                /* the CRC itself */
-        unsigned b = p[i >> 3] >> (7 - (i & 7)) & 1;
-        c = (c << 1 ^ ((c >> 7 ^ b) ? 0x1d : 0)) & 0xff;
-    }
-    return c;
-}
-
-size_t sbc_encode(struct sbc_enc *e, const int16_t *pcm, uint8_t *out)
+/* BLOCKS blocks of NCH channels (interleaved) into one frame with the header bytes h0..h2: joint stereo where it pays */
+static size_t encode(struct sbc_enc *e, const int16_t *pcm, int nch, int blocks, const uint8_t h[3], uint8_t *out)
 {
     float sb[16][2][8];
-    for (int blk = 0; blk < 16; blk++) for (int ch = 0; ch < 2; ch++) analysis(e->x[ch], pcm + blk * 16 + ch, 2, sb[blk][ch]);
+    for (int blk = 0; blk < blocks; blk++) for (int ch = 0; ch < nch; ch++) analysis(e->x[ch], pcm + blk * 8 * nch + ch, nch, sb[blk][ch]);
 
     int sf[2][8], bits[2][8], join = 0;
     for (int k = 0; k < 8; k++) {
         float m[2] = { 0, 0 }, ms[2] = { 0, 0 };
-        for (int blk = 0; blk < 16; blk++) {
+        for (int blk = 0; blk < blocks; blk++) for (int ch = 0; ch < nch; ch++) if (fabsf(sb[blk][ch][k]) > m[ch]) m[ch] = fabsf(sb[blk][ch][k]);
+        if (nch == 1) { sf[0][k] = scalefactor(m[0]); continue; }
+        for (int blk = 0; blk < blocks; blk++) {
             float l = sb[blk][0][k], r = sb[blk][1][k], mid = (l + r) / 2, side = (l - r) / 2;
-            if (fabsf(l) > m[0]) m[0] = fabsf(l);
-            if (fabsf(r) > m[1]) m[1] = fabsf(r);
             if (fabsf(mid) > ms[0]) ms[0] = fabsf(mid);
             if (fabsf(side) > ms[1]) ms[1] = fabsf(side);
         }
         int a = scalefactor(m[0]), b = scalefactor(m[1]), c = scalefactor(ms[0]), d = scalefactor(ms[1]);
         if (k < 7 && c + d < a + b) {                   /* the last subband never joins (12.5.2) */
             join |= 1 << k; sf[0][k] = c; sf[1][k] = d;
-            for (int blk = 0; blk < 16; blk++) {
+            for (int blk = 0; blk < blocks; blk++) {
                 float l = sb[blk][0][k], r = sb[blk][1][k];
                 sb[blk][0][k] = (l + r) / 2; sb[blk][1][k] = (l - r) / 2;
             }
         } else { sf[0][k] = a; sf[1][k] = b; }
     }
-    allocate(2, 8, 0, e->fs, e->bitpool, sf, bits);
+    allocate(nch, 8, 0, e->fs, e->bitpool, sf, bits);
 
-    size_t len = sbc_enc_len(e->bitpool), pos = 32;
+    size_t len = 4 + 4 * nch + ((nch == 2 ? 8 : 0) + blocks * e->bitpool + 7) / 8, pos = 32;
     memset(out, 0, len);
-    out[0] = 0x9c; out[1] = e->fs << 6 | 3 << 4 | 3 << 2 | 0 << 1 | 1; out[2] = e->bitpool;
-    for (int k = 0; k < 8; k++) put(out, &pos, join >> k & 1, 1);
-    for (int ch = 0; ch < 2; ch++) for (int k = 0; k < 8; k++) put(out, &pos, sf[ch][k], 4);
+    out[0] = h[0]; out[1] = h[1]; out[2] = h[2];
+    if (nch == 2) for (int k = 0; k < 8; k++) put(out, &pos, join >> k & 1, 1);
+    for (int ch = 0; ch < nch; ch++) for (int k = 0; k < 8; k++) put(out, &pos, sf[ch][k], 4);
     out[3] = crc8(out, pos - 32);
-    for (int blk = 0; blk < 16; blk++) for (int ch = 0; ch < 2; ch++) for (int k = 0; k < 8; k++) {
+    for (int blk = 0; blk < blocks; blk++) for (int ch = 0; ch < nch; ch++) for (int k = 0; k < 8; k++) {
         int nb = bits[ch][k];
         if (!nb) continue;
         /* the decoder rebuilds scale * ((2q + 1) / levels - 1): q is the level the sample falls in */
@@ -262,4 +278,17 @@ size_t sbc_encode(struct sbc_enc *e, const int16_t *pcm, uint8_t *out)
         put(out, &pos, q < 0 ? 0 : q > (long)levels - 1 ? (unsigned)levels - 1 : (unsigned)q, nb);
     }
     return len;
+}
+
+size_t sbc_encode(struct sbc_enc *e, const int16_t *pcm, uint8_t *out)
+{
+    const uint8_t h[3] = { 0x9c, (uint8_t)(e->fs << 6 | 3 << 4 | 3 << 2 | 0 << 1 | 1), (uint8_t)e->bitpool };
+    return encode(e, pcm, 2, 16, h, out);
+}
+
+size_t msbc_encode(struct sbc_enc *e, const int16_t *pcm, uint8_t *out)
+{
+    static const uint8_t h[3] = { 0xad, 0, 0 };
+    e->fs = 0; e->bitpool = 26;
+    return encode(e, pcm, 1, 15, h, out);
 }

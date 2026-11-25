@@ -689,3 +689,5 @@ int afe_eq_get(char *json, size_t n)
 }
 
 void afe_eq_set(const char *json) { afe_send(21, json, strlen(json)); }
+
+int audio_sco_native(void) { return 1; }

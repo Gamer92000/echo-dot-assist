@@ -2762,6 +2762,47 @@ Run in this order. Each step says what it proves.
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked
       about, not built.
+- [~] Phone calls over Bluetooth, the Echo as hands-free unit (HFP 1.7 HF, CVSD; issue #233, 2026-11-25): hfp.c,
+      scoaudio.c, cvsd.c, setting `bluetooth_calls` (off).  docs/re-hfp.md has where each chip puts the audio and every
+      measurement.  No chip moves SCO data over HCI; the audio goes as stock's HAL has it: cannoli DL6/UL5 through
+      PCM1 (kernel DAPM routes), donut DL2 / DAI through the 2nd I2S (stock's mixer_paths "bt-sco"), checkers
+      VOIP_Call_BT_*, donut and checkers with the MT7668's 0xfc72 03 10 00 4a (cannoli's newer driver sends it,
+      theirs not), biscuit the air's CVSD on /dev/ebc, coded in cvsd.c.  Measured Echo to Echo with tones both ways
+      (scoprobe for the link, tinyplay/tinycap, ebcprobe), every direction of every model.  hassmic's HFP on hardware
+      against PipeWire 1.6's audio gateway: biscuit and cannoli, service level connection, the link accepted, audio in
+      (biscuit 1752 packets in 6.6 s, 8 lost; cannoli 401 frames, 0 lost), the room's sound out from biscuit; a
+      /dev/ebc teardown race rebooted biscuit once (fixed: the last thread closes it).  The Echo Dot 5's BR/EDR address
+      was the chip's default 00:0c:43:29:50:01 on every unit: ble.c sets the idme's with 0xfc1a.  PC test
+      tests/fake_hfp.py (SDP, RFCOMM, the AT exchange, ring/answer/end/dial/handset/take here/do not disturb, both
+      directions' audio over HCI), unit-cvsd (with a real chip's CVSD in testdata/hfp).
+      Then (2026-11-25, same day): remote volume (+VGS both ways, the phone's taken only while a call's audio is on
+      the Echo: core_call_volume), a second call (AT+CHLD=?, AT+CCWA=1, +CLCC where the phone has enhanced call
+      status; AT+CHLD=2 by the action button with a call waiting and HA's "Switch phone call", AT+CHLD=1 to end
+      beside a held one; HA "Phone call waiting"), mSBC where the host codes the link (ebc, hci: sco_wideband();
+      AT+BAC=1,2, +BCS answered, the link's air mode decides, "take it here" as AT+BCC; msbc.c's H2 framing with
+      losses; sbc.c's msbc_* against libsbc: decoder 79 dB to sbcdec -m, encoder the same SNR as sbcenc -m, every
+      flipped CRC-covered bit refused).  tests/fake_hfp.py: all of it, mSBC both ways through sbcenc/sbcdec -m.
+      Wideband on hardware (same evening, docs/re-hfp.md "Wideband on the PCM paths"): cannoli's MT7663 codes mSBC
+      from/to 16 kHz on its PCM pins, set up and accepted (Enhanced Setup/Accept, data path 1; 5 kHz 100 %, 6 kHz
+      99 %): board `sco_msbc_chip`, scoaudio.c `sco_accept_params`, the PCM devices at 16 kHz.  biscuit's /dev/ebc
+      carries hassmic-made mSBC out at the air's rate and hands in a chip's, both decoded (sbcenc/sbcdec -m); its
+      whole stack against PipeWire's gateway: SLC, codec negotiation to mSBC, +VGS both ways.  donut's MT7668 takes
+      Enhanced Setup/Accept and sets up no mSBC link on data path 1 with transport unit 0; with 16 it does, both ways,
+      on donut and checkers (5 kHz 100 %, 6 kHz 100 %), and cannoli takes 16 too: one parameter set, board
+      `sco_msbc_chip` on donut, cannoli, checkers.  (The MT7668 also passes transparent bytes, two 8-bit slots a frame,
+      which the SoC's mono bus halves: no use.)  Stock never had wideband calls (static: docs/re-hfp.md).
+      Open: a real phone (Android, iPhone) on each model; an mSBC call end to end through hassmic (the paths measured
+      with the probes; PipeWire's gateway reports no call); cupcake, cronos, crown, athena wideband on by their chips' measured siblings, never run; the mSBC fallback's
+      untested branches (fake_hfp.py: the once-per-answer bound of the re-armed window, an accept the command queue
+      dropped, a CVSD link's failure not counted) and a chip refusing the CVSD accept (0x0429) or our setup (0x0428),
+      which nothing turns into a link failure (the answer's window runs out);
+      donut and checkers
+      with hassmic's HFP (their paths measured only Echo to Echo); cannoli's microphone towards the phone unmuted (the
+      trial's -67 dBFS: it was muted, zeros as meant); the phone's voice assistant (AT+BVRA: its audio link is refused
+      without a call now, by design); radar (ebc), cronos, crown (pcm, checkers' links) and athena (pcm by name: its
+      link table not read) set from their firmware, never run; cupcake donut's path (its bootloader's GPIO table muxes
+      the 2nd I2S, its device tree does not), never run; rejecting a waiting call from the Echo (AT+CHLD=0: none of
+      its controls does it yet).
 - [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.

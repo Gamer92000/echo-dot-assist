@@ -987,7 +987,18 @@ for another plugin API fetched before an update, held updates, "Install it all t
 
 ## Bluetooth
 
-- Keys in `state/ble_bonds` (proxy) and `state/bt_keys` (speaker), under `/data/local/hassmic/`.
+- Keys in `state/ble_bonds` (proxy) and `state/bt_keys` (speaker, and phones for calls), under `/data/local/hassmic/`.
+- **Phone calls over Bluetooth** ("Phone calls over Bluetooth", off by default): a phone paired with the Echo (pairing
+  only in the window Home Assistant's "Bluetooth pairing" switch opens) may send a call's audio to it whenever it
+  says it has a call, and the Echo's microphone then goes to that phone. The phone decides where its call talks, as
+  with a car kit: a call answered on the phone talks on the Echo when the phone routes it there (the owner's
+  decision, 2026-11-25). So **a paired phone can open the Echo's microphone by saying it has a call**, without anyone
+  at the Echo; the ring's call animation shows while it does, and Home Assistant's "Phone call" says `connected`.
+  Without a call indicator from the phone (its voice assistant, an app's audio) the audio link is refused.
+  Answering here, taking a call here, switching to a second call (which answers one that waits) and dialling from
+  Home Assistant come only over its keyed connection. Pair only
+  your own phones; unpairing is forgetting the Echo on the phone and pairing anew from Home Assistant (a phone the
+  Echo no longer has a key for cannot connect).
 - **Setup from a phone (Improv)**: offered only without a network: to anyone in range on an Echo that is not set up
   (nothing to lose there), only after a press of the action button on one that is. The Wi-Fi password crosses
   Bluetooth unencrypted, as with every Improv device; the Echo keeps only the network key derived from it.

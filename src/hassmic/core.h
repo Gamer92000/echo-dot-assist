@@ -67,6 +67,7 @@ struct proto {
     void (*plugin_entity)(unsigned key, const char *type);  /* may be NULL: a plugin's entity's state (TYPE NULL), or its
                                                  * event (core_plugin_entity) */
     void (*music_changed)(void);                /* may be NULL: a plugin's music plays, pauses or ends: the media player */
+    void (*phone_changed)(void);                /* may be NULL: a phone's call over Bluetooth changed (hfp_status), lock held */
     int (*keyed)(void);                         /* may be NULL (no such thing: Wyoming): 1 once Home Assistant set the
                                                  * device key (only its keyed link sets a plugin's entities), else 0 */
 };
@@ -139,6 +140,9 @@ int  core_kind_volume(int kind, int set);
 int  core_kind_linked(int kind, int set);
 int  core_kind_offset(int kind);
 void core_set_kind_offset(int kind, int offset);    /* -VOL_OFFSET_MAX..VOL_OFFSET_MAX */
+/* Not the lock: a call's volume as a phone sets it (hfp.c, +VGS): the volume, the music's moved so that a linked Call
+ * volume lands there, or Call volume itself; -1 only reads.  Returns what a call plays at now */
+int  core_call_volume(int set);
 enum { SPEAKER_NONE, SPEAKER_MIXER, SPEAKER_ABSOLUTE };
 void core_speaker_volume(int pct);              /* lock held: a speaker with absolute volume set by its own buttons */
 void core_speaker(int mode, int pct);            /* not the lock: playing on the Echo's speaker, a Bluetooth speaker with a
@@ -325,6 +329,8 @@ int    core_call_button(void);
 int    core_call_answer(void);
 int    core_call_hangup(const char *why);
 int    core_call_status(char *peer, size_t cap);
+void   core_phone_changed(void);                            /* hfp.c: what Home Assistant's "Phone" entities show changed
+                                                               (not the lock) */
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
                                                                stdout, which lands in out, or 20 s have passed (then it is

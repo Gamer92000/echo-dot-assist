@@ -95,4 +95,10 @@ const struct board board = {
     .speaker_gain_steps = 2,
     .speaker_gain_db = 3,
     .speaker_gain_alt = speaker_gains,
+    /* phone calls (docs/re-hfp.md): checkers' path, from the firmware, not run here: the same MT8163 HAL, the same
+     * machine driver links (VOIP_Call_BT_Playback / _Capture: 10 / 11, as checkers'), an MT7668 behind the old
+     * btmtksdio (v0.0.1.00), which leaves the chip's PCM side to us (0xfc72, as on checkers and donut) */
+    .sco = SCO_PCM, .sco_play = "VOIP_Call_BT_Playback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .bt_sco_cmd = (const unsigned char[]){ 0x72, 0xfc, 4, 0x03, 0x10, 0x00, 0x4a },
+    .sco_msbc_chip = 1,             /* not run here: checkers' MT7668 and links, measured there (2026-11-25) */
 };

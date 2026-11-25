@@ -1,5 +1,6 @@
 /* Echo Dot 3rd gen 2018 (donut), Fire OS 6574.1.  Device facts: docs/re-platform.md. */
 #include "board.h"
+#include <stddef.h>
 
 const struct board board = {
     .model = "Echo Dot 3 (donut)",
@@ -35,4 +36,12 @@ const struct board board = {
     .call_mic = 1,
     .speaker_gain_stock = 16,
     .speaker_gain_steps = 2,
+    /* phone calls (docs/re-hfp.md): the MT7668 on the SoC's 2nd I2S, stock's mixer_paths.xml "bt-sco" paths: DL2
+     * (MultiMedia2_PLayback) to it, its capture through HW GAIN1 into the DAI memif (VOIP_Call_BT_Capture).  This
+     * btmtksdio (v0.0.1.00) leaves the chip's PCM side unset: the newer one's 0xfc72 for the MT7668 (cannoli's driver,
+     * btmtk_sdio_set_audio_slave), without which the phone's audio never reaches the SoC (2026-11-25) */
+    .sco = SCO_PCM, .sco_play = "MultiMedia2_PLayback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .sco_route = (const char *const[]){ "O00 I07 Switch", "O01 I08 Switch", "O13 I00 Switch", "O14 I01 Switch", "O11 I10 Switch", NULL },
+    .bt_sco_cmd = (const unsigned char[]){ 0x72, 0xfc, 4, 0x03, 0x10, 0x00, 0x4a },
+    .sco_msbc_chip = 1,             /* the MT7668 codes mSBC from DL2 / the 2nd I2S at 16 kHz, set up and accepted (2026-11-25) */
 };

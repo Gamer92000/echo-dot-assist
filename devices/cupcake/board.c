@@ -43,4 +43,13 @@ const struct board board = {
      * Android's music stream (audio_android.c), whose curve is not measured on this model yet: the Echo Dot 2's
      * stands in (devices/README.md: how to measure) */
     .volume_curve = board_vol_dot2,
+    /* phone calls (docs/re-hfp.md): donut's path, from the firmware, not run here.  The same MT8516 and MT7668, donut's
+     * "bt-sco" paths in its mixer_paths.xml, its own kernel's link "2ND EXT Codec" (2ND I2S, linux_bt_sco_codec), and
+     * its bootloader's GPIO table (LK's mt_gpio_set_default) muxing the 2nd I2S's pins as donut's does: GPIO55-57 mode
+     * 4, GPIO25 mode 6 (its device tree does not; donut's does both).  The old btmtksdio: the chip's PCM setup ours.
+     * The call plays where the Echo Input plays: its jack or a Bluetooth speaker */
+    .sco = SCO_PCM, .sco_play = "MultiMedia2_PLayback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .sco_route = (const char *const[]){ "O00 I07 Switch", "O01 I08 Switch", "O13 I00 Switch", "O14 I01 Switch", "O11 I10 Switch", NULL },
+    .bt_sco_cmd = (const unsigned char[]){ 0x72, 0xfc, 4, 0x03, 0x10, 0x00, 0x4a },
+    .sco_msbc_chip = 1,             /* not run here: donut's MT7668 and paths, measured there (2026-11-25) */
 };

@@ -400,6 +400,46 @@ voice. What it leaves would still come back to the other Echo, so an Echo sends 
 talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the
 one here is clearly louder than the echo of the other: as on a speakerphone, take turns.
 
+## Phone calls over Bluetooth
+
+The Echo as your phone's hands-free speakerphone, as a car kit is (HFP, issue #233): on the Echo Dot 2, Echo Dot 3,
+Echo Dot 5 and Echo Show 5, where it was measured where each model's Bluetooth chip puts a call's audio, and on the
+Echo 2nd gen, Echo Show 5 2nd gen, Echo Show 8 (1st and 2nd gen) and Echo Input (the call on its jack or a
+Bluetooth speaker) as read from their firmware, not tried on them yet ([docs/re-hfp.md](re-hfp.md)).
+
+- **Set up**: turn on "Phone calls over Bluetooth" (Features; off by default), then pair the phone with Home
+  Assistant's "Bluetooth pairing" switch, as for music. A phone paired before the switch was on must be paired again:
+  a phone looks at what the Echo offers only when it pairs. While it is on, every phone paired with the Echo sends its
+  calls here whenever it is connected.
+- **A call comes in**: the Echo rings with its call animation (the phone rings too). The action button answers, and
+  the call talks through the Echo's speaker and its call microphone, with Amazon's echo cancelling for calls ("Call
+  microphone" under Drop In). The action button, "<wake word>, stop" or "hang up" end it.
+- **Where a call talks is the phone's choice**, as with a car kit: a call answered on the phone talks on the Echo when
+  the phone sends its audio over Bluetooth (most do for a connected hands-free device), and the phone's audio picker
+  moves it back to the handset. A paired phone can so turn on the Echo's microphone for its call ([SECURITY.md](SECURITY.md#bluetooth)).
+- **In Home Assistant** (listed while the switch is on): "Phone call" says `no phone`, `idle`, `ringing`, `calling`,
+  `connected` (its audio on the Echo) or `on the phone` (a call talking on the handset: the phone kept its audio); "Phone caller" (the number,
+  or the name the phone gives) and "Phone" (the connected phone's name); the buttons "Answer phone call", "End phone
+  call" (rejects a ringing one) and "Take the phone call here" (brings a call talking on the phone to the Echo); and
+  the action `esphome.<echo>_phone_call` with `number:`, which has the phone call it, its audio on the Echo. Answering,
+  taking a call here, switching calls and calling come only from Home Assistant itself (the keyed connection), as
+  Drop In does.
+- **A second call**: one that comes in during a call (call waiting) or one on hold shows in "Phone call waiting" (its
+  caller, `unknown` where the phone names none; empty without one). The action button answers a waiting call and puts
+  the one you were on on hold; "Switch phone call" in Home Assistant does the same, and goes back and forth between
+  the two. Ending the call you are on ("End phone call", the action button, "hang up") brings the held one back. A
+  waiting call you do not answer stops when the caller gives up (or answer or reject it on the phone).
+- **Only for calls**: the Echo's microphone goes to the phone only while the phone has a call (or one dialled or
+  answered here); an audio link the phone opens without one (its voice assistant, an app's) is refused.
+- **Do not disturb** and the microphones off: the Echo does not ring, the phone does; "Phone call" still says
+  `ringing`. One call at a time on the Echo: during a Drop In a phone's call stays on the phone.
+- **Volume**: the Echo plays a call at its call volume: the volume, or "Call volume" (Sound) with separate volumes.
+  The phone's volume keys move it during a call, and the Echo's volume buttons and Home Assistant move the phone's
+  (HFP's remote volume control). Outside a call the phone's volume does not touch the Echo's.
+- **Sound**: wideband (HD voice, mSBC, 16 kHz) where the phone offers it, which most phones do; narrowband (CVSD,
+  8 kHz) otherwise. Measured on the Echo Dot 2, Dot 3, Dot 5 and Echo Show 5; on the Echo 2nd gen, Echo Input, Echo
+  Show 5 2nd gen and Echo Show 8 by the same chips, not tried there yet ([docs/re-hfp.md](re-hfp.md)).
+
 ## Buttons and light ring
 
 Beyond the README's two figures:

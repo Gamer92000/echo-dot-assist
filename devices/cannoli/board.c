@@ -1,5 +1,6 @@
 /* Cannoli NS6575 / 8349. Firmware + DTB evidence; no hardware measurements. */
 #include "board.h"
+#include <stddef.h>
 const struct board board = {
     .model = "Echo Dot 5 (cannoli)",
     .project = "hassmic.echo-dot-5",
@@ -37,4 +38,10 @@ const struct board board = {
     .speaker_gain = "Speaker Volume A",
     .speaker_gain_stock = 10,
     .speaker_gain_limit = 16,
+    /* phone calls (docs/re-hfp.md): the MT7663's PCM on the SoC's PCM1, from the kernel's DAPM routes (mt8519-afe-pcm,
+     * mendocino "HFP Out"/"HFP In"): DL6 -> O00/O01 -> PCM1, PCM1 -> O02/O03 -> UL5 (two channels whatever is asked,
+     * and only while DL6 plays).  The chip's PCM side the driver sets itself after every reset (0xfc72 49 00 80 00) */
+    .sco = SCO_PCM, .sco_play = "DL6 Playback", .sco_cap = "UL5 Capture", .sco_play_ch = 1, .sco_cap_ch = 2,
+    .sco_msbc_chip = 1,             /* the MT7663 codes mSBC from DL6/UL5 at 16 kHz, set up and accepted (2026-11-25) */
+    .sco_route = (const char *const[]){ "O00 I00 Switch", "O01 I01 Switch", "O02 I02 Switch", "O03 I03 Switch", NULL },
 };

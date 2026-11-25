@@ -357,3 +357,5 @@ void audio_a2dp_reset(void)
     core_run(get, out, sizeof out);
     if (!strncmp(out, "BT##", 4)) audio_a2dp_route(0, 0, "");
 }
+
+int audio_sco_native(void) { return 1; }

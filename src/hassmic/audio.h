@@ -85,6 +85,10 @@ int       voip_write(const void *data, size_t len);
 long long voip_queued_us(void);
 void      voip_close(void);
 
+/* Phone calls over Bluetooth (scoaudio.c): 1 where the model's own audio devices are this backend's (the Echo: its
+ * board.sco path), 0 on the PC (audio_file.c: only SCO over HCI, which the tests ask for) */
+int  audio_sco_native(void);
+
 /* Volume, 0..100.  VOL_MAIN: music, sounds and calls (what the keys move); VOL_TTS: the assistant's replies; VOL_MUTE:
  * a global mute the backend keeps (1 = set; nothing of ours sets it, main.c clears it).  vol_read gives fallback when
  * the backend cannot tell.  The Dots: the mixer's MainVolume, TTSVolume and Mute (audio_manager_*_prop, kept by the
