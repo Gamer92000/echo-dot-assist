@@ -1444,6 +1444,54 @@ Run in this order. Each step says what it proves.
       The guided setup asks too (`fixed_ask` with the settings to start with, defaults from the Echo's lease;
       `fixed_set` after the preset: the request over adb, the PC's own GETs of the new address as the reach).  Its
       `fixed_set` against the Dot 2 over USB: kept, said so.  Improv (the phone's setup) has no field for it.
+- [x] Roaming between the access points of one network (issue #234, 2026-11-25; reported on an eero mesh: a donut on a
+      far node at -90 dBm, ~50 % loss, for hours, with another node 30-40 dB stronger).  Root's `scripts/device/roam.sh`,
+      sourced by main.sh, `roam_look` every netwatch round on the models that stop wifisvc (device.conf `WIFI_SERVICE`:
+      donut, biscuit, radar, cannoli; the Android models' framework roams).  Measured on our UniFi mesh (three APs, one
+      SSID on 2437/2462/5500/5560; the IoT SSID offers 802.11k neighbor reports, not BTM or FT; a sister SSID offers
+      FT-PSK and BTM) with biscuit (USB), donut, cannoli:
+      *What does not roam today.*  wpa_supplicant `v2.6-devel-7.1.2_mbedtls` on every Dot (four builds, one source):
+      no bgscan module (`bgscan simple`/`learn` absent; the `bgscan` field parses and does nothing: the reporter saw
+      no scan, a cannoli's BSS entries were 35992 s old), `SIGNAL_MONITOR` FAIL (no CQM), `NEIGHBOR_REP_REQUEST` FAIL
+      ("Insufficient RRM support in driver"), `WNM_BSS_QUERY` OK.  Amazon's own picker (`adptClntPickBss`,
+      `adptClnt_bgscan`, `adptClntScanDfsChannels`) prefers 5 GHz at association: biscuit joined 5500 at -76 dBm with
+      2462 at -59 there, 34 of 160 pings to the router lost; it does not pull back by itself (biscuit 15 min on 2462).
+      The MediaTek drivers have firmware roaming (`roamingFsm`, neighbor requests, BTM, FT auth) switched off in
+      `/system/vendor/firmware/wifi.cfg` (`DisRoaming 1`, donut and cannoli); `iwpriv wlan0 driver "SET_CFG DisRoaming
+      0"` reads back 0 and starts nothing (no ROAMING event in a reassociation's driver log).  The drivers run
+      wpa_supplicant's SME (`mtk_cfg80211_auth`/`_assoc`).
+      *802.11r*: `key_mgmt WPA-PSK FT-PSK` or `FT-PSK` against the FT SSID: "Association request to the driver failed:
+      err=22" at once on biscuit (gen2) and donut (gen4m), as issue #90's PSK-SHA256 (the 4-way handshake is never
+      reached).  Cannoli (eero's backport of the MediaTek driver) takes it: associated, then the 4-way handshake failed
+      on the wrong key (the FT SSID's PSK is another one, so no FT roam could be tried).  No FT offered: two of three
+      driver families refuse it, and on cannoli an FT transition (the driver's FT authentication) is untried.
+      *Moves.*  `wpa_cli roam` alone: biscuit 2462<->5500 ~200 ms, 7 of 200 pings lost around it; cannoli (gen4m: a
+      deauthentication and a fresh authentication) once went to another AP than the one named (Amazon's picker) and
+      once hung 5 s in authentication and fell back, ~90 pings lost.  With the target pinned (`set_network <id> bssid
+      <target>`, roam, `bssid any` at once): cannoli both ways landed where told, 160 and 240 ms, 1-2 of 160 lost.  A
+      roam to a BSS older than the table keeps (no scan for minutes) answers FAIL: roam.sh moves only right after a scan.
+      *Scans while associated* (age of the current BSS back to 0): 4 channels 0.5 s, every channel 3.2 s (biscuit) and
+      4.2 s (cannoli); the reporter's donut ~6 s.
+      *roam.sh*: weak = signal_poll under -70 dBm for 3 rounds (30 s); then, where the AP's Extended Capabilities say
+      BSS Transition (bit 19), a BTM query (reason 16) and one round for the AP to move it (wpa_supplicant follows the
+      request itself); then a scan, every channel first and at most every 10 min, the network's own channels (learnt
+      from every scan: the stand-in for a neighbor report) in between, one a minute, then 2, 4 and every 5 min while none
+      is found (one router far away has nothing to move to; a level of -9999 or 0 counts as none); a candidate 8 dB stronger
+      and at least -67 dBm, pinned, roamed, unpinned; a target that does not take within 5 s left alone 10 min; 60 s of
+      quiet after any change.  A pin a killed netwatch left (`wifi/roam-pin`) goes at the next round; a network the
+      owner pinned is left alone; the setting `wifi_roaming` (System page, on, exported) off: nothing but the record.
+      Every change of AP said in boot.log (ours, the AP's, the supplicant's own after a lost link) and kept for the
+      page (`wifi/roam`: the AP and the last 5 moves; wifi.c, the Wi-Fi row; the signal from /proc/net/wireless, which
+      the MediaTek drivers fill as an unsigned byte: 199 = -57).  Thresholds as Apple's and Android's rules of thumb;
+      measured here: -73..-76 dBm lost 20-45 % of pings, -54..-64 under 4 %.
+      On the Echos with roam.sh alone (looks every 10 s, real wpa_supplicant): biscuit parked on 5500 at -74 moved
+      itself to 2462 at -54 in 360 ms after its minute and one scan, learning 2462/2437/5560; cannoli (thresholds
+      loosened to make it move on this mesh) to the AP its picker had refused before, 340 ms, unpinned after.
+      `tests/fake_wifi_roam.py` (fake wpa_cli with the picker, the country column of a Dot 5's scan_results, BTM),
+      `tests/fake_web_wifi.py` (the page's JSON).
+      [ ] the BTM query against an access point that offers it: none here takes it on the IoT SSID (UniFi's "BSS
+      Transition" off), so only its decision and the fake were run; the radar not tried (same driver family as biscuit).
+      [ ] 802.11r on cannoli, whose driver takes an FT association: needs an FT network whose key we have.
 - [~] Wi-Fi switch on the settings page (2026-10-07, asked: scan plus a name typed by hand, password before or after
       picking, back to the old network if the new one fails, warn about the new address). hassmic (puffin) may not talk
       to wpa_supplicant: `state/wifi-request` for root (`main.sh` ota_watch, every 2 s) -> `scripts/device/wifi.sh` in the

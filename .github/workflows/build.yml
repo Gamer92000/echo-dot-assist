@@ -217,7 +217,7 @@ jobs:
           echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
           sudo rm -f /var/lib/man-db/auto-update
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libopus-dev libcurl4 netcat-openbsd sbc-tools
+          sudo apt-get install -y --no-install-recommends libopus-dev libcurl4 netcat-openbsd sbc-tools mksh
       - name: Python packages
         timeout-minutes: 5
         run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock

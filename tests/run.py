@@ -44,6 +44,7 @@ TESTS = [
     ("sendspin-9", [PY, "tests/fake_ma_sendspin.py", "--legacy"]),
     ("wifi", [PY, "tests/fake_web_wifi.py"]),
     ("wifi-join", [PY, "tests/fake_wifi_join.py"]),
+    ("wifi-roam", [PY, "tests/fake_wifi_roam.py"]),
     ("volumes", [PY, "tests/fake_ha_volumes.py"]),
     ("timer-sound", [PY, "tests/fake_ha_timer_sound.py"]),
     ("sounds", [PY, "tests/fake_web_sounds.py"]),

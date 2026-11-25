@@ -641,6 +641,11 @@ psk_only() {
     echo "netwatch: network$fixed cut back to WPA-PSK, associating again"
 }
 
+# Roaming between the access points of one network (issue #234): scripts/device/roam.sh, roam_look below.  A copy
+# without it (an update brought main.sh alone, never so far) does without
+roam_look() { :; }
+[ -f $D/roam.sh ] && . $D/roam.sh
+
 # Android's framework, told things by broadcast (device.conf ANDROID_BROADCASTS, "action/extra=true|false" each, sent as
 # booleans): what they set lives in system_server's memory only, so they go again whenever it is a new one (its pid,
 # once boot completed).  Checkers: Amazon's WifiDiagsUtil (fosservices) tests the link against Amazon's captive portal
@@ -743,6 +748,7 @@ netwatch() {
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         psk_only
+        roam_look
         # a fixed address (issue #191, wifi.sh keep): wifisvc's dhcpcd-wlan0 (a boot, a lost network) gives way to it;
         # the Dots only (Android's framework keeps it with the network), and only where one is set or still runs.  Not
         # while wifisvc runs: it starts its dhcpcd again (Dot 2, 2026-11-24: set at boot+34 s, DHCP again, set once

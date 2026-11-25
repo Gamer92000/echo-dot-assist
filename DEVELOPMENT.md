@@ -95,6 +95,8 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/fake_web_wifi.py           # Wi-Fi switch: the sealed password, its PSK, root's wifi.sh against a fake wpa_cli;
                                                    # the fixed address (both worlds, netwatch's keep, the way back)
 .venv/bin/python tests/fake_wifi_join.py          # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
+.venv/bin/python tests/fake_wifi_roam.py          # roaming between access points (issue #234): root's roam.sh against a fake
+                                                 # wpa_cli (Amazon's picker, a Dot 5's scan_results, BTM), pinned moves
 .venv/bin/python tests/fake_web_mww.py            # microWakeWord: models from the page, the engine switch, real detections on the PC
 .venv/bin/python tests/fake_plugins.py            # plugins: hassmic under the launcher with a stand-in wake word plugin (docs/plugins.md)
 .venv/bin/python tests/fake_plugins_fetch.py      # plugins from the plugin index (a stand-in site built by hassmic-plugins' own tool,

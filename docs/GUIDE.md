@@ -1182,6 +1182,21 @@ why. Once the new one works it forgets the old ones. Expect a new IP address: fi
 Assistant (which finds the Echo again within a few minutes if it reaches that network), and approve the browser there
 once more. WPA2 and open networks only; a WPA2/WPA3 mixed network joins as WPA2 (tried on an Echo 2).
 
+**Move to a stronger access point** (System; issue #234; Echo Dots and the Echo 2, on by default): where your Wi-Fi has
+several access points under one name (a mesh, a router with repeaters), the Echo moves to a stronger one when its
+signal stays under -70 dBm for 30 s. It first asks the access point where to go, if the access point takes such
+questions (802.11v, "BSS transition" in many routers' settings), then scans: every channel the first time (3 to 6 s
+off its channel), only the channels your network was seen on after that (half a second): once a minute while the
+signal stays weak, then less often (up to every 5 minutes) while it finds none stronger, as with a single router far
+away. It moves only to an access point at least 8 dB stronger and no weaker than -67 dBm, which takes
+a quarter of a second and keeps its address. An access point that does not take it is left alone for 10 minutes. The
+Wi-Fi row shows the access point the Echo is on (its band and signal) and the last move; the log has each one
+("Wi-Fi moved to ..."). Without this the Echo stays on the access point it joined, however weak, until the link
+breaks: the Wi-Fi service that moved it in Amazon's software is stopped on these Echos, and the Wi-Fi client they keep
+does not look around while connected. Fast roaming (802.11r) is not used: these Echos' Wi-Fi drivers refuse to join
+with it, so a network that requires it is one they cannot join at all. The Echo Shows and the Echo Input move by
+themselves (Android's Wi-Fi service).
+
 **Network address** (System; issue #191): Automatic, the router hands the Echo its address (DHCP; a reservation in the
 router keeps it the same), or Fixed: the address, subnet mask, router and one or two DNS servers, filled in from what
 the Echo has now. Pick an address outside the range your router hands out (its DHCP pool), or two devices can end up

@@ -110,6 +110,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # the fixed address (issue #191): refusals, tried, kept once reached, back,
                                              # netwatch's keep (WIFI_TCP: a stand-in /proc/net/tcp)
 .venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
+.venv/bin/python tests/fake_wifi_roam.py      # roaming between access points (issue #234): root's roam.sh against a fake
+                                             # wpa_cli (Amazon's picker, a Dot 5's scan_results, BTM), pinned moves
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
 .venv/bin/python tests/fake_plugins.py        # plugins (docs/plugins.md): hassmic under build/plugrun-host with a stand-in
@@ -1385,6 +1387,15 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   after DHCP finds it through the other Echos' hello members.  The guided setup asks for one (`scripts/lib/setup.sh`
   `fixed_ask` before the install, `fixed_set` once the satellite runs: the same request as root's, written over adb;
   the PC asks the new address for the page's hello while root waits; `make unit-setup_fixed`).  Improv carries none.
+- **Roaming** (`scripts/device/roam.sh`, issue #234): root's netwatch moves the Echo between the access points of its
+  network where it stops wifisvc (device.conf `WIFI_SERVICE`; the Makefile's `WIFI_ROAMING` lists the setting
+  `wifi_roaming` there only): Amazon's wpa_supplicant has no bgscan module and no CQM, its picker (`adptClntPickBss`)
+  prefers 5 GHz at any signal, the drivers' own roaming is off in wifi.cfg (`DisRoaming 1`), biscuit's and donut's
+  refuse FT AKMs (err=22; cannoli's takes them, FT roams untried), none offers RRM.  signal_poll every round; weak (-70 dBm, 30 s): a BTM query where the AP's Extended Capabilities
+  offer it, then a scan (the network's learnt channels, every channel at most every 10 min); a candidate 8 dB
+  stronger and >= -67 dBm, the move with the target pinned (`set_network bssid`, never left: `wifi/roam-pin`), else
+  the picker goes elsewhere.  `wifi/roam` (AP and last moves) -> wifi.c `wifi_current_json` -> the Wi-Fi row; the
+  signal from /proc/net/wireless (`HASSMIC_PROC_WIRELESS`).  `tests/fake_wifi_roam.py`; measurements in PLAN.md.
 - **Setup (OOBE) and factory reset** (`improv.c`, `main.c`): not set up = from an install or a reset until Home
   Assistant's voice assistant subscribed (`core_link` ready -> `state/adopted`; an existing `state/api_key` counts);
   stock's orange `setup-mode` spinner meanwhile (`core_oobe`).  `improv.c` = Improv Wi-Fi over BLE on `ble.c`'s peripheral role (advertising +

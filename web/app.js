@@ -281,6 +281,7 @@ const HELP = {
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
   https_verify: { help: 'Whether the Echo checks the certificate of a Home Assistant that serves HTTPS itself. Home Assistant then gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
+  wifi_roaming: { help: 'Where your Wi-Fi has several access points under one name (a mesh, or a router with repeaters), the Echo moves to a stronger one when its signal stays weak: under -70 dBm for half a minute, to one at least 8 dB stronger and no weaker than -67 dBm. It first asks the access point where to go, where the access point offers that (802.11v), then looks for itself on the channels your network was seen on. The move takes about a quarter of a second and keeps the Echo\'s address. Without it the Echo stays on the access point it joined, however weak, until the link breaks. The Wi-Fi row above shows the access point it is on and its last moves. On by default. Off: it stays where it joined.' },
   kiosk_internet: { help: 'Kiosk Satellite may reach the internet while this is on: for its own updates and for web pages it shows (iframes, dashboards). Only that app gets out: the Echo\'s own voice satellite stays on your network except for what it needs, and Amazon\'s software stays cut off. Off: it reaches your network only, so it shows Home Assistant but cannot update itself or load outside pages. On by default. Takes effect within seconds.' },
   kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
   kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
@@ -496,6 +497,7 @@ const SUB = {
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
   https_verify: 'Checks the certificate of an HTTPS Home Assistant',
+  wifi_roaming: 'Moves to a stronger access point of your network',
   kiosk_internet: 'Kiosk Satellite may reach the internet',
   kiosk_mic: 'Kiosk Satellite may use the microphone',
   kiosk_camera: 'Kiosk Satellite may use the camera, also to scan a QR code',
@@ -3403,11 +3405,26 @@ const wifiPassProblem = (p) => !p || /^[0-9a-fA-F]{64}$/.test(p) ? null
   : !/^[\x20-\x7e]*$/.test(p) ? 'A Wi-Fi password has only the characters of an English keyboard.'
   : p.length < 8 || p.length > 63 ? 'A Wi-Fi password has 8 to 63 characters.' : null;
 
+// The access point the Echo is on and its last move between those of the network (root's roam.sh, issue #234)
+const wifiBand = (f) => (f >= 5925 ? '6 GHz' : f >= 4900 ? '5 GHz' : '2.4 GHz');
+const wifiWhen = (t) => { const d = new Date(t * 1000); return t < 1767225600 ? 'since the start' : d.toDateString() === new Date().toDateString()
+  ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
+const WIFI_HOW = { roam: 'moved by the Echo', ap: 'moved by the access point', self: 'joined again' };
+function wifiAp(w) {
+  const ap = w.ap, last = (w.moves || []).slice(-1)[0];
+  if (!ap) return [];
+  const out = [h('span', { class: 'row-val-sub' }, ap.signal ? wifiSig(ap.signal) : null,
+    `Access point ${ap.bssid} · ${wifiBand(ap.freq)}${ap.signal ? ` · ${ap.signal} dBm` : ''}`)];
+  if (last) out.push(h('span', { class: 'row-val-sub' }, `Last move ${wifiWhen(last.at)} (${WIFI_HOW[last.how]}): from ${last.from_signal} dBm on ${wifiBand(last.from_freq)} to ${last.to_signal} dBm on ${wifiBand(last.to_freq)}`
+    + (last.ms >= 0 ? `, ${last.ms} ms` : '')));
+  return out;
+}
+
 function wifiRow() {
   const now = h('div', { class: 'row-val' });
   wifiCtl = { paint: () => {
     const w = state.wifi, ip = (w && w.ip) || location.hostname;
-    now.replaceChildren(...(w ? [w.ssid, h('span', { class: 'row-val-sub' }, ip)]
+    now.replaceChildren(...(w ? [w.ssid, h('span', { class: 'row-val-sub' }, ip), ...wifiAp(w)]
       : [h('span', { class: 'row-val-sub' }, `Network not known yet: it shows once the Echo has looked for networks · ${ip}`)]));
   } };
   return infoRow('Wi-Fi', 'A new network is tried before it is kept', 'A switch tries the new network first and keeps it only once the Echo is on it; if the Echo does not get on it within about a minute, it goes back to this one by itself.',

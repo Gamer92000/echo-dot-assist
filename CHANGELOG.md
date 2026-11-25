@@ -2,6 +2,17 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — Wi-Fi: moving to a stronger access point
+
+- **Echo Dots and the Echo 2 now move between the access points of a mesh** (issue #234). Before, an Echo stayed on
+  the access point it joined first, however weak, until the link broke: replies cut off, the light red when spoken
+  to. Now, when the signal stays under -70 dBm for half a minute, the Echo looks for a stronger access point of the
+  same network and moves there in about a quarter of a second, keeping its address. Where the access point offers
+  it (802.11v), it asks the access point first. On by default: **Move to a stronger access point** (System) switches
+  it off.
+- **The Wi-Fi row (System) shows the access point** the Echo is on, its band and signal, and the last move between
+  access points. Every move is in the log too.
+
 ## 2026-11-25 — Phone calls over Bluetooth
 
 - **The Echo as your phone's speakerphone** (issue #233; Echo Dot 2, Echo Dot 3, Echo Dot 5, Echo Show 5, and from

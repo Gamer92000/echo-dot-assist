@@ -80,7 +80,9 @@ def main(android=False):
         p = root(); o, _ = p.communicate(timeout=60); rootlog.append(o); return o
 
     log = os.path.join(tmp, "log")
-    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_WIFI=out, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw",
+    wireless = os.path.join(tmp, "wireless")
+    env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_WIFI=out, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PROC_WIRELESS=wireless,
+               HASSMIC_WIFI_ROAMING="0" if android else "1",
                HASSMIC_PLAY=os.path.join(tmp, "play.raw"), HASSMIC_MDNS_FILE=os.path.join(tmp, "none"), HASSMIC_ARB_ADDR="127.255.255.255",
                HASSMIC_MODELS=os.path.join(tmp, "models"), HASSMIC_ADB_OPEN=os.path.join(tmp, "adb-open"), HASSMIC_LOG=log)
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", "16980", "-n", "Echo Wifi", "-L", "-z", "0", "-o", "0",
@@ -114,7 +116,35 @@ def main(android=False):
         check(e.get("hex") == H(EXOTIC) and e.get("sec") == "open" and nets.get("Only3", {}).get("sec") == "sae", "UTF-8 and \\t decoded, open and WPA3-only told apart")
         check(len(nets) == 6 and [n["signal"] for n in w["scan"]["networks"]] == sorted((n["signal"] for n in w["scan"]["networks"]), reverse=True),
               "the hidden one left out, strongest first")
-        check(b.state()["wifi"] == {"ssid": "HomeNet", "ip": "192.168.1.20", "fixed": False}, "the page's state: the network now")
+        check(b.state()["wifi"] == {"ssid": "HomeNet", "ip": "192.168.1.20", "fixed": False, "ap": None, "moves": []}, "the page's state: the network now")
+
+        # ---- roaming (issue #234): root's record (scripts/device/roam.sh), the signal from /proc/net/wireless
+        if not android:
+            with open(os.path.join(out, "roam"), "w") as f:
+                f.write("ap aa:00:00:00:00:01 2437 1795650000\n"
+                        "moved 1795640000 self aa:00:00:00:00:09 5500 -88 aa:00:00:00:00:02 5180 -61 -\n"
+                        "moved 1795649000 roam aa:00:00:00:00:02 5180 -75 aa:00:00:00:00:01 2437 -59 240\n"
+                        "moved 1795649100 roam AA:00:00:00:00:02 5180 -75 aa:00:00:00:00:01 2437 -59 240\n"     # not wpa_supplicant's: left out
+                        "moved 1795649200 \"x\" aa:00:00:00:00:02 5180 -75 aa:00:00:00:00:01 2437 -59 240\n")
+            with open(wireless, "w") as f:      # a MediaTek driver's unsigned level: 199 = -57 dBm
+                f.write("Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n"
+                        " face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n"
+                        "  p2p0: 0000    0     0     0        0      0      0      0      0        0\n"
+                        " wlan0: 0000    0.  199.    0.       0      0      0      0      0        0\n")
+            w = b.state()["wifi"]
+            check(w["ap"] == {"bssid": "aa:00:00:00:00:01", "freq": 2437, "since": 1795650000, "signal": -57},
+                  "the access point, its channel, since when, and the signal (unsigned level read as dBm)")
+            check([m["how"] for m in w["moves"]] == ["self", "roam"] and w["moves"][1] == {"at": 1795649000, "how": "roam", "from": "aa:00:00:00:00:02",
+                  "from_freq": 5180, "from_signal": -75, "to": "aa:00:00:00:00:01", "to_freq": 2437, "to_signal": -59, "ms": 240}
+                  and w["moves"][0]["ms"] == -1, "the moves, oldest first; lines that are not root's left out")
+            os.unlink(wireless)
+            check("signal" not in b.state()["wifi"]["ap"], "no /proc/net/wireless: no signal")
+            rs = next((x for x in b.state()["settings"] if x["name"] == "wifi_roaming"), None)
+            check(rs is not None and rs["value"] in (1, True, "on"), "the switch listed, on by default: " + str(rs))
+            b.set(wifi_roaming="off")
+            check("wifi_roaming=off" in open(os.path.join(state, "config")).read().split("\n"), "off: in state/config, where root's roam.sh reads it")
+            b.set(wifi_roaming="on")
+            os.unlink(os.path.join(out, "roam"))
 
         # ---- a fixed address (issue #191)
         tcp = renv["WIFI_TCP"]

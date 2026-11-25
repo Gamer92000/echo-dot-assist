@@ -60,6 +60,8 @@ say() { printf 'wifi: %s\n' "$*"; }        # printf, not echo: mksh's echo takes
 W() { if [ -S $WPA_SOCKETS/$WLAN ]; then wpa_cli -i $WLAN -p $WPA_SOCKETS "$@"; else wpa_cli -g@android:wpa_$WLAN IFNAME=$WLAN "$@"; fi 2>/dev/null; }
 ok() { [ "$(W "$@" | tail -n 1)" = OK ]; }
 val() { W "$@" | tail -n 1; }
+# roaming's pin (scripts/device/roam.sh, "<id> <bssid>"), never saved into wpa_supplicant.conf: taken off before a save
+unpin() { local i b; [ -f $O/roam-pin ] && read -r i b < $O/roam-pin && [ "$(val get_network $i bssid)" = "$b" ] && W set_network $i bssid any > /dev/null; rm -f $O/roam-pin; }
 put() { cat > $O/$1.$$ && chmod 644 $O/$1.$$ && mv $O/$1.$$ $O/$1; }       # what hassmic reads: whole or not at all
 hex() { case $1 in ''|*[!0-9a-f]*) return 1;; esac; [ ${#1} -le $2 ] && [ $(( ${#1} % 2 )) = 0 ]; }
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
@@ -401,7 +403,7 @@ join() {
     # It works: every network saved before goes (the same name with an older password too), then it is saved.  Not
     # wpa_supplicant's P2P groups (disabled=2): Wi-Fi Direct's, not a network to join.
     for i in $ids; do [ "$(val get_network $i disabled)" = 2 ] || W remove_network $i > /dev/null; done
-    saved=1; ok save_config || { saved=0; say "!! on $name, but wpa_supplicant.conf could not be written: a reboot goes back"; }
+    unpin; saved=1; ok save_config || { saved=0; say "!! on $name, but wpa_supplicant.conf could not be written: a reboot goes back"; }
     fixed_read && { rm -f $O/address; say "the fixed address $fip was the old network's: DHCP on this one"; }
     say "switched to $name, address $ip"
     status
@@ -511,7 +513,7 @@ forget)
         for i in $(W list_networks | sed -n 's/^\([0-9][0-9]*\)[[:space:]].*/\1/p'); do
             [ "$(val get_network $i disabled)" = 2 ] || W remove_network $i > /dev/null
         done
-        ok save_config && say "every saved network forgotten" || say "!! networks removed, but wpa_supplicant.conf could not be written: a reboot brings them back"
+        unpin; ok save_config && say "every saved network forgotten" || say "!! networks removed, but wpa_supplicant.conf could not be written: a reboot brings them back"
     fi
     # the fixed address goes with the networks (on Android it was theirs); the Dots back on DHCP for whatever comes next
     fixed_read && say "the fixed address $fip forgotten"

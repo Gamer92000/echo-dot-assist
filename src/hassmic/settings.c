@@ -71,7 +71,11 @@ static _Atomic int duck_db = 16;                        /* music_duck: what the 
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
 static int bt_proxy = 1;                                /* on: what every Echo did before the switch came (issue #152) */
 static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
+#ifndef WIFI_ROAMING
+#define WIFI_ROAMING 0                  /* the Makefile's: 1 where device.conf has WIFI_SERVICE (root stops wifisvc, roam.sh roams) */
+#endif
 static int kiosk_net = 1;                                 /* lockdown.sh reads it from state/config */
+static int wifi_roam = 1;                                 /* root's roam.sh reads it from state/config */
 static int kiosk_mic;                                     /* off: main.sh keeps RECORD_AUDIO from the app; it reads state/config */
 static int kiosk_cam;                                     /* off: and CAMERA */
 static int kiosk_dlna;                                    /* off: lockdown.sh admits the app's DLNA renderer only on "=on" */
@@ -111,7 +115,7 @@ static int colour_actual(void)
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, CALL_MIC, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -243,6 +247,10 @@ static const struct setting table[NSET] = {
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* https.c keeps it: media from a Home Assistant that serves HTTPS itself (issue #30) */
     [HTTPS_VERIFY] = { "https_verify", "Check HTTPS certificates", "System", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* stored on/off: root's scripts/device/roam.sh moves the Echo to a stronger access point of its network unless
+     * state/config says off (issue #234; where wifisvc is stopped, device.conf WIFI_SERVICE: Android's framework roams
+     * on the others).  Exported: a choice about the network, which the Echos share */
+    [WIFI_ROAM]   = { "wifi_roaming", "Move to a stronger access point", "System", NULL, S_BOOL, 0, 1, 1, 0 },
     /* stored on/off; root's lockdown.sh lets Kiosk Satellite's uid out unless state/config says off (screen models) */
     [KIOSK_NET]   = { "kiosk_internet", "Kiosk Satellite internet access", "System", NULL, S_BOOL, 0, 1, 0, 0 },
     /* stored on/off: root's main.sh grants or revokes the app's RECORD_AUDIO (screen models; not exported:
@@ -307,6 +315,7 @@ static int present(enum id i)
     case BAND: return ring_band_rows(-1) >= 0;
     case MUSIC_PAGE: return screen_ui();
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: case KIOSK_DLNA: return board.kiosk;
+    case WIFI_ROAM: { const char *e = getenv("HASSMIC_WIFI_ROAMING"); return e ? *e == '1' : WIFI_ROAMING; }     /* tests */
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
     case SCR_COLOUR: return colour_actual() >= 0;
     case SCREEN_TEXT: return screen_words_on(-1) >= 0;
@@ -420,6 +429,7 @@ int settings_get(const struct setting *s)
     case ARB_AUTO: return arb_window_auto(-1);
     case ARB_WINDOW: return arb_window(-1);
     case ARB_OFFSET: return arb_offset(INT_MIN);
+    case WIFI_ROAM: return wifi_roam;
     case KIOSK_NET: return kiosk_net;
     case KIOSK_MIC: return kiosk_mic;
     case KIOSK_CAM: return kiosk_cam;
@@ -507,6 +517,7 @@ static void put(enum id i, int v)
     case ARB_AUTO: arb_window_auto(v); break;
     case ARB_WINDOW: arb_window(v); break;
     case ARB_OFFSET: arb_offset(v); break;
+    case WIFI_ROAM: wifi_roam = v; break;
     case KIOSK_NET: kiosk_net = v; break;
     case KIOSK_MIC: kiosk_mic = v; break;
     case KIOSK_CAM: kiosk_cam = v; break;
