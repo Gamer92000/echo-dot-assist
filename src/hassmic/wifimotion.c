@@ -50,7 +50,16 @@ static atomic_int enabled, sensitivity = WIFIMOTION_SENS_DEFAULT, motion = -1;
 static int present = -1, sock = -1, cmd = -1;
 static const char *file;                /* readings from a file instead of the ioctl: the module's, or HASSMIC_FAKE_WIFI's (tests) */
 static int fake;
-static void (*changed_cb)(void);
+/* who hears a change: Home Assistant's sensor (proto_esphome.c, from its first link) and the Echo Show's screen (main.c,
+ * at start, whatever the protocol); each slot written once before the count that publishes it */
+#define LISTENERS 4
+static void (*listeners[LISTENERS])(void);
+static atomic_int nlisteners;
+static void changed_cb(void)
+{
+    int n = atomic_load_explicit(&nlisteners, memory_order_acquire);
+    for (int i = 0; i < n; i++) listeners[i]();
+}
 
 static long long mono_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000LL + t.tv_nsec / 1000000; }
 
@@ -132,14 +141,26 @@ static int rx_stat(char *buf)
     return 0;
 }
 
+static int probe(void);
 int wifimotion_present(void)
 {
-    if (present >= 0) return present;
-    present = 0;
+    /* probed once, under a lock: main() (the screen's listener), proto_esphome.c's first link and the settings' list may
+       ask first at the same moment */
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    if (present < 0) present = probe();
+    int p = present;
+    pthread_mutex_unlock(&mu);
+    return p;
+}
+
+static int probe(void)
+{
+    int ok = 0;
     char *buf = malloc(BUF);
     if (!buf) return 0;
-    if ((file = getenv("HASSMIC_FAKE_WIFI"))) { fake = 1; present = rx_stat(buf) == 0; }
-    else if ((file = getenv("HASSMIC_WIFI_KMOD"))) present = 1;                       /* loaded once switched on */
+    if ((file = getenv("HASSMIC_FAKE_WIFI"))) { fake = 1; ok = rx_stat(buf) == 0; }
+    else if ((file = getenv("HASSMIC_WIFI_KMOD"))) ok = 1;                       /* loaded once switched on */
     else if ((sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)) >= 0) {
         /* the command's number from the driver's own table rather than a constant (donut: 0x8BEF) */
         static struct iw_priv_args args[256]; struct iwreq w;
@@ -147,13 +168,13 @@ int wifimotion_present(void)
         w.u.data.pointer = args; w.u.data.length = sizeof args / sizeof args[0];
         if (ioctl(sock, SIOCGIWPRIV, &w) == 0)
             for (int i = 0; i < w.u.data.length; i++) if (!strcmp(args[i].name, "driver")) cmd = args[i].cmd;
-        present = cmd >= 0 && rx_stat(buf) == 0 && wm_parse_rcpi(buf) >= 0;
-        if (!present) { close(sock); sock = -1; }
+        ok = cmd >= 0 && rx_stat(buf) == 0 && wm_parse_rcpi(buf) >= 0;
+        if (!ok) { close(sock); sock = -1; }
     }
     free(buf);
-    fprintf(stderr, "wifi motion (experimental): %s%s\n", present ? "available, off unless switched on" : "not available on this Wi-Fi driver",
-            present && file && !fake ? " (through the kernel module)" : "");
-    return present;
+    fprintf(stderr, "wifi motion (experimental): %s%s\n", ok ? "available, off unless switched on" : "not available on this Wi-Fi driver",
+            ok && file && !fake ? " (through the kernel module)" : "");
+    return ok;
 }
 
 static void *poll_thread(void *arg)
@@ -167,7 +188,7 @@ static void *poll_thread(void *arg)
     wm_reset(&d); memset(&kinds, 0, sizeof kinds);
     for (;;) {
         if (!atomic_load(&enabled)) {
-            if (atomic_exchange(&motion, -1) != -1 && changed_cb) changed_cb();
+            if (atomic_exchange(&motion, -1) != -1) changed_cb();
             wm_reset(&d); memset(&kinds, 0, sizeof kinds); fails = 0; frozen = 0; same_ms = 0; frames = -1;
             usleep(200000);
             continue;
@@ -196,7 +217,7 @@ static void *poll_thread(void *arg)
                             h == 1 ? " (Wi-Fi down?)"
                             : h == 0 ? " (the Wi-Fi driver is unloaded or was not hooked again: kernel log, hassmic_rcpi4m)"
                             : file && !fake && strstr(file, "rcpi4m") ? " (Wi-Fi down, or the Wi-Fi driver reloaded, which this older module does not hook again: restart the Echo if Wi-Fi is up)" : "");
-                    if (atomic_exchange(&motion, -1) != -1 && changed_cb) changed_cb();
+                    if (atomic_exchange(&motion, -1) != -1) changed_cb();
                 }
             } else {
                 if (frozen) { fprintf(stderr, "wifi motion: frames again\n"); wm_reset(&d); memset(&kinds, 0, sizeof kinds); }
@@ -220,7 +241,7 @@ static void *poll_thread(void *arg)
             fails = 0;
             if (atomic_exchange(&motion, m) != m) {
                 fprintf(stderr, "wifi motion: %s\n", m ? "moving" : "still");
-                if (changed_cb) changed_cb();
+                changed_cb();
             }
         }
         long long left = t + POLL_MS - mono_ms();
@@ -231,11 +252,19 @@ static void *poll_thread(void *arg)
 
 void wifimotion_start(void (*changed)(void))
 {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
     static int started;
-    if (started || !wifimotion_present()) return;
-    started = 1; changed_cb = changed;
-    pthread_t t;
-    if (pthread_create(&t, NULL, poll_thread, NULL) == 0) pthread_detach(t);
+    if (!wifimotion_present()) return;
+    pthread_mutex_lock(&mu);
+    int n = atomic_load(&nlisteners);
+    if (changed && n < LISTENERS) { listeners[n] = changed; atomic_store_explicit(&nlisteners, n + 1, memory_order_release); }
+    else if (changed) fprintf(stderr, "wifi motion: a listener left out (%d already)\n", LISTENERS);
+    if (!started) {
+        started = 1;
+        pthread_t t;
+        if (pthread_create(&t, NULL, poll_thread, NULL) == 0) pthread_detach(t);
+    }
+    pthread_mutex_unlock(&mu);
 }
 
 int wifimotion_enable(int set)

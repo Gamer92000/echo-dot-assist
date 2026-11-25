@@ -616,9 +616,12 @@ static void *band_thread(void *arg)
                timeout counts from its end (the sensor's own 30 s after the last movement); never in Do not disturb.
                Not while the timeout is the UI's (the clock: NEVER here), which hears it as "mo" itself */
             int mv = screen_motion(), dnd = core_dnd(-1) > 0;
-            if (mv && !moved && !dnd && screen_motion_wake(-1) > 0 && screen_interactive() != 1) {
-                fprintf(stderr, "band: motion wakes the screen\n");
-                last_wake = now; screen_wake();     /* (WAKE_EVERY: a pattern's wake right after waits) */
+            if (mv && !moved && !dnd && screen_motion_wake(-1) > 0) {
+                if (screen_slept()) fprintf(stderr, "band: motion, the screen left dark (put out from the drawer)\n");
+                else if (screen_interactive() != 1) {
+                    fprintf(stderr, "band: motion wakes the screen\n");
+                    last_wake = now; screen_wake(); /* (WAKE_EVERY: a pattern's wake right after waits) */
+                }
             }
             int hold = mv && !dnd && screen_motion_keep(-1) > 0 && t != NEVER_MS;
             if (hold != motion_held)

@@ -175,7 +175,7 @@ static int t_measure(void *ctx, const char *s, int px, int bold)  /* as android.
 }
 static void t_launch(void *ctx, const char *pkg, const char *cls) { (void)ctx; (void)pkg; (void)cls; }
 static void t_back(void *ctx) { (void)ctx; }
-static void t_sleep(void *ctx) { (void)ctx; }
+static int t_sleep(void *ctx) { (void)ctx; return 1; }
 static const struct ui_platform plat = { t_text, t_launch, t_back, t_send, t_apps, t_image, t_shot, t_sleep, t_measure };
 
 /* ---------------------------------------------------------------- frames and pictures */

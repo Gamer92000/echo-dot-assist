@@ -19,14 +19,17 @@
 #define screen_motion screen_motion_none
 #define screen_motion_keep screen_motion_keep_none
 #define screen_motion_wake screen_motion_wake_none
+#define screen_slept screen_slept_none
 #include "../../src/hassmic/screen_none.c"
 #undef screen_motion
 #undef screen_motion_keep
 #undef screen_motion_wake
-static volatile int motion, motion_keep, motion_wake;
+#undef screen_slept
+static volatile int motion, motion_keep, motion_wake, slept;
 int screen_motion(void) { return motion; }
 int screen_motion_keep(int set) { (void)set; return motion_keep; }
 int screen_motion_wake(int set) { (void)set; return motion_wake; }
+int screen_slept(void) { return slept; }
 
 const struct board board = { .volume_steps = 100 };
 static volatile int muted, dnd_on, spawns_wake, spawns_act, spawns_timeout, last_timeout;
@@ -139,6 +142,12 @@ static void motion_test(const char *dir)
     check(spawns_act > ac && spawns_wake == wk, "keeps alone: activity, no wake");
     motion = 0; ms(1500);
     motion_keep = 0; motion_wake = 1;
+    slept = 1; wk = spawns_wake; motion = 1; ms(2500);
+    check(spawns_wake == wk, "put out from the drawer (slept): motion leaves the screen dark");
+    motion = 0; ms(1500); slept = 0; motion = 1;
+    MWAIT(spawns_wake > wk);
+    check(spawns_wake == wk + 1, "on again since: the next motion wakes it");
+    motion = 0; ms(1500);
     /* no renderer for a new height: the checks go on a second at a time */
     char p[320]; snprintf(p, sizeof p, "%s/broken", dir); FILE *f = fopen(p, "w"); if (f) fclose(f);
     ring_band_rows(ROWS + 1); ms(1500);

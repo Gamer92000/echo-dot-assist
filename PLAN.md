@@ -3758,6 +3758,17 @@ Run in this order. Each step says what it proves.
       `fake_ha_esphome_features.py`.  Seen on the contributor's Echo Show 5 2nd gen (PR #190, 2026-11-15): on about
       a second after walking in, held while moving, dark about a minute after leaving ("Screen sleeps after" not
       stated).  Open: our own Shows.
+      Follow-ups (2026-11-25, review of the merged PR): the poller started only with Home Assistant's first ESPHome
+      link (`proto_esphome.c` `serve`), so under Wyoming the switches did nothing and the UI heard motion only at the
+      band's next look; `wifimotion_start` now takes up to 4 listeners and `main.c` starts it with the screen's
+      (`motion_screen` -> `screen_motion`) wherever there is a screen, whatever the protocol.  The drawer's Screen
+      off wins over "wakes": the UI says `slept 1` with it and `slept 0` once the screen is on again however it came on
+      (`scene_screen`), screen.c's `screen_slept` (forgotten with a new UI, nothing once the UI was given up), the
+      band leaves such a screen dark.  The page: a `when` row changed while its page is hidden marks that page's flow
+      to be placed anew when it shows (`reflow` places cards once per column count).  Checked: `ui_test` (`slept`
+      both ways, nothing for a screen out otherwise), `unit-ring_band` (slept: no wake; after: the wake),
+      `fake_screen_words.py` (the UI's `slept` end to end; an Echo under Wyoming whose UI hears the motion; that check
+      fails with main.c's start taken out: the harness's own probe of the ESPHome port started the poller).
 - [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
       `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
       (Brazil's before "America/"); the aligner (no MFA model for them in build.sh) skips them, the page's as the

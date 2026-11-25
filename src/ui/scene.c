@@ -516,7 +516,14 @@ void scene_apps(struct scene *s, struct ui_app *apps, int n)
     send(s, "apps.");
 }
 
-void scene_screen(struct scene *s, int on, long long now) { s->now = now; s->screen_on = on; }
+void scene_screen(struct scene *s, int on, long long now)
+{
+    s->now = now;
+    /* on again after the drawer's Screen off, however (a touch, the power button, the band's wake for a pattern): Wi-Fi
+       motion may wake it again from here (ring_band.c) */
+    if (on && !s->screen_on && s->slept) { s->slept = 0; send(s, "slept 0"); }
+    s->screen_on = on;
+}
 
 /* ---------------------------------------------------------------- touches */
 

@@ -118,6 +118,7 @@ static int clock_big, sleep_min = 5;                            /* (lock) */
 static int motion_keep, motion_wake, moving;                    /* (lock) */
 static unsigned mo_gen, mo_sent;
 static atomic_int ui_front;                                     /* the UI's "front": its face in front, the timeout the UI's */
+static atomic_int slept;                                        /* the UI's "slept": the drawer put the screen out (screen.h) */
 static char heard[1000], reply[1000]; static int w_idle; static long long w_idle_at;   /* (lock; a line holds 1023) */
 static unsigned words_gen, words_sent, wo_gen, wo_sent;
 static atomic_int timers_now, keep_on;                          /* a change to read now; timers shown: the screen stays on */
@@ -304,6 +305,8 @@ int screen_clock(int set) { return setting(&clock_big, set, 0, 1); }
 int screen_sleep_min(int set) { return setting(&sleep_min, set, 0, 120); }
 int screen_motion_keep(int set) { return setting(&motion_keep, set, 0, 1); }
 int screen_motion_wake(int set) { return setting(&motion_wake, set, 0, 1); }
+
+int screen_slept(void) { return atomic_load(&slept) && !atomic_load(&gave_up); }
 
 int screen_motion(void)
 {
@@ -564,6 +567,9 @@ static void on_line(char *l)
         }
     } else if (!strncmp(l, "front ", 6)) {                     /* the UI's face in front (no app, music page, */
         atomic_store(&ui_front, atoi(l + 6) == 1);              /* drawer, setup): the screen saver's (ring_band.c) */
+    } else if (!strncmp(l, "slept ", 6)) {                     /* the drawer's Screen off, until the screen is on */
+        int v = atoi(l + 6) == 1;                               /* again (ring_band.c: no motion wake meanwhile) */
+        if (atomic_exchange(&slept, v) != v) fprintf(stderr, "screen: %s\n", v ? "put out from the drawer: Wi-Fi motion leaves it dark" : "on again after the drawer's Screen off");
     } else if (!strcmp(l, "apps.")) {
         pthread_mutex_lock(&lock); memcpy(apps, apps_new, sizeof apps); napps = napps_new; pthread_mutex_unlock(&lock);
         napps_new = 0;
@@ -723,6 +729,7 @@ static void ui_gone(int *in, pid_t pid)
     pthread_mutex_lock(&lock);
     atomic_fetch_add(&ui_gen, 1); atomic_store(&ui_width, 0);    /* its reader's lines no more: a "ready" from a UI */
     ui_up = 0; fifo.n = 0; atomic_store(&ui_front, 0);           /* stopped as it came up would be the next one's; */
+    atomic_store(&slept, 0);                                     /* (nobody left to say "slept 0") */
     cq[1].n = 0;                                                 /* nor its requests (its lists' numbers: the next one's) */
     pthread_mutex_unlock(&lock);
     for (int i = 0; i < 20 && pid > 0 && !kill(pid, 0); i++) usleep(100000);   /* (SIGCHLD ignored: gone is gone) */
@@ -778,6 +785,7 @@ static void *writer(void *arg)
             tz_sent = lang_sent = meta_sent = prog_sent = ctl_sent = art_sent = gone_sent = band_sent = 0; home_told = 0;
             words_sent = words_gen - 1; wo_sent = wo_gen - 1; mo_sent = mo_gen - 1;
             atomic_store(&hide_req, 0); nhidden = -1;             /* (a new UI shows them) */
+            atomic_store(&slept, 0);                              /* (the UI that said so is gone: it cannot unsay it) */
             if (!music) meta_sent = meta_gen, prog_sent = prog_gen, ctl_sent = ctl_gen;
             if (!music && !artn) art_sent = art_gen;              /* (a cover before any metadata: told too) */
             fifo.n = 0; ui_up = 1; atomic_store(&ui_front, 0);    /* answers to the last UI's requests: not this one's;

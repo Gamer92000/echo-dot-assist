@@ -168,6 +168,11 @@ async def home_assistant(e):
     return ha
 
 
+def rx_stat_file(p, rcpi):                     # what the Wi-Fi driver answers RX_STAT (HASSMIC_FAKE_WIFI): whole or not
+    with open(p + ".new", "w") as f: f.write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
+    os.replace(p + ".new", p)                  # at all, the poller reads it every 100 ms
+
+
 class Echo:
     """build/hassmic-host as the tests know it: its state in a temp directory, a settings file from before the mic
     level, installed wake word models, a keypad (a FIFO), the light sensor and Wi-Fi driver's files, the settings page
@@ -212,10 +217,7 @@ class Echo:
         self.httpsd, self.selfd = https_server(self.HTTPS_PORT, self.srv_pem), https_server(self.SELF_PORT, self.self_pem)
 
     def keyev(self, code, value): os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, value))     # struct input_event, EV_KEY
-    def rx_stat(self, rcpi):                   # whole or not at all: the Wi-Fi poller reads it every 100 ms
-        p = self.env["HASSMIC_FAKE_WIFI"]
-        with open(p + ".new", "w") as f: f.write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
-        os.replace(p + ".new", p)
+    def rx_stat(self, rcpi): rx_stat_file(self.env["HASSMIC_FAKE_WIFI"], rcpi)
     def wake(self): self.proc.send_signal(signal.SIGUSR1)          # the PC's stand-in for the wake word
     def log(self): return open(self.logpath, errors="replace").read() if self.logpath else ""
 

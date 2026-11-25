@@ -53,6 +53,7 @@
 #include "ringdesign.h"
 #include "ledq.h"
 #include "screen.h"
+#include "wifimotion.h"
 #include "davs.h"
 #include "dropin.h"
 #include "call.h"
@@ -4399,6 +4400,9 @@ static void term_start(void)
     sigaction(SIGTERM, &sa, &term_was);
 }
 
+/* Wi-Fi motion changed (wifimotion.c's poller, no locks held): screen.c tells the UI */
+static void motion_screen(void) { (void)screen_motion(); }
+
 int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
@@ -4455,6 +4459,10 @@ int main(int argc, char **argv)
     term_start();                       /* (after ringlive_start: its SIGTERM handler is the one before ours) */
     rd_start();                         /* designs asked for before this start: still installing, or back */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
+    /* Wi-Fi motion for the screen ("Motion keeps the screen on", "... wakes"): its changes to the UI as they come, not at
+       the band's next look; the poller from here, whatever the protocol (proto_esphome.c starts it only with Home
+       Assistant's first link, and Wyoming never did) */
+    if (screen_motion_keep(-1) >= 0) wifimotion_start(motion_screen);
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */

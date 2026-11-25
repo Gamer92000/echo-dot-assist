@@ -33,7 +33,7 @@
 
 static uint32_t inc[W * H], ref[W * H];
 static char sent[256][160]; static int nsent;
-static char launched[64][200]; static int nlaunched, backs, apps_asked, shots_asked, sleeps;
+static char launched[64][200]; static int nlaunched, backs, apps_asked, shots_asked, sleeps, sleep_ok = 1;
 static char asked[64][48]; static int asked_px[64], nasked;
 static const char *shots;
 static struct scene *S;
@@ -71,7 +71,7 @@ static void fake_send(void *ctx, const char *l)
 static void fake_apps(void *ctx) { (void)ctx; apps_asked++; }
 static void fake_image(void *ctx, const char *key, int px) { (void)ctx; if (nasked < 64) { asked_px[nasked] = px; snprintf(asked[nasked++], sizeof asked[0], "%s", key); } }
 static void fake_shot(void *ctx) { (void)ctx; shots_asked++; }
-static void fake_sleep(void *ctx) { (void)ctx; sleeps++; }
+static int fake_sleep(void *ctx) { (void)ctx; sleeps++; return sleep_ok; }
 static const struct ui_platform plat = { fake_text, fake_launch, fake_back, fake_send, fake_apps, fake_image, fake_shot, fake_sleep, NULL };
 
 /* Music Assistant's answers: pages of 60 out of 150 albums, the queue's items (8 unless the test says more), everything
@@ -338,6 +338,17 @@ int main(int argc, char **argv)
     msg("mo 0 0 0"); msg("mute 0"); msg("dnd 0"); run(300);
     msg("ck 1 0"); run(70000); assert(!S->saver_on);           /* never sleeps: the face stays */
     msg("ck 0 5"); run(500);
+    /* the drawer's Screen off: "slept 1" (ring_band.c: Wi-Fi motion leaves that screen dark), and "slept 0" once the
+       screen is on again, however it came on; nothing said for a screen that went out otherwise */
+    { int sl = sleeps; nsent = 0; pull_drawer(); assert(drawer_open(S));
+      drawer_act(S, A_DR_SLEEP, 0, EV_TAP); run(600);
+      assert(sleeps == sl + 1 && S->slept && sent_has("slept 1") && !drawer_open(S));
+      nsent = 0; scene_screen(S, 0, now); run(300); assert(S->slept && !sent_prefix("slept "));   /* (the platform's look) */
+      scene_screen(S, 1, now); run(300); assert(!S->slept && sent_has("slept 0"));
+      nsent = 0; scene_screen(S, 0, now); scene_screen(S, 1, now); run(300); assert(!sent_prefix("slept "));
+      /* the system did not take it (no PowerManager yet): the screen on as it was, nothing marked */
+      sleep_ok = 0; nsent = 0; pull_drawer(); drawer_act(S, A_DR_SLEEP, 0, EV_TAP); run(600);
+      assert(sleeps == sl + 2 && !S->slept && !sent_prefix("slept ")); sleep_ok = 1; }
     f0 = frames; run(10000); assert(frames - f0 > 2);          /* the eyes blink again */
     msg("oobe 1"); run(2000); msg("oobe 0");
 

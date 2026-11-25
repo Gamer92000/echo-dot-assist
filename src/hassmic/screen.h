@@ -68,4 +68,8 @@ int  screen_saver(void);
 int  screen_motion_keep(int set);
 int  screen_motion_wake(int set);
 int  screen_motion(void);
+/* the drawer's Screen off put the screen out and it has not been on since (the UI's "slept"): "Motion wakes the
+ * screen" leaves it dark, a person's choice; a touch, the power button or a pattern's wake ends it.  Kept in memory
+ * only: a UI that ends takes it along (none left to say "slept 0"), and so does a restart of hassmic (the docs say so) */
+int  screen_slept(void);
 #endif

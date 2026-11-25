@@ -762,21 +762,24 @@ out:
     (*env)->PopLocalFrame(env, NULL);
 }
 
-static void power(int on)                                       /* the screen off as the power button does, or on */
-{
+static int power(int on)                                        /* the screen off as the power button does, or on: 1 */
+{                                                               /* done, 0 no PowerManager or it threw */
     JNIEnv *env = ui_env;
-    if (!power_ || (*env)->PushLocalFrame(env, 8)) return;
+    if (!power_ || (*env)->PushLocalFrame(env, 8)) return 0;
     jlong t = (*env)->CallStaticLongMethod(env, c_clock, m_uptime);
     if (on) (*env)->CallVoidMethod(env, power_, m_wake, t, (*env)->NewStringUTF(env, "hassmic:touch"), (*env)->NewStringUTF(env, "hassmic"));
     else (*env)->CallVoidMethod(env, power_, m_sleep, t, 4 /* GO_TO_SLEEP_REASON_POWER_BUTTON */, 0);
-    failed(env, on ? "wakeUp" : "goToSleep");
+    int ok = !failed(env, on ? "wakeUp" : "goToSleep");
     (*env)->PopLocalFrame(env, NULL);
+    return ok;
 }
 
-static void p_sleep(void *ctx)
+static int p_sleep(void *ctx)
 {
-    (void)ctx; power(0);
+    (void)ctx;
+    if (!power(0)) return 0;                                    /* (the screen on as it was: nothing marked off) */
     screen_on_ = 0; scene_screen(the_scene, 0, mono_ms());      /* now, not at poll_front's next look: a touch wakes it */
+    return 1;
 }
 
 static const struct ui_platform plat = { p_text, p_launch, p_back, p_send, p_apps, p_image, p_screenshot, p_sleep, p_measure };
@@ -933,7 +936,7 @@ static int interactive(void)
     jboolean on = (*env)->CallBooleanMethod(env, power_, m_interactive);
     return failed(env, "isInteractive") ? -1 : on != 0;
 }
-static void power(int on);
+static int power(int on);
 static void touch_wake(void) { power(1); }
 
 /* ---------------------------------------------------------------- the loop */

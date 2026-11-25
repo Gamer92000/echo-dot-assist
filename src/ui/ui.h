@@ -170,6 +170,7 @@ struct scene {
      * it: scene.c); motion that began under the clock without "wakes" leaves it, and holds nothing until it stops or
      * anything else happens (mo_skip, cleared by scene_active: a touch, the drawer, a request...) */
     int moving, mo_keep, mo_skip;
+    int slept;                          /* the drawer's Screen off put the screen out, not on since ("slept", scene_screen) */
     char lang[8];                       /* "lg": the language spoken at home, for the date (lang.c); "" English */
     char name[64], timers[256], peer[64], home[96], act[64], web[96];
     /* music as Sendspin tells it (scene.h: mt, mp, mc, art) */

@@ -621,8 +621,10 @@ satellite of its own has to run without its microphone (as a display) while hass
   while [Wi-Fi motion](#wi-fi-motion) is on): a presence sensor of sorts for the screen. With the first, motion counts
   as something happening: the screen goes dark, or shows the clock, only once nobody moved for **Screen sleeps after**
   (plus the sensor's own 30 s), over an app too. With the second, a dark screen comes on as motion starts, showing
-  whatever it showed (a screen put out from the drawer too), and the clock gives way to the face; motion under the
-  clock with only the first switched on leaves the clock alone. Neither in Do not disturb, so the night stays dark.
+  whatever it showed, and the clock gives way to the face; motion under the clock with only the first switched on
+  leaves the clock alone. A screen put out with **Screen off** in the drawer stays dark until it is touched or the Echo
+  wakes it itself (a request, a timer); after an update, a restart of hassmic or whenever the screen's program starts
+  anew (a new **Light band** height, or after it stopped) that is forgotten, and motion wakes it again. Neither in Do not disturb, so the night stays dark.
   Wi-Fi motion sees movement between the Echo and the router, also in the next room, so expect the screen to come on
   for someone passing there now and then.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:

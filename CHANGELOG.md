@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-25 — Echo Show: Screen off stays off, motion with Wyoming too
+
+- **Screen off from the drawer now stays off** with **Motion wakes the screen** on: someone moving no longer turns it
+  back on. It stays dark until you touch it or the Echo wakes it itself (a request, a timer). An update forgets that
+  the screen was put out this way, and the next motion wakes it again.
+- **The screen's motion switches work with Wyoming too**, and from the moment the Echo starts rather than once Home
+  Assistant first connected.
+
 ## 2026-11-24 — Echo Show: the screen follows Wi-Fi motion
 
 - **Echo Show: the screen can follow Wi-Fi motion.** Two new switches on the Screen page under **When idle**, shown
