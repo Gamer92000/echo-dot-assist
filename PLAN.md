@@ -181,6 +181,13 @@ Run in this order. Each step says what it proves.
       with the same chain (LIPC handler -> setter 0x18ce0 -> beam task -> onBeamIndex, LedDevice turn, one-animation
       pass-through); every libasp.so sends `beam_index`. Not yet seen with a real wake word: that Dot 2 was muted. Stock's limits stay: a second animation (a
       ringing timer, DND) leaves the ring unturned.
+      An Echo alone (2026-11-26, Dot 3): libasp sends `beam_index` only when it is told where the wake word was
+      (`LASP_CMD_SET_WAKEWORD_METADATA`, then a read of `LASP_CMD_REQUEST_ARBITRATION_JSON`), which hassmic did only in
+      an arbitration round. Without a peer BeamDirection was -1 after boot, then 1 for good (143 reads over 90 s, three
+      wake words from opposite sides, no lasp event). The two commands by hand: a `beam_index` each (5, 3, 3), the
+      mixer logging "Selected Beam Number" and "SNR at WW". Now also without a round (`afe_beam`, not waited for:
+      `ring_tick` turns the open ring ~150 ms later); the ring then followed the talker. The four microphones
+      recorded raw from TDM_Capture (mixer stopped, 4 ch S32 16 kHz) were all alive, within 1.6 dB.
 - [x] Buttons: `getevent -l /dev/input/event3` works beside `acebuttond`; volume keys not handled twice — volume, action and mute buttons verified; mute comes from `/dev/input/event1`
 - [x] Barge-in acoustically: the detector hears "Alexa" while speech plays on the `TTS` stream (4/4 on the device, also during HA's own
       reply), so neither the mixer nor the AEC is in the way. It was ignored because `barge_in` doubled as "already being cut" and as

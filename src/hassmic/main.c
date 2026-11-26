@@ -2409,9 +2409,21 @@ static void claim(const char *kw, int score, int prio, uint64_t end)   /* captur
     arb_due = due; arb_from = end;
 }
 
+/* No round to score: arbitration off, or no other Echo.  The front end still gets the wake word's place, as stock does
+ * after every wake word, because only then does it report the talker's beam (beam_index; issue #22).  Measured on a
+ * Dot 3 alone: without it BeamDirection stayed at the one beam reported at the first wake word after boot (143 reads
+ * over 90 s, 3 wake words from opposite sides); each reading by hand gave a beam_index event (5, 3, 3).  Not waited
+ * for: the run starts now and ring_tick turns the open ring when the beam comes, ~150 ms later.  By then the run
+ * streams, so afe_late_check leaves the utterance state to the run's end (afe_done), as for a late reading in a round;
+ * a wake word that starts no run has it ended there. */
+static void afe_beam(int simulated)                 /* capture thread */
+{
+    if (afe_start(simulated)) afe_late = 1;
+}
+
 static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* capture thread */
 {
-    if (!arb_running()) { trigger(0, end); return; }
+    if (!arb_running()) { afe_beam(simulated); trigger(0, end); return; }
     if (arb_due || score_due) return;               /* the same wake word once more while its round runs */
     pthread_mutex_lock(&core_lock);
     int alarm = atomic_load(&alarm_on), can = alarm || (connected && satellite_running && !core_muted()), prio = alarm || state != IDLE ? 2 : 0;
@@ -2428,7 +2440,8 @@ static void wake_heard(uint64_t begin, uint64_t end, int simulated)     /* captu
     }
     int own = wake_score(begin, end, simulated);
     /* the front end's score only for a round: arbitration off, or nobody to ask, and the claim is only a log line */
-    if (!arb_rounds() || !afe_start(simulated)) { claim(kw, own, prio, end); return; }
+    if (!arb_rounds()) { afe_beam(simulated); claim(kw, own, prio, end); return; }
+    if (!afe_start(simulated)) { claim(kw, own, prio, end); return; }
     pend.end = end; pend.own = own; pend.prio = prio; snprintf(pend.kw, sizeof pend.kw, "%s", kw);
     score_due = mono_ms() + AFE_WAIT_MS;
     duck_round(score_due);                          /* until the claim says how long the round runs */
