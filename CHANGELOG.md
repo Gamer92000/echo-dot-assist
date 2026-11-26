@@ -2,6 +2,12 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — The listening light turns to you on a single Echo
+
+- **The listening ring now points at whoever spoke on an Echo with no other Echos around** (issue #22). Before, it
+  turned only where several Echos arbitrated: an Echo alone pointed wherever it heard its first wake word after a
+  start, and stayed there. Measured on an Echo Dot 3.
+
 ## 2026-11-26 — Wi-Fi: moving to a stronger access point
 
 - **Echo Dots and the Echo 2 now move between the access points of a mesh** (issue #234). Before, an Echo stayed on
