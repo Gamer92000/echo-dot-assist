@@ -4664,8 +4664,9 @@ int main(int argc, char **argv)
     fprintf(stderr, "hassmic " VERSION " (" BUILD ") %s on %d, wake=%s\n", proto->id, core_port, core_local_wake ? "local" : "remote");
     if (ota_port) { pthread_t st; if (!pthread_create(&st, NULL, selftest_thread, NULL)) pthread_detach(st); }
     while (!atomic_load(&quit)) {
-        int c = net_accept(ls);
-        if (c < 0) break;
+        int c = net_accept_kept(&ls, core_port, proto->id);        /* never ends the loop (netio.h, issue #241) */
+        if (c < 0) continue;
+        if (atomic_load(&quit)) { close(c); break; }                /* the capture ended while accept() waited */
         /* A link that went away must not hold a client slot (or core_lock, in a blocked write) for ever:
          * writes give up after 5 s, keepalive notices a dead peer within ~25 s.  Both make serve() return.  Keepalive
          * only probes while nothing waits for an acknowledgement, though; with a state update unacknowledged the

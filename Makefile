@@ -434,7 +434,7 @@ UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/logrea
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs cvsd msbc scoaudio \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall
+	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall netio
 unit: $(addprefix unit-,$(UNIT_TESTS))
 # the plugins' launcher on the PC: the protocol, the sandbox as far as x86_64 shows it (a static test program)
 # and both seccomp programs, ARM's too, run in an interpreter against the table they were made from
@@ -575,6 +575,10 @@ unit-geo: build/geo_data.c
 unit-statefile:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/statefile_test.c src/hassmic/statefile.c -Wl,--wrap=fsync,--wrap=rename -lpthread -o build/statefile_test && build/statefile_test
+# an accept() error never ends a server: the listener kept, or opened again (issue #241)
+unit-netio:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/include tests/unit/netio_test.c -Wl,--wrap=accept -o build/netio_test && build/netio_test
 unit-ledq:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ledq_test.c src/hassmic/ledq.c -lpthread -o build/ledq_test && build/ledq_test

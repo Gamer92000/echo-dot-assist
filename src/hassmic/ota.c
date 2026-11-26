@@ -673,16 +673,17 @@ static void *listener(void *arg)
 {
     int ls = net_listen(port);
     (void)arg;
-    if (ls < 0) { perror("update: listen"); return NULL; }
-    fprintf(stderr, "update: push port %d\n", port);
+    if (ls < 0) perror("update: listen");                       /* (net_accept_kept tries again every second) */
+    else fprintf(stderr, "update: push port %d\n", port);
     for (int i = 0; i < CONNS_MAX; i++) pcs[i].fd = -1;
     for (;;) {
         struct pollfd p = { ls, POLLIN, 0 }; struct sockaddr_in sa; socklen_t sl = sizeof sa; uint32_t addr = 0;
         struct pconn *c = NULL, *old = NULL; int fd, mine = 0, pre = 0, r; pthread_t t; pthread_attr_t at;
+        if (ls < 0) { park_reap(0); net_accept_kept(&ls, port, "update"); continue; }     /* lost, not open again yet: poll() skips -1 */
         r = poll(&p, 1, 250); park_reap(0);
-        if (r < 0 && errno != EINTR) break;
+        if (r < 0 && errno != EINTR) { perror("update: poll"); sleep(1); continue; }
         if (r <= 0) continue;
-        if ((fd = net_accept(ls)) < 0) break;
+        if ((fd = net_accept_kept(&ls, port, "update")) < 0) continue;
         if (!getpeername(fd, (struct sockaddr *)&sa, &sl) && sa.sin_family == AF_INET) addr = sa.sin_addr.s_addr;
         pthread_mutex_lock(&cl);
         for (int i = 0; i < CONNS_MAX; i++) {

@@ -4121,11 +4121,11 @@ static void *listener(void *arg)
 {
     int ls = net_listen(port);
     (void)arg;
-    if (ls < 0) { perror("web: listen"); return NULL; }
-    fprintf(stderr, "web: settings page on port %d\n", port);
+    if (ls < 0) perror("web: listen");                          /* (net_accept_kept tries again every second) */
+    else fprintf(stderr, "web: settings page on port %d\n", port);
     for (;;) {
-        int c = net_accept(ls); pthread_t t;
-        if (c < 0) { if (errno == EINTR) continue; break; }
+        int c = net_accept_kept(&ls, port, "web"); pthread_t t;
+        if (c < 0) continue;
         if (atomic_fetch_add(&nconn, 1) >= MAX_CONN) { atomic_fetch_sub(&nconn, 1); close(c); continue; }   /* a browser opens few */
         if (pthread_create(&t, NULL, conn_thread, (void *)(long)c)) { atomic_fetch_sub(&nconn, 1); close(c); }
         else pthread_detach(t);

@@ -3031,6 +3031,26 @@ Run in this order. Each step says what it proves.
       the blueprint with real Echos (it ran in a real HA against PC Echos, above), and whether 2 s is enough over a
       busy Wi-Fi for "calling" to reach HA (the blueprint then tries the second action name only where it differs:
       never on an Echo with its own name).
+- [~] Servers that stop listening (issue #241, 2026-11-26; an Echo Dot 2 on 2026.11.18): the satellite went
+      unavailable ~7 times a day at the same wall-clock times (05:15, 14:21, 14:30 local: something on the network or
+      Fire OS's side, not uptime), Home Assistant's reconnect refused (`[Errno 111]`) in the same millisecond, and
+      sometimes for hours, while hassmic ran on: settings page answering, mDNS announced again, the wake word heard
+      ("no Home Assistant link, nothing started").  Each time `client disconnected (0 left)`, then within ~15 ms
+      `micAsr delivers nothing (status 112)` and a reopen.  Found in the code: every accept loop (ESPHome in main.c,
+      web.c, sendspin.c, ota.c) ended at the first accept() error without a word; Linux hands a queued connection's
+      own failure out through accept() (ECONNABORTED, EHOSTUNREACH, ...: accept(2) says to retry), and a listener shut
+      down or destroyed answers EINVAL.  ESPHome's loop then ran main()'s end, whose `cap_close()` closes the capture
+      while the capture thread still reads it (whether that is the reopen seen right after the link: not shown).  Now `netio.h` `net_accept_kept`: such errors are said (once in 10 s) and the loop goes
+      on; EINVAL, EBADF, ENOTSOCK open a new listener on the port, also where the first listen at start failed (web,
+      Sendspin, push port; ESPHome still ends then, root restarts it) (`make unit-netio`).
+      Not shown: that this is #241.  main()'s end returns, and root's loop restarts hassmic 3 s later
+      (`hassmic exited rc=1, restart in 3 s`, main.sh; no `== satellite start`, which only the service's start says).
+      Hours of refusal by this path need main()'s end to hang as well (`cap_close()`'s `MixerClose` against the capture
+      thread's own reopen of the same handle is the candidate) and the listener to have stopped listening (a refusal,
+      not a timeout: a listener nobody accepts from fills its queue and drops SYNs).  Asked of the reporter: `hassmic
+      exited` in boot.log, `/proc/net/tcp` for a LISTEN on :65C5 and the main thread's wchan in the dead state.  Not
+      changed: `micAsr rate=4294967295` after a reopen is no sign of a dead stream (it shows on working starts, donut
+      and cannoli above).  What closes the link at those times is not known.
 - [~] A new IP address (2026-10-11, GitHub issue #17: new addresses from the router, Home Assistant lost the Echos
       until a power cycle, "sometimes it takes 2"). Home Assistant's ESPHome config flow moves an entry to the address
       in an mDNS announcement only while the entry is not connected (`config_flow.py`

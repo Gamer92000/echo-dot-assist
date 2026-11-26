@@ -1247,12 +1247,12 @@ static void *listen_thread(void *arg)
 {
     int ls = net_listen(port); char token[160];
     (void)arg;
-    if (ls < 0) { perror("sendspin: listen"); return NULL; }
+    if (ls < 0) perror("sendspin: listen");                     /* (net_accept_kept tries again every second) */
     sendspin_pairing_token(token, sizeof token);
     fprintf(stderr, "sendspin: player %s on %d\nsendspin: pairing token %s\n", client_id, port, token);
     for (;;) {
-        int c = net_accept(ls); pthread_t t;
-        if (c < 0) break;
+        int c = net_accept_kept(&ls, port, "sendspin"); pthread_t t;
+        if (c < 0) continue;
         if (pthread_create(&t, NULL, serve, (void *)(long)c)) close(c); else pthread_detach(t);
     }
     return NULL;

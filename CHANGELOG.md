@@ -2,6 +2,14 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — The Echo keeps listening after a network error
+
+- **A network error no longer stops the Echo from taking connections** (issue #241, likely its cause). When a
+  connection failed just as it arrived, the Echo stopped listening on that port: for Home Assistant's port it then
+  shut its satellite down, and on one Echo Dot 2 Home Assistant could not reach it for hours. Now the Echo notes the
+  error and goes on listening. The settings page, Music Assistant's player and the update port had the same fault;
+  they also try again now when their port is taken at start.
+
 ## 2026-11-26 — Answering a call by voice
 
 - **"<wake word>, answer" picks up a call that rings** (issue #240), as "hang up" ends one: also "pick up", "accept",
