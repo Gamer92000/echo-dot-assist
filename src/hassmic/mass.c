@@ -1,7 +1,9 @@
 /*
  * Music Assistant's own API, for the screen's music pages (src/ui/music.c).  Sendspin (sendspin.c) is how Music
  * Assistant plays here and says what plays; browsing the library, searching, the queue and grouping speakers are not
- * in it, and are the API Music Assistant's own frontend uses: a websocket on its port 8095 (ws://<server>:8095/ws).
+ * in it, and are the API Music Assistant's own frontend uses: a websocket on its port 8095 (ws://<server>:8095/ws), or
+ * over TLS where a proxy in front of it serves wss:// (an address given as https:// or wss://, port 443 unless named;
+ * tls.c, the certificate checked as for media, setting "https_verify"; never for the Sendspin server's address).
  *
  *   server     the address the page set (state/mass "url="; the page gives the one it found when none is typed), else,
  *              without a token, the one a Sendspin session came from (mass_peer: Music Assistant itself, its API on
@@ -22,12 +24,15 @@
  */
 #include "logread.h"
 #include "mass.h"
+#include "http.h"
+#include "https.h"
 #include "json.h"
 #include "net.h"
 #include "screen.h"
 #include "sendspin.h"
 #include "statefile.h"
 #include "ws.h"
+#include <ctype.h>
 #include <errno.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -56,7 +61,7 @@ static struct ws w; static int up, state;                   /* state: 0 off, 1 c
 /* w is sent on by any thread (the UI's requests) and closed by the session's: both under wslk, and only while wsopen
  * (ws_close destroys w's own lock, ws_connect makes it anew) */
 static pthread_mutex_t wslk = PTHREAD_MUTEX_INITIALIZER; static int wsopen;
-static char text_[200], host[200]; static int port, schema;
+static char text_[200], host[200]; static int port, secure, schema;    /* secure: the session's is TLS */
 static unsigned up_gen;                                     /* the gen the session up runs for: host and token belong together */
 static char self[96], queue[96], last_ma[260], last_pq[400];
 /* the queue's question: the one on its way (its message id, set as it is sent: the answer may come before send_how
@@ -698,12 +703,17 @@ static void on_event(struct json *j, int root)
  * to one a Sendspin session suggested, which any host on the network can) */
 static int stopped;                                         /* mass_stop: no session any more (lk) */
 
-static int target(char *h, size_t hn, int *p)               /* lk held */
+/* https:// or wss://: Music Assistant behind a proxy that serves TLS.  Lower case only, as stored (mass_set lowers a
+ * new address's scheme): an "HTTPS://" kept from a build before was plain ws:// on 8095, and its token stays there */
+static int tls_url(const char *u) { return !strncmp(u, "https://", 8) || !strncmp(u, "wss://", 6); }
+
+static int target(char *h, size_t hn, int *p, int *tls)     /* lk held */
 {
     const char *u = stopped ? "" : url[0] ? url : token[0] ? "" : peer;
-    if (!u[0] || !strncmp(u, "https://", 8) || !strncmp(u, "wss://", 6)) return -1;   /* (mass_set refuses them) */
+    if (!u[0]) return -1;
     const char *s = strstr(u, "://"); s = s ? s + 3 : u;
-    *p = 8095;
+    *tls = tls_url(u);
+    *p = *tls ? 443 : 8095;
     if (*s == '[') {                                           /* [v6]:port */
         const char *e = strchr(s, ']');
         if (!e) return -1;
@@ -714,7 +724,7 @@ static int target(char *h, size_t hn, int *p)               /* lk held */
     size_t n = strcspn(s, ":/");
     snprintf(h, hn, "%.*s", (int)n, s);
     if (s[n] == ':') *p = atoi(s + n + 1);
-    return h[0] && *p > 0 ? 0 : -1;
+    return h[0] && *p > 0 && *p < 65536 ? 0 : -1;
 }
 
 /* waits up to ms for a new configuration (or for ever, ms < 0); 1 if it came.  lk held, as every condition wait */
@@ -731,21 +741,26 @@ static int was_up;                                          /* the last session 
 
 static void session(unsigned seen)
 {
-    int op; uint8_t *d; size_t n; struct json j = { 0 }; char h[200], tok[2048]; int p;
+    int op; uint8_t *d; size_t n; struct json j = { 0 }; char h[200], tok[2048]; int p, t;
     pthread_mutex_lock(&lk);
-    int ok = !target(h, sizeof h, &p);
+    int ok = !target(h, sizeof h, &p, &t);
     snprintf(tok, sizeof tok, "%s", token);
-    if (ok) { snprintf(host, sizeof host, "%s", h); port = p; set_state(1, "%s:%d", h, p); }
+    if (ok) { snprintf(host, sizeof host, "%s", h); port = p; secure = t; set_state(1, "%s:%d", h, p); }
     pthread_mutex_unlock(&lk);
     if (!ok) { wipe(tok, sizeof tok); return; }
-    if (ws_connect(&w, h, p, "/ws")) {
+    char why[300] = "";
+    if (t ? ws_connect_tls(&w, h, p, "/ws", https_verify(-1), why, sizeof why) : ws_connect(&w, h, p, "/ws")) {
         wipe(tok, sizeof tok);
-        pthread_mutex_lock(&lk); set_state(4, "%s:%d does not answer", h, p); pthread_mutex_unlock(&lk);
+        if (why[0]) log_private("mass: %s", why);                 /* (the household's own name, maybe) */
+        pthread_mutex_lock(&lk);
+        if (t && http_cert_refused(why)) set_state(4, "%s:%d: its certificate does not check out", h, p);
+        else set_state(4, "%s:%d does not answer", h, p);
+        pthread_mutex_unlock(&lk);
         return;
     }
     /* Music Assistant pings every 25 s (aiohttp's heartbeat; ws.c answers), and so does the image thread (its own client
      * pings too: a server without a heartbeat, or a proxy between, answers): silence this long is a server gone */
-    struct timeval tv = { quiet_s(), 0 }; setsockopt(w.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    ws_timeout(&w, quiet_s());
     pthread_mutex_lock(&wslk); wsopen = 1; pthread_mutex_unlock(&wslk);
     /* the server's info first */
     if (ws_recv(&w, &op, &d, &n) != 1 || json_parse(&j, (char *)d, n) || json_get(&j, 0, "schema_version") < 0) {
@@ -840,7 +855,7 @@ static void *thread_main(void *arg)
     (void)arg; int fails = 0;
     for (;;) {
         pthread_mutex_lock(&lk);
-        unsigned seen = gen; char h[200]; int p, have = !target(h, sizeof h, &p);
+        unsigned seen = gen; char h[200]; int p, t, have = !target(h, sizeof h, &p, &t); (void)t;
         if (!have) { set_state(0, "%s", ""); wait_change(seen, -1); pthread_mutex_unlock(&lk); continue; }
         pthread_mutex_unlock(&lk);
         long long t0 = time(NULL);
@@ -865,35 +880,38 @@ static void urlenc(char *out, size_t n, const char *in)
     out[o] = 0;
 }
 
-/* GET of the imageproxy, HTTP/1.0 (no chunks), the token along where the server wants one */
-static uint8_t *http_get(const char *h, int p, const char *path, const char *tok, size_t *len)
+/* GET of the imageproxy (http.c: plain, or TLS where the session is), the token along where the server wants one */
+struct img_buf { uint8_t *p; size_t n, cap; };
+static int img_head(void *arg, int status, long long length) { (void)arg; return status != 200 || length > IMG_MAX; }
+static int img_data(void *arg, const void *d, size_t n)
 {
-    char ps[8]; snprintf(ps, sizeof ps, "%d", p);
-    int fd = net_connect(h, ps, 5);
-    if (fd < 0) return NULL;
-    char *req = malloc(strlen(path) + strlen(tok) + 300);
-    if (!req) { close(fd); return NULL; }
-    int v6 = strchr(h, ':') != NULL;                            /* [v6]:port */
-    int rn = sprintf(req, "GET %s HTTP/1.0\r\nHost: %s%s%s:%d\r\n%s%s%sUser-Agent: hassmic\r\n\r\n", path, v6 ? "[" : "", h, v6 ? "]" : "", p,
-                     tok[0] ? "Authorization: Bearer " : "", tok, tok[0] ? "\r\n" : "");
-    int bad = send(fd, req, (size_t)rn, MSG_NOSIGNAL) != rn;
-    wipe(req, (size_t)rn); free(req);
-    size_t cap = 65536, have = 0; uint8_t *b = malloc(cap);
-    while (!bad && b) {
-        if (have == cap) { if (cap >= IMG_MAX + 8192) { bad = 1; break; } uint8_t *nb = realloc(b, cap * 2); if (!nb) { bad = 1; break; } b = nb; cap *= 2; }
-        ssize_t r = recv(fd, b + have, cap - have, 0);
-        if (r < 0 && errno == EINTR) continue;
-        if (r <= 0) break;
-        have += (size_t)r;
+    struct img_buf *b = arg;
+    if (b->n + n > IMG_MAX) return 1;
+    if (b->n + n > b->cap) {
+        size_t cap = b->cap ? b->cap * 2 : 65536; while (cap < b->n + n) cap *= 2;
+        uint8_t *nb = realloc(b->p, cap); if (!nb) return 1;
+        b->p = nb; b->cap = cap;
     }
-    close(fd);
-    if (bad || !b || have < 12 || memcmp(b, "HTTP/1.", 7) || memcmp(b + 9, "200", 3)) { free(b); return NULL; }
-    uint8_t *body = NULL;
-    for (size_t i = 0; i + 3 < have; i++) if (!memcmp(b + i, "\r\n\r\n", 4)) { body = b + i + 4; break; }
-    if (!body) { free(b); return NULL; }
-    *len = have - (size_t)(body - b);
-    memmove(b, body, *len);
-    return b;
+    memcpy(b->p + b->n, d, n); b->n += n;
+    return 0;
+}
+
+static uint8_t *http_get(const char *h, int p, int tls, const char *path, const char *tok, size_t *len)
+{
+    char *u = malloc(strlen(path) + 300), *auth = malloc(strlen(tok) + 40), err[300];
+    struct img_buf b = { 0 };
+    if (!u || !auth) { free(u); free(auth); return NULL; }
+    int v6 = strchr(h, ':') != NULL;                            /* [v6]:port */
+    sprintf(u, "%s://%s%s%s:%d%s", tls ? "https" : "http", v6 ? "[" : "", h, v6 ? "]" : "", p, path);
+    sprintf(auth, "Authorization: Bearer %s", tok);
+    const char *hdrs[] = { auth, NULL };
+    struct http r = { .url = u, .headers = tok[0] ? hdrs : NULL, .agent = "hassmic", .verify = https_verify(-1),
+                      .connect_s = 5, .total_s = 30, .low_s = 15, .low_bytes = 1, .head = img_head, .data = img_data, .arg = &b };
+    int rc = http_run(&r, err, sizeof err);
+    wipe(auth, strlen(auth)); free(auth); free(u);
+    if (rc || r.status != 200 || !b.n) { free(b.p); return NULL; }
+    *len = b.n;
+    return b.p;
 }
 
 static void *image_thread(void *arg)
@@ -921,7 +939,7 @@ static void *image_thread(void *arg)
         struct imgkey e; memset(&e, 0, sizeof e); struct imgkey *f = img_slot(key, 0); if (f) e = *f;
         /* host and token of one configuration: a new one (gen) may have a token for another host, and the session
          * still up is the old one's until it ends */
-        char h[200], tok[2048]; int p = port, ok = up && up_gen == gen && f;
+        char h[200], tok[2048]; int p = port, t = secure, ok = up && up_gen == gen && f;
         snprintf(h, sizeof h, "%s", host); snprintf(tok, sizeof tok, "%s", ok ? token : "");
         pthread_mutex_unlock(&lk);
         size_t n = 0; uint8_t *img = NULL;
@@ -930,7 +948,7 @@ static void *image_thread(void *arg)
             if (e.proxy[0]) { urlenc(a, sizeof a, e.proxy); snprintf(path, sizeof path, "/imageproxy/%s?size=%d&fmt=jpeg", a, size); }
             else { urlenc(a, sizeof a, e.path); urlenc(b, sizeof b, a); urlenc(a, sizeof a, e.provider);   /* the path encoded twice, as the frontend does */
                    snprintf(path, sizeof path, "/imageproxy?path=%s&provider=%s&size=%d&fmt=jpeg", b, a, size); }
-            img = http_get(h, p, path, tok, &n);
+            img = http_get(h, p, t, path, tok, &n);
         }
         wipe(tok, sizeof tok);
         char head[64]; snprintf(head, sizeof head, "img %s %zu %d", key, img ? n : 0, size);   /* the size: which of the UI's wants */
@@ -1123,17 +1141,17 @@ void mass_peer(const char *ip)
     pthread_mutex_unlock(&lk);
 }
 
-/* -2: a token and no address; -3: the token kept for another address; -4 https (the API is plain ws on 8095 here).  The page sends the address it showed (the
+/* -2: a token and no address; -3: the token kept for another address (http:// and https:// of one host are two).  The page sends the address it showed (the
  * server that played here, mass_status_json "found") when none was typed: never one that came after, which the user did
  * not see.  A token goes only to the address it was given with: a new address takes it again */
 int mass_set(const char *u, const char *t)
 {
     pthread_mutex_lock(&lk);
     char nu[sizeof url]; snprintf(nu, sizeof nu, "%s", u ? u : "");
+    { char *e = strstr(nu, "://"); if (e) for (char *c = nu; c < e; c++) *c = (char)tolower((unsigned char)*c); }   /* (tls_url) */
     int tok = t && !strcmp(t, "-") ? 0 : t && t[0] ? 1 : token[0] != 0;
     if (tok && !nu[0]) { pthread_mutex_unlock(&lk); return -2; }
     if (tok && !(t && t[0]) && strcmp(nu, url)) { pthread_mutex_unlock(&lk); return -3; }
-    if (!strncmp(nu, "https://", 8) || !strncmp(nu, "wss://", 6)) { pthread_mutex_unlock(&lk); return -4; }   /* plain only */
     char ou[sizeof url], ot[sizeof token]; memcpy(ou, url, sizeof url); memcpy(ot, token, sizeof token);
     memcpy(url, nu, sizeof url);
     if (t && !strcmp(t, "-")) wipe(token, sizeof token);

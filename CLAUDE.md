@@ -1182,8 +1182,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   which also measures a look's peak at the bounds).  `plugin_fetch.c`: `pf_look` GETs `revoked.json`, `.sig` (taken
   first, whatever becomes of the index; not taken: the look fails; older than kept: kept, the look goes on),
   `index.json`, `.sig` through `update_fetch`
-  (update.c's one GET: libcurl, `net_socket`, all its time as `secs`; `stop` ends it from the progress, data and
-  socket callbacks; `User-Agent: hassmic` and nothing more; redirects to HTTPS only, as every fetch of update.c's),
+  (update.c's one GET: http.c, `net_socket`, all its time as `secs`; `stop` ends it within 250 ms (not a name
+  lookup); `User-Agent: hassmic` and nothing more; redirects to HTTPS only, as every fetch of update.c's),
   the signature first, a serial under the build's least, from the future or under `state/plugins/.serial`'s floor
   refused, and an index only beside a revocation list at least its `revoked_serial` (a newer list:
   `plugin_withdrawn_changed`, which stops what it names and starts what it no longer names, and the members told);
@@ -1254,7 +1254,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   a newer hassmic.  `HASSMIC_PLUGIN_FRESH`, `HASSMIC_PLUGIN_LEAST`, `HASSMIC_PLUGIN_SLOT=<checked ms>:<upload
   ms>:<fetch ms>` (the table's times), `HASSMIC_PLUGIN_ASK_DELAY=<ms>[:<file>]` (slept between `/install`'s check and its
   ask), `HASSMIC_PLUGIN_OWN_DELAY=<ms>` (between a push's check and its install) for tests.
-  The push port and libcurl's loader: "Push updates", "Online updates".  Crash marks of the second kind (`core <id>`,
+  The push port and the HTTPS client: "Push updates", "HTTPS".  Crash marks of the second kind (`core <id>`,
   `state/plugins/.cores`, `core_note`, `HASSMIC_PLUGIN_CORE=<count>:<ms>`): hassmic fell in the core's code on a
   plugin's report; the broker's thread by `core_begin`, any other by `plugin_core_enter`/`_leave`, which bracket
   only what is the plugin's own data (main.c `plugin_words_scan`; at start its word opened and its answer waited
@@ -1516,12 +1516,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   or with `PREBUILT=1`;
   `PREBUILT=0` always builds. `scripts/probe.sh` compares with `devices/<codename>/probe.md5`, not the unpacked firmware.
 - **Online updates** (`update.c`): "Online updates" on the settings page (off default / beta / release, `state/config`) and an
-  ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through the firmware's
-  libcurl (`fwcurl.c` `fwcurl()`: the one loader for update.c, https.c and davs.c, dlopen and the library's first init
-  under its lock; a load that failed is tried again 60 s later at the earliest, one that lacks a function never;
-  a new user calls it, never dlopen; sockets via `net_socket` so the egress lock lets them out; `update_fetch` is
-  update.c's one GET, also plugin_fetch.c's; every fetch follows redirects to HTTPS only, the API's and the
-  bundles' say `hassmic/<version>`, update_fetch's only `hassmic`), hands it to root through `ota_handoff`.
+  ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through http.c
+  ("HTTPS" below; sockets via `net_socket` so the egress lock lets them out; `update_fetch` is update.c's one GET,
+  also plugin_fetch.c's; every fetch follows redirects to HTTPS only, the API's and the bundles' say
+  `hassmic/<version>`, update_fetch's only `hassmic`; 4xx/5xx fail, "HTTP <code> from <url>"), hands it to root
+  through `ota_handoff`.
   Root (`main.sh` ota_watch) accepts the owner's `update.pub` or the release key (`release.pub` of the running copy, else
   the system partition). Channel only from an approved browser on the page (no HA entity for it), install only over the keyed connection.  The page switches a channel on
   only once `update_probe` reached GitHub (web.c `updates_gate`, before `core_lock`; else `github_unreachable` in the
@@ -1543,9 +1542,27 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   listing never relisted to the owner's); any change restarts hassmic, one of what is trusted also forgets `.serial`,
   `.revoked`, `.revoked-at`, `.listed` at the next start (mark `state/sources-forget`, `sources_load`).  `sources_apply(expect, to)`: only over what the caller judged against.  `/api/state` `sources` (level 0/1/2), `POST /api/sources`; app.js
   `sourcesCallout` on every page (yellow a server, red a key or no check), `sourceDialog`.
+- **HTTPS** (`tls.c`, `http.c`, issue #236): hassmic's own TLS client, never the firmware's libcurl (its BoringSSL,
+  Android 7's, or athena's Android 9 drafts, has no TLS 1.3: a Home Assistant on the "Modern" SSL profile refused every
+  reply).  mbedTLS 3.6 LTS in `src/third_party/mbedtls/`: only what `hassmic_config.h` builds (a TLS 1.2/1.3 client;
+  RSA-PSS on: without it no `rsa_pss_rsae_*` is offered and TLS 1.3 servers with RSA certificates fail), copied from
+  the release tarball unchanged by `tools/mbedtls-vendor.sh <tar> <sha256>` (again after a config change that turns
+  on more; never edit those files), built as a library per target (`$(OUT)/libmbedtls.a`, `build/libmbedtls-host.a`;
+  `MBEDTLS_INC` on every compile that includes tls.h's users).  Randomness: /dev/urandom for TLS and PSA
+  (`MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG`, `mbedtls_psa_external_get_random` in tls.c).  CAs: `/system/etc/security/cacerts`
+  (else the PC's bundle; `HASSMIC_CA_FILE` alone, a file or folder, for tests), parsed once at the first check and
+  kept (~420 kB), read-only after.  A connection: non-blocking socket, every mbedTLS call under its lock and returning
+  at once, the waits poll()s without it (one reader and any writers: ws.c); an address's certificate is checked
+  against its IP entries after the handshake (no SNI for an address).  `http.c` `http_run` (struct http): GET/POST,
+  the caller's headers (none to another origin after a redirect), redirects (`redirect_https`), Content-Length,
+  chunks or the end, `connect_s`/`total_s`/`low_s`+`low_bytes` (a moving window, as libcurl's low speed limit), `stop`
+  within 250 ms (not getaddrinfo), `.local` by `mdns_resolve4`, `net_socket` or with `lan` a plain socket, `plain`
+  http:// only; head/data callbacks; HTTP_OK whatever the status (callers fail 4xx themselves).  Users: https.c,
+  update.c (and plugin_fetch.c through it), davs.c, mass.c's images; ws.c `ws_connect_tls`.  `make unit-http`
+  (tests/unit/http_test.py: Python's servers, TLS 1.3 and 1.2 alone, certificates, bodies, redirects, times).
 - **Media over HTTPS** (`https.c`, issue #30): `proto_esphome.c` `http_get` hands `https://` to `https_open`, which
-  runs the firmware's libcurl (`fwcurl()`, as update.c; BoringSSL, system CAs) in a thread writing the body into a socketpair: the
-  decoders and the cancel's `shutdown()` work as on a plain fetch.  Setting `https_verify` (default on; off takes any
+  runs http.c in a thread writing the body into a socketpair: the decoders and the cancel's `shutdown()` work as on a
+  plain fetch.  Setting `https_verify` (default on; off takes any
   certificate).  HA with `ssl_certificate` hands out its external URL only (`get_url`: prefer external, no IP), so
   that name must resolve and be reachable from the LAN.  `HASSMIC_CA_FILE` for tests.
 - **Light ring** (`ring.c`, `ring.h`, issue #26): HA's light "Light ring" and the listening ring turned towards the
@@ -1685,7 +1702,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   back with no finger down; the kernel lets go when the UI dies), else (no grab: `wd.grab` -1) a ring there brings our
   screen up (`ring_from`, `own_asked` kept and given back after, asked again every 10 s) and the app back after.  Tests: `ui_test.c`, `tests/fake_screen_words.py`, `build/uishot` (words*, timer*).
 - **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
-  MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
+  MA's own websocket (`/ws`, port 8095; `wss://`/`https://` through a proxy, port 443 unless named, ws.c
+  `ws_connect_tls`, the certificate as `https_verify`, its images over https too; the page's URL, or with none given the Sendspin server's address pinned when the
   token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player
   role is active; without a token mass.c may look at the suggested one to say what it is); the first
   message is the server's info, from schema 28 `auth` with a long-lived token (page: `POST /api/mass`, sealed as the

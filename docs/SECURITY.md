@@ -23,6 +23,13 @@ Put the Echo on a network without internet as a second layer.
   **Until then anyone on the network can connect**, or set a key first (then see
   [When something is wrong](../README.md#when-something-is-wrong)). The key lives in `/data/local/hassmic/state/api_key`.
 - **Wyoming**: unencrypted and unauthenticated, like every Wyoming satellite.
+- **HTTPS out** (replies and media from a Home Assistant that serves HTTPS, online updates, the plugin index,
+  Amazon's downloads, a Music Assistant given as `https://`/`wss://`): hassmic's own TLS client (mbedTLS 3.6 LTS, TLS
+  1.2 and 1.3, `src/third_party/mbedtls`; not the firmware's 2016 BoringSSL any more, issue #236). Certificates are
+  checked against the authorities the firmware came with (`/system/etc/security/cacerts`): never updated, so a
+  server whose chain ends in a newer root is refused. "Check HTTPS certificates" off takes any certificate for
+  media and Music Assistant only; updates, plugins and Amazon are always checked. A redirect to another server
+  carries none of the request's own headers (Amazon's tokens, Music Assistant's).
 
 ## Settings page
 

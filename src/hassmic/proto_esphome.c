@@ -1938,7 +1938,7 @@ static void entities_changed(void)
 
 /* lock held.  The time, from Home Assistant (clock.c): asked on each link with the device key once it subscribes, and
  * again on its pings every 6 h (it pings every 20 s or so).  Only that link: the clock decides which certificates
- * curl takes, so nobody else on the network may move it */
+ * tls.c takes, so nobody else on the network may move it */
 #define TIME_ASK_MS (6LL * 3600 * 1000)
 static long long time_asked;
 static void ask_time(int c, int force)

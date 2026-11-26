@@ -16,9 +16,11 @@ Replies start while text to speech is still being generated.
 Replies, announcements and media come from the addresses Home Assistant gives out, `http://` or `https://`. A Home
 Assistant that serves HTTPS itself (`ssl_certificate` under `http:`) gives out its external URL (not the internal one:
 its rule, for every device), so the Echo must reach that name from inside your network: through your router
-(NAT loopback) or a local DNS entry for it. The certificate is checked: a self-signed one, or one that does not name
-that address, is refused ("SSL peer certificate ... was not OK" in the log). "Check HTTPS certificates" (settings page,
-System) off takes any certificate, but then anyone on your network could slip the Echo audio of their own.
+(NAT loopback) or a local DNS entry for it. Any of Home Assistant's SSL profiles works, "Modern" (TLS 1.3 only)
+included: the Echo speaks TLS 1.2 and 1.3 itself. The certificate is checked against the certificate authorities
+the Echo's firmware came with: a self-signed one, or one that does not name that address, is refused ("the
+certificate of ... does not check out" in the log). "Check HTTPS certificates" (settings page, System) off takes any
+certificate, but then anyone on your network could slip the Echo audio of their own.
 
 - **Speak straight on** after the wake word: Home Assistant gets everything from the end of the word, so "Alexa turn on
   the light" in one breath works, and you need not wait for the tone. The tone itself is partly still in what Home
@@ -748,7 +750,10 @@ profile (the person icon), **Long-lived tokens**, **Create**, and on the Echo's 
 **Connect…** and paste it. The page sends it sealed for that Echo, which keeps it and never shows it again. The
 address, left empty, is taken from the Music Assistant that plays on the Echo when you save (port 8095) and kept:
 the token only ever goes there, so a Music Assistant that moves needs **Connect…** again (or its address given).
-Until then those tabs say how to connect.
+Until then those tabs say how to connect. A Music Assistant behind a proxy that serves HTTPS is given as
+`https://<name>` (or `wss://`, port 443 unless you name one): the Echo then talks to it over TLS, its certificate
+checked as for Home Assistant's media ("Check HTTPS certificates"). `http://` and `https://` of one host are two
+addresses: switching between them takes the token again.
 
 ## Music
 

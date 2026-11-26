@@ -3,8 +3,8 @@
 with a stand-in UI (HASSMIC_SCREEN, as in tests/fake_screen.py) and a stand-in Music Assistant server (aiohttp: the
 websocket API at /ws, its imageproxy) that answers as Music Assistant 2.10 does (models from music-assistant-models):
   - the settings page (web.c /api/mass): address and token from a logged-in browser, the token sealed, never in
-    /api/state, kept in state/mass 0600; unsigned or unsealed: refused; the token kept for another address, https:
-    refused
+    /api/state, kept in state/mass 0600; unsigned or unsealed: refused; the token kept for another address (https://
+    of the same host is another) refused
   - the Screen page (/api/screen): the apps the UI listed, the home app picked there (state/screen_home) to the UI
   - a token refused (or a login answered false): "ma auth"; the right one: "ma up", the server's info first, "auth"
     before anything else; idle past the receive timeout on a server with no heartbeat: kept by the Echo's own pings
@@ -22,6 +22,8 @@ websocket API at /ws, its imageproxy) that answers as Music Assistant 2.10 does 
     set_members (add/remove, the older group/ungroup where set_members is unknown), ungroup, volume_set,
     group_volume, transfer
   - images: the key asked for at the UI's size comes from /imageproxy/<its proxy_id>?size=160&fmt=jpeg, with the token
+  - wss:// (issue #236): Music Assistant behind a proxy that offers TLS 1.3 alone, the session and its images over it,
+    the certificate checked (a self-signed one refused, said so), and back to plain ws://
   - a UI that hangs while the Echo is idle (nothing to write to it): its pings unanswered, it is started again
   - Sendspin's server suggests its address (the page's "found") once paired only, never unpaired (any host on the LAN,
     with unpaired access on); the page's address set, nothing at all goes to the suggested one, nor is the token logged
@@ -60,9 +62,10 @@ if len(sys.argv) > 1 and sys.argv[1] == "--ui":           # the stand-in UI, as 
             carry = buf[-24:]
     sys.exit(0)
 
-import io, stat
+import io, ssl, stat
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webclient import wait_port, Browser, req
+from esphome_common import tls_files
 from aiohttp import web, WSMsgType
 from PIL import Image
 from aiosendspin import noise
@@ -73,6 +76,7 @@ from aiosendspin.server import SendspinServer, ClientAddedEvent
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MA_PORT, SS_PORT, WEB = 18095, 16978, 28941
+MA_TLS_PORT, MA_SELF_PORT = 18443, 18444                         # the same server behind a proxy that serves wss:// (issue #236)
 GOOD = "eyJhbGciOiJIUzI1NiJ9." + "x" * 300 + ".sig"              # long, as Music Assistant's JWTs are
 
 
@@ -124,7 +128,7 @@ def track(i, alb=None):
 
 class FakeMA:
     def __init__(self):
-        self.cmds, self.ws, self.bad_set_members, self.img_auth, self.img_ids = [], None, False, [], []
+        self.cmds, self.ws, self.bad_set_members, self.img_auth, self.img_ids, self.img_secure = [], None, False, [], [], []
         self.self_id, self.merged, self.stall, self.extra, self.no_queue = None, False, False, 0, False
         self.queue_delay, self.queue_stall = 0, False
         self.queue = {"queue_id": "", "active": True, "display_name": "Kitchen + 1", "available": True, "items": 12, "shuffle_enabled": False,
@@ -229,6 +233,7 @@ class FakeMA:
 
     async def image(self, request):
         self.img_auth.append(request.headers.get("Authorization", "")); self.img_ids.append(request.match_info["id"])
+        self.img_secure.append(request.secure)
         size = int(request.query.get("size", "0"))
         if size not in (0, 80, 160, 256, 512, 1024): return web.Response(status=400)
         b = io.BytesIO(); Image.new("RGB", (size or 300, size or 300), (200, 30, 90)).save(b, "JPEG")
@@ -242,7 +247,9 @@ async def main():
     # the stand-in UI's command line names this run's state: a pkill of it never hits another test's (tests/run.py -j)
     me_ui = f"{os.path.abspath(__file__)} --ui {state}"
     open(runner, "w").write(f"#!/bin/sh\nexec {sys.executable} {me_ui}\n"); os.chmod(runner, 0o755)
+    ca_pem, srv_pem, self_pem = tls_files(state)
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_MUSIC=os.path.join(state, "music.raw"), HASSMIC_SETTINGS=os.path.join(state, "settings"),
+               HASSMIC_CA_FILE=ca_pem,
                HASSMIC_SCREEN=runner, FAKE_UI_LOG=log, FAKE_UI_FIFO=fifo, HASSMIC_MASS_QUIET_S="8",   # (no server heartbeat here)
                HASSMIC_SCREEN_HUNG_MS="2000", HASSMIC_MASS_QUEUE_MS="3000:5000")
     open(os.path.join(state, "adopted"), "w").close()       # set up: no setup spinner, the band dark (an idle Echo)
@@ -250,6 +257,12 @@ async def main():
     ma = FakeMA()
     app = web.Application(); app.router.add_get("/ws", ma.handle); app.router.add_get(r"/imageproxy/{id}", ma.image)
     run = web.AppRunner(app); await run.setup(); site = web.TCPSite(run, "127.0.0.1", MA_PORT); await site.start()
+    def tls_ctx(pem, only13):
+        c = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(pem)
+        if only13: c.minimum_version = ssl.TLSVersion.TLSv1_3
+        return c
+    await web.TCPSite(run, "127.0.0.1", MA_TLS_PORT, ssl_context=tls_ctx(srv_pem, True)).start()
+    await web.TCPSite(run, "127.0.0.1", MA_SELF_PORT, ssl_context=tls_ctx(self_pem, False)).start()
     errlog = []
 
     def start():
@@ -304,9 +317,9 @@ async def main():
         other = "http://127.0.0.2:8095".encode().hex()
         st, _, body = await asyncio.to_thread(b.call, "POST", "/api/mass", f"{other} =".encode())
         check(st == 409 and f"url=http://127.0.0.1:{MA_PORT}" in open(mf).read(), f"the token kept for another address: refused, nothing changed ({st})")
-        hu = "https://127.0.0.1:8095".encode().hex()
-        st, _, body = await asyncio.to_thread(b.call, "POST", "/api/mass", lambda c: f"{hu} {b.seal(c, GOOD.encode() + bytes(64 - len(GOOD) % 64)).hex()}".encode())
-        check(st == 400, f"https: refused (the API is plain ws here) ({st})")
+        hu = f"https://127.0.0.1:{MA_PORT}".encode().hex()
+        st, _, body = await asyncio.to_thread(b.call, "POST", "/api/mass", f"{hu} =".encode())
+        check(st == 409 and f"url=http://127.0.0.1:{MA_PORT}" in open(mf).read(), f"https:// of the same host is another address: the token not taken along ({st})")
 
         # the Screen page: the apps the UI listed, the home app picked there reaches the UI at once
         say("app me.jxl.kiosk_satellite\tKiosk Satellite\t0", "app com.android.music\tMusic\t1", "app org.fully.kiosk\tFully Kiosk\t0", "apps.")
@@ -582,6 +595,32 @@ async def main():
         say("img 0123456789 80")
         await until(lambda: "img 0123456789 0 80" in text(log), 5)
         check("img 0123456789 0 80" in text(log), "an unknown key: none (at the size asked)")
+
+        # behind a proxy that serves wss:// with TLS 1.3 alone (issue #236): the session and the images over TLS
+        def set_url(u, tok):
+            h = u.encode().hex()
+            return b.call("POST", "/api/mass", lambda c: f"{h} {b.seal(c, tok.encode() + bytes(64 - len(tok) % 64)).hex()}".encode())
+        open(log, "ab").write(b"#wss\n"); ma.cmds.clear()
+        st, _, body = await asyncio.to_thread(set_url, f"wss://127.0.0.1:{MA_TLS_PORT}", GOOD)
+        await until(lambda: "pl." in text(log)[text(log).index("#wss"):] and getattr(ma, "req", None) is not None and ma.req.secure, 15)
+        ms = (await asyncio.to_thread(b.state))["mass"]
+        check(st == 200 and ms["state"] == "up" and ma.req.secure and cmds("auth") == [{"token": GOOD}],
+              f"wss:// over TLS 1.3 alone: up, logged in over TLS ({ms})")
+        n_img = len(ma.img_ids); say(f"img {key} 256")
+        await until(lambda: len(ma.img_ids) > n_img and any(l.startswith(f"img {key} ") and l.endswith(" 256") for l in text(log)[text(log).index("#wss"):]), 10)
+        got = lines(log); k = max((i for i, l in enumerate(got) if isinstance(l, str) and l.startswith(f"img {key} ") and l.endswith(" 256")), default=None)
+        jpg = got[k + 1][1] if k is not None and k + 1 < len(got) and isinstance(got[k + 1], tuple) else b""
+        check(ma.img_secure[-1] is True and ma.img_auth[-1] == f"Bearer {GOOD}" and jpg[:2] == b"\xff\xd8",
+              f"its images over https://, the token along: {ma.img_secure[-1:]} {len(jpg)} bytes")
+        open(log, "ab").write(b"#self\n")
+        st, _, body = await asyncio.to_thread(set_url, f"wss://127.0.0.1:{MA_SELF_PORT}", GOOD)
+        await until(lambda: (b.state() or {}).get("mass", {}).get("state") == "error", 15)
+        ms = (await asyncio.to_thread(b.state))["mass"]
+        check(ms["state"] == "error" and "certificate" in ms["text"], f"a self-signed certificate: refused, said so ({ms})")
+        open(log, "ab").write(b"#plain\n")
+        st, _, body = await asyncio.to_thread(set_url, f"http://127.0.0.1:{MA_PORT}", GOOD)
+        await until(lambda: "pl." in text(log)[text(log).index("#plain"):], 15)
+        check((await asyncio.to_thread(b.state))["mass"]["state"] == "up" and not ma.req.secure, "back on plain ws://")
 
         # idle longer than the receive timeout (8 s here, 90 s on the Echo), on a server that sends no pings: ours keep it
         open(log, "ab").write(b"#idle\n"); await asyncio.sleep(20)

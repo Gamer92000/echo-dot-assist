@@ -2,7 +2,7 @@
  * Plugins from the plugin index (docs/plugins.md 5.3, 5.4): the repository hassmic-plugins publishes on GitHub
  * Pages a signed list of plugins (index.json, .sig), a signed list of what was withdrawn (revoked.json, .sig) and
  * every package it lists (packages/<id>-<version>.hmp), each with a listing inside signed by the index key.  The
- * Echo reads them the way update.c fetches its own bundles: update_fetch, i.e. the firmware's libcurl, net_socket,
+ * Echo reads them the way update.c fetches its own bundles: update_fetch, i.e. http.c on hassmic's own TLS, net_socket,
  * HTTPS against the system's CAs, only the address built in (keys/plugins.conf: PLUGIN_INDEX).  A browser could read
  * the site itself, but it would then have to hand the Echo what it read, and the Echo checks everything anyway: one
  * reader, the one that decides.
@@ -203,7 +203,7 @@ static long fresh_s(int force)
 
 static time_t now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + 1; }    /* (+1: 0 is "never") */
 
-/* libcurl's words about URL without the URL in front: what the page shows */
+/* update_fetch's words about URL without the URL in front: what the page shows */
 static const char *bare(const char *why, const char *url)
 {
     size_t ul = strlen(url);

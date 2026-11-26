@@ -9,7 +9,7 @@
  * "<epoch> <CLOCK_BOOTTIME when it was right>", the latter as /proc/uptime words it (seconds.centiseconds: the same clock, and main.sh's mksh only counts to 2^31, which
  * milliseconds pass after 25 days).  main.sh's netwatch (every 10 s) adds what has passed since, sets the time and the RTC,
  * and sets the property hassmic.clock.synced, which a reboot clears.  Only Home Assistant over the keyed link counts:
- * anyone on the network could otherwise move the clock, and with it the validity of the certificates curl checks.
+ * anyone on the network could otherwise move the clock, and with it the validity of the certificates tls.c checks.
  *
  * Time zone: Home Assistant's comes with its time, as the rule of its zone (tz.c turns it into a zone name).  It goes to
  * root the same way (state/timezone, one line), and main.sh sets persist.sys.timezone, plus Android's alarm service

@@ -3106,6 +3106,45 @@ Run in this order. Each step says what it proves.
       CA-signed certificate, self-signed refused, taken with the setting off (persisted), unreachable reports failure.
       Device (biscuit, 2026-10-13, announcements over its ESPHome API): raw.githubusercontent.com MP3 with checks on
       played; a self-signed server refused (curl 60), played with `https_verify=off`.  Open: a real HA over HTTPS.
+      (Since issue #236, below: no longer libcurl, the same behaviour on http.c and tls.c.)
+- [~] TLS 1.3 (issue #236, 2026-11-26; HA's SSL profile "Modern v6", TLS 1.3 alone: "SSL connect error" for every
+      reply's audio, "Intermediate v6" worked).  Every firmware's libcurl runs on its Android's BoringSSL: libssl.so of
+      donut, biscuit, radar, cannoli, checkers, cronos, crown, cupcake (Android 7, libcurl 7.50.1) has no TLS 1.3 code
+      at all, athena's (Android 9, libcurl 7.58) only the drafts (`SSL_set_tls13_variant`, `SSL_is_draft_downgrade`).
+      Every TLS user of hassmic's was exposed the same way where the server is the owner's: media (HA), online updates
+      from an update server of the owner's and the plugin index's site (Sources, #175); GitHub, github.io and Amazon
+      still offer 1.2.  Now hassmic's own: mbedTLS 3.6.8 LTS (`src/third_party/mbedtls`, `tools/mbedtls-vendor.sh`:
+      55 library files and 131 headers of the release, unchanged; `hassmic_config.h`: a TLS 1.2/1.3 client, ECDHE,
+      AES-GCM and ChaCha20-Poly1305, RSA (PKCS#1 v1.5 and PSS) and ECDSA, X25519/P-256/P-384/P-521, the kernel's
+      randomness for TLS and PSA alike), `tls.c` (non-blocking under a lock per connection: ws.c's reader and writers
+      share one; an address's certificate checked against its IP entries after the handshake, no SNI for it, RFC
+      6066), `http.c` (one HTTP/1.1 client: GET/POST, the caller's headers, redirects HTTPS-only where asked and none of
+      the caller's headers to another origin (7.50.1 sent Amazon's token along), Content-Length, chunks or the end,
+      connect/total times and the low speed limit as a moving window, a stop within 250 ms, `.local` by our mDNS,
+      `net_socket` or a plain socket), and https.c, update.c (with plugin_fetch.c), davs.c and mass.c on them;
+      `fwcurl.c` gone, no libcurl loaded.  Music Assistant over `wss://`/`https://` while at it (a proxy in front of it;
+      port 443 unless named; certificate as `https_verify`; the token pinned to the address, http:// and https:// two).
+      Missed at first: without `MBEDTLS_X509_RSASSA_PSS_SUPPORT` the ClientHello offers no `rsa_pss_rsae_*`, which
+      TLS 1.3 needs for RSA certificates: GitHub's release-assets CDN (RSA) answered with an unreadable record.
+      CAs: the firmware's folder, as before (donut and athena: 136 and 135 roots, ISRG X1, USERTrust, DigiCert G2,
+      Amazon's; parsed once at the first check, ~420 kB kept); a chain to a newer root fails as it did with
+      BoringSSL (1.1.1.1's SSL.com ECC root).  Cost: hassmic for donut +336 kB stripped (2.52 -> 2.85 MB).
+      Tests: `make unit-http` (58 cases under ASan/UBSan: TLS 1.3 and 1.2 alone with ECDSA and RSA, certificates for
+      a name, an address, another name, run out, self-signed, bodies, redirects, headers to another origin, POST,
+      the times, stops, refused addresses); fake_ha_esphome (HTTPS_PORT TLS 1.3 alone, a TLS 1.2-only server
+      beside it); fake_ma_api (wss:// with TLS 1.3 alone: session, login and images over TLS, a self-signed proxy
+      refused, back to ws://).  Against the real servers from the PC with the donut's and athena's CA folders:
+      api.github.com, the release-assets CDN, gamer92000.github.io, api.amazon.com, letsencrypt.org; the ARM build
+      under qemu-arm (TLS 1.3 and 1.2 against the PC's servers, ECDSA and RSA-PSS chains of GitHub's).
+      A review (two rounds) found: a write cut by its timeout sent again from the start; the reader flushing a
+      writer's pending record, which the writer then sent twice (and, after a failed write, credited to the next,
+      shorter one: a heap read sent to the server); time in the reader's callback counted as the server's silence; a
+      long Location followed cut; an address's certificate without serverAuth taken; a 307 taking Amazon's body to
+      another server.  All fixed (tls.c `wpend`/`wptr`, ws.c ends a connection after a frame not sent whole), each with
+      a case in `unit-http` (client-only certificates, a 3000-byte Location, a cross-origin 307, a reader that waits
+      3 s, 3 MB POSTed to a server that reads late).
+      Open: on an Echo, Amazon's login and download (davs.c) with the new client, an online update, a real HA on
+      "Modern".
 - [x] Frozen at the first wake word after 18.6 h (2026-10-13, GitHub issue #31; Echo Dot 3 on 2026.10.12.210015, up
       ~24 h): wake word, wake sound, listening ring, then nothing; buttons dead (action logged, not acted on), no
       pipeline timeout, power cycle needed. HA ran a whole pipeline meanwhile. The log's last hassmic lines: `whisper:

@@ -3184,7 +3184,8 @@ sensor is about the engine, not about plugins at large).
 
 It reaches an Echo three ways, none of which needs the settings page open:
 
-- **hassmic fetches it**, as `update.c` fetches releases: the firmware's libcurl (dlopen), sockets from
+- **hassmic fetches it**, as `update.c` fetches releases: hassmic's own HTTPS client (`http.c` on `tls.c`; the
+  firmware's libcurl until issue #236), sockets from
   `net_socket` so the egress lock lets them out, the address pinned in `keys/plugins.conf`. Five minutes after
   start and then once a day at a random minute, **while any plugin installed from the index exists**, and whatever
   "Online updates" is set to: that setting is about hassmic's own releases, and an owner who installed a plugin

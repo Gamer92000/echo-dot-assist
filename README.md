@@ -241,7 +241,7 @@ install only with a valid signature. The whole model, including what it does not
 [MIT](LICENSE), for everything written here. `src/third_party/` keeps its own licences, stated in each file: monocypher
 (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0), `rnnoise/` (BSD-3-Clause,
 `COPYING` beside it), `freeaptx.c`/`.h` (LGPL-2.1-or-later; linked statically, and everything needed to rebuild and
-relink it is in this repository). `wakealign/` is CC BY 4.0 (its README); `geo/` is made from Natural Earth's public
+relink it is in this repository), `mbedtls/` (Apache-2.0 OR GPL-2.0-or-later, `LICENSE` beside it). `wakealign/` is CC BY 4.0 (its README); `geo/` is made from Natural Earth's public
 domain borders.
 
 Nothing of Amazon's is in this repository or covered by this licence: firmware, libraries and wake word models come

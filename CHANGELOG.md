@@ -2,6 +2,17 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — HTTPS with TLS 1.3
+
+- **Replies play from a Home Assistant on the "Modern" SSL profile** (issue #236). That profile allows TLS 1.3 only,
+  and the TLS the Echo's firmware has is from 2016 and stops at TLS 1.2: every spoken reply stayed silent with "SSL
+  connect error". hassmic now has a TLS client of its own (mbedTLS, TLS 1.2 and 1.3) for everything it fetches over
+  HTTPS: replies and media, online updates, the plugin index and Amazon's model downloads, so an update server or
+  plugin site of your own may be TLS 1.3 only too. Certificates are checked as before. A failed check now says "the
+  certificate of ... does not check out" in the log.
+- **Music Assistant behind an HTTPS proxy** for the Echo Show's music pages: give its address as `https://...`. The
+  token then goes over TLS, its certificate checked as for Home Assistant's media.
+
 ## 2026-11-26 — The Echo keeps listening after a network error
 
 - **A network error no longer stops the Echo from taking connections** (issue #241, likely its cause). When a

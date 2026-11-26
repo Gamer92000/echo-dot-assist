@@ -9,9 +9,10 @@ from aioesphomeapi import APIClient, MediaPlayerInfo, MediaPlayerEntityState, Me
 from aioesphomeapi import APIVersion
 from aioesphomeapi.model import SendspinFeature, SendspinPairingTokenStatus
 from aiosendspin.noise.pairing_token import decode_psk_token
-from esphome_common import ROOT, LEAD_IN, check, until, sync, peak, speech, settled, run
+from esphome_common import ROOT, LEAD_IN, check, until, sync, peak, speech, settled, run, https_server
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 16953, 16954, 16955, 16966, 16967
+TLS12_PORT = 16968
 
 
 async def main(e):
@@ -288,11 +289,17 @@ async def main(e):
     res = await cli.send_voice_assistant_announcement_await_response("http://127.0.0.1:1/none.wav", 15, "x")
     check(not res.success, "unreachable announcement URL reports failure")
 
-    # Home Assistant serving HTTPS itself (issue #30): its URLs are https://, played through libcurl (https.c)
+    # Home Assistant serving HTTPS itself (issue #30): its URLs are https://, played through http.c on hassmic's own TLS
+    # (https.c, tls.c); HTTPS_PORT offers TLS 1.3 alone, as Home Assistant's "Modern" SSL profile does (issue #236)
     check(pv("https_verify") == 1, f"HTTPS certificates are checked by default: {pv('https_verify')}")
     before = os.path.getsize(play)
     res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/a.wav", 15, "tls")
-    check(res.success and os.path.getsize(play) - before == 48000, f"HTTPS announcement with a valid certificate played: {os.path.getsize(play) - before} bytes")
+    check(res.success and os.path.getsize(play) - before == 48000, f"HTTPS announcement over TLS 1.3 alone with a valid certificate played: {os.path.getsize(play) - before} bytes")
+    tls12 = https_server(TLS12_PORT, e.srv_pem, "1.2")
+    before = os.path.getsize(play)
+    res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{TLS12_PORT}/a.wav", 15, "tls 1.2")
+    check(res.success and os.path.getsize(play) - before == 48000, f"... and over TLS 1.2 alone (the Intermediate profile): {os.path.getsize(play) - before} bytes")
+    tls12.shutdown()
     before = os.path.getsize(play)
     res = await cli.send_voice_assistant_announcement_await_response(f"https://127.0.0.1:{HTTPS_PORT}/tts.mp3", 15, "tls mp3")
     got = os.path.getsize(play) - before

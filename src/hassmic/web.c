@@ -2220,7 +2220,6 @@ static void mass_api(int fd, struct req *r)
     int rc = mass_set(url, !strcmp(th, "-") ? "-" : !strcmp(th, "=") ? "" : (const char *)tok);
     crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed);
     if (rc == -2) { respond_sjson(fd, r, 409, "{\"error\":\"Give Music Assistant's address\"}"); return; }
-    if (rc == -4) { respond_sjson(fd, r, 400, "{\"error\":\"The Echo talks to Music Assistant's API without TLS: give its http address (port 8095)\"}"); return; }
     if (rc == -3) { respond_sjson(fd, r, 409, "{\"error\":\"A new address takes the token again: it only ever goes where it was given\"}"); return; }
     char o[4096]; size_t n = mass_status_json(o, sizeof o);
     respond_s(fd, r, rc ? 500 : 200, "application/json", NULL, o, n);
@@ -2414,12 +2413,12 @@ static char pl_check[PS_CHECK_JSON]; static size_t pl_check_n;      /* lk: what 
  *   CHECKED_MS  two minutes: a dialog read.  Until then the package the owner is reading about is the one the
  *               slot holds, and no other browser's, nor a push, takes its place;
  *   STUCK_MS    a fetch caps itself at FETCH_MS (bring_thread); half a minute past that its thread sits in what
- *               nothing interrupts (this libcurl's name lookup), and the slot is not held for it;
+ *               nothing interrupts (the name lookup, getaddrinfo), and the slot is not held for it;
  *   WAITS ends with the wait for the button, LOGIN_MS.
  * FETCH_MS, five minutes for one fetch as a whole, the look and every candidate: a package is 4 MB at most, which
  * a link down to 256 kbit/s (32 kB/s: an Echo at the edge of its Wi-Fi) brings in 2 min 8 s, and a look is three
  * requests of 15 s at most; five minutes are that with room, and on a usual link all four candidates.  Before, a
- * server that kept each transfer above libcurl's 512 B/s floor held the slot for an hour (four times 900 s).
+ * server that kept each transfer above the fetch's 512 B/s floor held the slot for an hour (four times 900 s).
  * (hassmic's own claim, a push, holds CHECKING and INSTALLING only: within its call, which nobody takes.  Its column
  * "a browser or a push" is what a claim of hassmic's own gives way to; the Echo fetches nothing by itself.)
  * HASSMIC_PLUGIN_SLOT=<checked ms>:<upload ms>:<fetch ms> for the tests. */
@@ -3207,8 +3206,8 @@ static int bring_ok(const struct ps_manifest *m, int tier, const char *what, cha
 }
 
 /* One fetch, for the claim b->gen: a browser's.  While it looks and downloads the slot is FETCHING and nothing of
- * the staging file is touched: a cancel lets go of the slot at once and this thread finds out when libcurl next
- * asks (b->stop).  For the staging file it moves the slot to CHECKING, which nobody takes.  The version is the
+ * the staging file is touched: a cancel lets go of the slot at once and this thread finds out within 250 ms
+ * (b->stop, http.c).  For the staging file it moves the slot to CHECKING, which nobody takes.  The version is the
  * index's choice for this build (pf_best: what it requires, not withdrawn), so one download */
 static void *bring_thread(void *arg)
 {

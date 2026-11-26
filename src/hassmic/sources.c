@@ -79,7 +79,7 @@ static void hex32(char out[65], const uint8_t k[32]) { for (int i = 0; i < 32; i
 /* ---------------------------------------------------------------- the addresses */
 
 /* "http(s)://host[:port]/path": the scheme's length, or 0.  The rest of URL printable and plain: it goes into
- * libcurl's URLs, the log and the page's JSON as it stands.  No query or fragment: paths are appended to it */
+ * http.c's URLs, the log and the page's JSON as it stands.  No query or fragment: paths are appended to it */
 static size_t url_scheme(const char *u)
 {
     size_t k = !strncasecmp(u, "https://", 8) ? 8 : !strncasecmp(u, "http://", 7) ? 7 : 0;

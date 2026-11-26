@@ -30,7 +30,7 @@
 #include "dha.h"
 #include "hash.h"
 #include "net.h"
-#include "fwcurl.h"
+#include "http.h"
 #include "wake.h"
 #include "statefile.h"
 #include <ctype.h>
@@ -97,70 +97,46 @@ static void say_err(const char *fmt, ...)                     /* lk held */
     va_end(ap);
 }
 
-/* ---------------------------------------------------------------- libcurl, from the firmware (update.c has the GETs) */
-
-enum { OPT_WRITEDATA = 10001, OPT_URL = 10002, OPT_POSTFIELDS = 10015, OPT_USERAGENT = 10018, OPT_HTTPHEADER = 10023,
-       OPT_POSTFIELDSIZE = 60, OPT_TIMEOUT = 13, OPT_LOW_SPEED_LIMIT = 19, OPT_LOW_SPEED_TIME = 20, OPT_NOPROGRESS = 43,
-       OPT_FAILONERROR = 45, OPT_FOLLOWLOCATION = 52, OPT_MAXREDIRS = 68, OPT_CONNECTTIMEOUT = 78, OPT_NOSIGNAL = 99,
-       OPT_OPENSOCKETFUNCTION = 20163, OPT_OPENSOCKETDATA = 10164, OPT_PROTOCOLS = 181, OPT_REDIR_PROTOCOLS = 182,
-       OPT_WRITEFUNCTION = 20011, OPT_XFERINFODATA = 10057, OPT_XFERINFOFUNCTION = 20219,
-       INFO_RESPONSE_CODE = 0x200002, PROTO_HTTP_S = 1 | 2 };
-struct curl_sockaddr { int family, socktype, protocol; unsigned addrlen; };
-struct curl_slist;
-
-#define curl fwcurl()                   /* fwcurl.c: loaded once, for update.c, https.c and davs.c alike */
-
-static int on_socket(void *arg, int purpose, struct curl_sockaddr *a)
-{
-    (void)arg; (void)purpose;
-    return net_socket(a->family, a->socktype, a->protocol);   /* the egress lock lets this group out */
-}
+/* ---------------------------------------------------------------- the requests (http.c) */
 
 struct sink { char *p; size_t n, cap; };
 
-static size_t on_data(char *d, size_t size, size_t n, void *arg)
+static int on_data(void *arg, const void *d, size_t n)
 {
-    struct sink *o = arg; size_t len = size * n;
-    if (o->n + len > o->cap) len = o->cap - o->n;
+    struct sink *o = arg; size_t len = n;
+    if (o->n + len > o->cap) len = o->cap - o->n;       /* (the rest dropped: the answers we read are small) */
     memcpy(o->p + o->n, d, len); o->n += len;
-    return size * n;
-}
-
-static int on_progress(void *arg, int64_t total, int64_t now, int64_t ut, int64_t un)
-{
-    (void)arg; (void)ut; (void)un;
-    if (total <= 0) return 0;
-    pthread_mutex_lock(&lk);
-    progress_pct = (int)(100 * now / total);
-    pthread_mutex_unlock(&lk);
     return 0;
 }
 
 /* the downloads land in a file, not in memory: 24 MB and more */
-struct file_sink { FILE *f; long long n; int over; char full[160]; };
+struct file_sink { FILE *f; long long n, total; int over; char full[160]; };
 
-static size_t on_file(char *d, size_t size, size_t n, void *arg)
+static int on_file_head(void *arg, int status, long long length) { struct file_sink *o = arg; (void)status; o->total = length; return 0; }
+
+static int on_file(void *arg, const void *d, size_t len)
 {
     struct file_sink *o = arg;
-    size_t len = size * n;
-    if (o->n + (long long)len > MAX_TARB) { o->over = 1; return 0; }   /* stops the transfer */
-    if (art_room((long long)len, o->full, sizeof o->full)) return 0;   /* /data full would stop state/ writes too */
+    if (o->n + (long long)len > MAX_TARB) { o->over = 1; return 1; }   /* stops the transfer */
+    if (art_room((long long)len, o->full, sizeof o->full)) return 1;   /* /data full would stop state/ writes too */
     size_t w = fwrite(d, 1, len, o->f);
     o->n += (long long)w;
-    return w;
+    if (w != len) return 1;
+    if (o->total > 0) {
+        pthread_mutex_lock(&lk);
+        progress_pct = (int)(100 * o->n / o->total);
+        pthread_mutex_unlock(&lk);
+    }
+    return 0;
 }
 
-static void curl_common(void *h)
+/* What every request to Amazon has: HTTPS (a redirect to HTTPS only), its certificate checked, 3 redirects, no
+ * failure on an error's status (the answers' bodies say more than their codes), 20 s to connect */
+static void common(struct http *r, const char *url)
 {
-    curl->setopt(h, OPT_USERAGENT, "hassmic");
-    curl->setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP_S); curl->setopt(h, OPT_REDIR_PROTOCOLS, (long)PROTO_HTTP_S);
-    curl->setopt(h, OPT_FOLLOWLOCATION, 1L); curl->setopt(h, OPT_MAXREDIRS, 3L);
-    curl->setopt(h, OPT_FAILONERROR, 0L);                       /* the answers' bodies say more than their codes */
-    curl->setopt(h, OPT_NOSIGNAL, 1L);
-    curl->setopt(h, OPT_CONNECTTIMEOUT, 20L);
-    curl->setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl->setopt(h, OPT_OPENSOCKETDATA, NULL);
-    curl->setopt(h, OPT_XFERINFOFUNCTION, on_progress); curl->setopt(h, OPT_XFERINFODATA, NULL);
-    curl->setopt(h, OPT_NOPROGRESS, 0L);
+    r->url = url; r->agent = "hassmic"; r->verify = 1;
+    r->redirects = 3; r->redirect_https = 1;
+    r->connect_s = 20;
 }
 
 /* one request.  BODY ("" = GET) is JSON; TOKEN and SST_HD ("" if none) become headers.  The answer lands in OUT (a
@@ -168,42 +144,33 @@ static void curl_common(void *h)
 static int request(const char *url, const char *body, const char *token, const char *sst_hd,
                    struct sink *out, long *code, char *err, size_t errsz)
 {
-    struct curl_slist *hdr = NULL;
-    static char post[8192];                    /* POSTFIELDS is not copied: the body must outlive setopt until perform */
-    void *h; size_t blen = strlen(body);
+    static char auth[2100], domain[240], sst[1300];
+    const char *hdr[6]; int nh = 0; size_t blen = strlen(body); char why[300];
+    struct http r = { 0 };
     *code = 0;
     out->n = 0;
     if (out->p) out->p[0] = 0;
-    if (!curl || !(h = curl->init())) { snprintf(err, errsz, "no libcurl on this device"); return -1; }
-    curl->setopt(h, OPT_URL, url);
-    curl_common(h);
-    curl->setopt(h, OPT_TIMEOUT, 60L);
-    curl->setopt(h, OPT_LOW_SPEED_LIMIT, 256L); curl->setopt(h, OPT_LOW_SPEED_TIME, 30L);
-    hdr = curl->slist_append(hdr, "Content-Type: application/json");
-    hdr = curl->slist_append(hdr, "Accept-Language: en-US");
-    if (*token) { char a[2100]; snprintf(a, sizeof a, "Authorization: Bearer %s", token); hdr = curl->slist_append(hdr, a); }
+    if (blen >= 8192) { snprintf(err, errsz, "request too long"); return -1; }
+    common(&r, url);
+    r.total_s = 60; r.low_s = 30; r.low_bytes = 256;
+    hdr[nh++] = "Content-Type: application/json";
+    hdr[nh++] = "Accept-Language: en-US";
+    if (*token) { snprintf(auth, sizeof auth, "Authorization: Bearer %s", token); hdr[nh++] = auth; }
     {   /* the host, as MAP's connectivity manager sends it (secure-stream policy map_1p_post) */
-        char host[200], a[240];
+        char host[200];
         if (sscanf(url, "%*[^:]://%199[^/?]", host) != 1) host[0] = 0;
-        snprintf(a, sizeof a, "x-amzn-identity-auth-domain: %s", host);
-        hdr = curl->slist_append(hdr, a);
+        snprintf(domain, sizeof domain, "x-amzn-identity-auth-domain: %s", host);
+        hdr[nh++] = domain;
     }
-    if (*sst_hd) { char a[1300]; snprintf(a, sizeof a, "x-amzn-identity-secure-session-token: %s", sst_hd);
-                   hdr = curl->slist_append(hdr, a); }
-    curl->setopt(h, OPT_HTTPHEADER, hdr);
-    if (blen)
-    {
-        if (blen >= sizeof post) { curl->cleanup(h); snprintf(err, errsz, "request too long"); return -1; }
-        memcpy(post, body, blen + 1);
-        curl->setopt(h, OPT_POSTFIELDS, post);
-        curl->setopt(h, OPT_POSTFIELDSIZE, (long)blen);
-    }                                                          /* without POSTFIELDS the request is a GET */
-    curl->setopt(h, OPT_WRITEFUNCTION, on_data);
-    curl->setopt(h, OPT_WRITEDATA, out);
-    int rc = curl->perform(h);
-    curl->getinfo(h, INFO_RESPONSE_CODE, code);
-    curl->cleanup(h);
-    if (rc) { snprintf(err, errsz, "%s", curl->strerror(rc)); return -1; }
+    if (*sst_hd) { snprintf(sst, sizeof sst, "x-amzn-identity-secure-session-token: %s", sst_hd); hdr[nh++] = sst; }
+    hdr[nh] = NULL;
+    r.headers = hdr;
+    if (blen) { r.body = body; r.body_len = blen; }            /* without a body the request is a GET */
+    r.data = on_data; r.arg = out;
+    int rc = http_run(&r, why, sizeof why);
+    *code = r.status;
+    memset(auth, 0, sizeof auth); memset(sst, 0, sizeof sst);
+    if (rc) { snprintf(err, errsz, "%s", why); return -1; }
     if (out->p) out->p[out->n] = 0;                           /* n <= cap, and cap is one below the buffer's size */
     return 0;
 }
@@ -211,27 +178,23 @@ static int request(const char *url, const char *body, const char *token, const c
 /* GET URL into the file PATH (unlinked first; the caller unlinks it in the end).  0, or -1 with the reason in ERR. */
 static int download(const char *url, const char *path, long *code, char *err, size_t errsz)
 {
-    struct file_sink o = { 0, 0, 0, "" };
-    void *h; int rc; struct stat st;
+    struct file_sink o = { 0, 0, -1, 0, "" }; struct stat st; char why[240];
+    struct http r = { 0 };
     *code = 0;
-    if (!curl || !(h = curl->init())) { snprintf(err, errsz, "no libcurl on this device"); return -1; }
-    if (!(o.f = fopen(path, "wb"))) { curl->cleanup(h); snprintf(err, errsz, "cannot write %.200s", path); return -1; }
-    curl->setopt(h, OPT_URL, url);
-    curl_common(h);
-    curl->setopt(h, OPT_TIMEOUT, 900L);                        /* 15 min: 12 MB over a slow link */
-    curl->setopt(h, OPT_LOW_SPEED_LIMIT, 512L); curl->setopt(h, OPT_LOW_SPEED_TIME, 60L);
-    curl->setopt(h, OPT_WRITEFUNCTION, on_file);
-    curl->setopt(h, OPT_WRITEDATA, &o);
-    rc = curl->perform(h);
-    curl->getinfo(h, INFO_RESPONSE_CODE, code);
-    curl->cleanup(h);
+    if (!(o.f = fopen(path, "wb"))) { snprintf(err, errsz, "cannot write %.200s", path); return -1; }
+    common(&r, url);
+    r.total_s = 900;                                           /* 15 min: 12 MB over a slow link */
+    r.low_s = 60; r.low_bytes = 512;
+    r.head = on_file_head; r.data = on_file; r.arg = &o;
+    int rc = http_run(&r, why, sizeof why);
+    *code = r.status;
     fclose(o.f);
     if (rc || o.over)
     {
         unlink(path);
         if (o.over) snprintf(err, errsz, "the download is bigger than %ld MB", MAX_TARB >> 20);
         else if (*o.full) snprintf(err, errsz, "%s", o.full);
-        else snprintf(err, errsz, "download failed: %s", curl->strerror(rc));
+        else snprintf(err, errsz, "download failed: %s", why);
         return -1;
     }
     if (*code != 200)
