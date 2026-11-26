@@ -529,6 +529,12 @@ Beyond the README's two figures:
   name, author and a line about it. **Use** sets its animations, only those or all of them (the rest back to
   Amazon's), and applies. A pack travels with its designs: as a `.ringpack` file (Export, Import) or with "Copy
   models". Up to 50 packs; their designs count towards the 100.
+- **Timer ring progress** (Lights, off by default): the ring fills when an Assist timer starts, then LEDs go out
+  in order with the remaining fraction. The active timer ending first wins; when all are paused, the one with
+  least time remaining pulses slowly with its progress frozen. Added or removed time recalculates the fraction.
+  Choose a colour and a brightness percentage of the ring's normal (including automatic) level on the web page.
+  Voice, volume, mute and alerts keep priority. Requires ESPHome timer events and live-ring-capable hardware,
+  but does not require **Light ring live** to be enabled. Preferences persist; timers themselves still come from HA.
 - **Light ring live** (Echo Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5; settings page, Lights, "Live from Home Assistant", off by default): the
   Echo draws its ring itself, from Home Assistant, in any colour on any LED, up to 30 pictures a second, and plays your
   designs at once, without Apply. In layers, the lowest first:

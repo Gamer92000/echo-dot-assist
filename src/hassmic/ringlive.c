@@ -55,6 +55,8 @@ static pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
 static atomic_int avail;                /* set once by ringlive_start; read from the protocols' threads */
 static int acs;                         /* binary animations (the Echo Dot 5): frames through ring_live_put; set once */
 static int leds = 12, dirty, enabled, quitting;      /* enabled, quitting: under lock */
+static int timer_on, timer_brightness = 40, timer_colour = 0xffa000, timer_paused;   /* lock */
+static long long timer_end_or_left, timer_duration;
 static pid_t our_pid;                   /* SIGTERM's handler acts only in hassmic itself, not in a child between fork and
                                          * exec (ledq.c's ledctrl) */
 static _Atomic int writes, owned_now;   /* owned_now: ours is on the ring (SIGTERM's handler writes the dark frame) */
@@ -467,6 +469,41 @@ static void base(const struct ring_light *l, int flashing, long long now, int ro
 /* lock held: what the ring shows now, as seen, per LED of the driver: the light, the LEDs over it, an animation over
  * all, a fade between the last picture and this one; *next: ms until it changes by itself.  1 if the LEDs' states or
  * what plays changed by itself (a timeout, an animation's end) */
+int ringlive_timer_frame(long long now, long long end_or_left, long long duration, int paused,
+                        int colour, int brightness, int count, float out[][3])
+{
+    memset(out, 0, sizeof(float) * 3 * (size_t)count);
+    if (duration <= 0) return 0;
+    long long left = paused ? end_or_left : end_or_left - now;
+    if (left <= 0) return 0;
+    double fraction = fmin(1.0, (double)left / duration);
+    int lit = (int)ceil(fraction * count);       /* keep the final LED until the timer ends */
+    float level = brightness / 100.0f;
+    if (paused) level *= 0.25f + 0.75f * (0.5f - 0.5f * cosf((float)(now % 4000) * (2.0f * (float)M_PI / 4000)));
+    for (int i = 0; i < lit; i++) for (int c = 0; c < 3; c++)
+        out[i][c] = ((colour >> (16 - 8 * c)) & 255) / 255.0f * level;
+    return 1;
+}
+
+int ringlive_timer_option(int option, int value)
+{
+    pthread_mutex_lock(&lock);
+    int *p = option == RING_TIMER_ON ? &timer_on : option == RING_TIMER_BRIGHTNESS ? &timer_brightness : &timer_colour;
+    int max = option == RING_TIMER_ON ? 1 : option == RING_TIMER_BRIGHTNESS ? 100 : 0xffffff;
+    if (value >= 0 && value <= max) { *p = value; dirty = 1; pthread_cond_signal(&cv); }
+    int v = *p;
+    pthread_mutex_unlock(&lock);
+    return v;
+}
+
+void ringlive_timer_snapshot(long long end_or_left, long long duration, int paused)
+{
+    pthread_mutex_lock(&lock);
+    timer_end_or_left = end_or_left; timer_duration = duration; timer_paused = paused;
+    dirty = 1; pthread_cond_signal(&cv);
+    pthread_mutex_unlock(&lock);
+}
+
 static int picture(long long now, int rot, const struct ring_light *rl, int flashing, const struct music_feat *m, float seen[][3], int *next)
 {
     int ch = 0;
@@ -504,6 +541,13 @@ static int picture(long long now, int rot, const struct ring_light *rl, int flas
             int h = hw_of(j, rot);
             seen[h][0] = led[j].r * led[j].brightness; seen[h][1] = led[j].g * led[j].brightness; seen[h][2] = led[j].b * led[j].brightness;
         }
+    }
+    /* Above decorative live lights, never above the Echo's own patterns (the writer's hold/yield guards). */
+    float timer[MAX_LEDS][3];
+    if (timer_on && ringlive_timer_frame(now, timer_end_or_left, timer_duration, timer_paused,
+                                       timer_colour, timer_brightness, leds, timer)) {
+        for (int j = 0; j < leds; j++) memcpy(seen[hw_of(j, rot)], timer[j], sizeof timer[j]);
+        if (timer_paused) *next = 1000 / RINGLIVE_FPS;
     }
     if (fade_ms > 0) {                          /* a light's transition: from what showed to this, as seen */
         float k = (float)(now - fade_t0) / fade_ms;

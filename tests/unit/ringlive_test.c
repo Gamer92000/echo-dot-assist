@@ -255,6 +255,24 @@ int main(void)
     snprintf(p, sizeof p, "%s/state", dir); mkdir(p, 0700); setenv("HASSMIC_STATE", p, 1);
     snprintf(p, sizeof p, "%s/state/ring", dir); mkdir(p, 0700);
     pure();
+    float progress[24][3];
+    check(ringlive_timer_frame(1000, 61000, 60000, 0, 0xff8000, 40, 12, progress)
+          && fabsf(progress[11][0] - 0.4f) < 1e-6f, "timer: full ring at start, chosen colour and brightness");
+    check(ringlive_timer_frame(31000, 61000, 60000, 0, 0xff8000, 40, 12, progress)
+          && progress[5][0] > 0 && progress[6][0] == 0 && progress[5][1] > 0 && !progress[5][2],
+          "timer: half left, six LEDs, RGB colour preserved");
+    check(ringlive_timer_frame(60999, 61000, 60000, 0, 0xffffff, 100, 24, progress)
+          && progress[0][0] == 1 && progress[1][0] == 0, "timer: final LED stays until deadline, 24 LEDs supported");
+    check(!ringlive_timer_frame(61000, 61000, 60000, 0, 0xffffff, 100, 12, progress)
+          && !progress[0][0], "timer: deadline leaves the normal alarm animation in charge");
+    check(!ringlive_timer_frame(0, 0, 0, 0, 0xffffff, 100, 12, progress), "timer: no timer or zero duration is dark");
+    ringlive_timer_frame(0, 30000, 60000, 1, 0xff0000, 100, 12, progress);
+    float low = progress[0][0];
+    ringlive_timer_frame(2000, 30000, 60000, 1, 0xff0000, 100, 12, progress);
+    check(fabsf(low - 0.25f) < 1e-6f && progress[0][0] > 0.99f && progress[5][0] > 0 && !progress[6][0],
+          "timer: pause freezes six LEDs and breathes over four seconds");
+    check(!ringlive_timer_option(RING_TIMER_ON, -1)
+          && ringlive_timer_option(RING_TIMER_BRIGHTNESS, -1) == 40, "timer: independent feature off by default");
 
     /* the writer */
     snprintf(frame, sizeof frame, "%s/frame", dir); setenv("HASSMIC_FAKE_FRAME", frame, 1);
@@ -287,6 +305,23 @@ int main(void)
     hold = 0; put(marker, "boot-2\n");
     ringlive_start(hold_fn, level_fn, changed_fn); ringlive_begin(); msleep(150); get(t, sizeof t);
     check(!strcmp(t, dark) && access(marker, F_OK), "  else what a crash left on the ring (a frozen effect too) is dark again, the marker gone");
+
+    /* Timer overlay without HA live enabled, including the writer's stock-pattern guard. */
+    ringlive_timer_option(RING_TIMER_COLOUR, 0xff0000);
+    ringlive_timer_option(RING_TIMER_BRIGHTNESS, 100);
+    ringlive_timer_snapshot(30000, 60000, 1);
+    ringlive_timer_option(RING_TIMER_ON, 1);
+    msleep(300); get(t, sizeof t);
+    check(strcmp(t, dark) && !ringlive_enabled(), "timer writer runs independently of HA live switch");
+    hold = 1; msleep(150); int timer_writes = ringlive_writes();
+    put(frame, "00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF00FFFF\n");
+    msleep(300); get(t, sizeof t);
+    check(ringlive_writes() == timer_writes && !strncmp(t, "00FFFF", 6), "timer never overwrites a stock pattern");
+    hold = 0; put(frame, dark); msleep(400); get(t, sizeof t);
+    check(strcmp(t, dark), "timer progress returns after stock pattern ends");
+    ringlive_timer_snapshot(0, 0, 0); ringlive_timer_option(RING_TIMER_ON, 0);
+    msleep(300); get(t, sizeof t);
+    check(!strcmp(t, dark), "timer cleared: writer darkens its previous frame");
 
     char c[12][16] = { "#0000ff", "", "ff0000" }, e[120];
     check(ringlive_frame(c, 3, 1, 0, e, sizeof e) == 0 && ringlive_active(), "a frame from Home Assistant");

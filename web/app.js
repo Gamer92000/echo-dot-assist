@@ -227,12 +227,17 @@ const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
           ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any', 'timer_stop_from_others']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
-  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Live from Home Assistant', 'ring_live'], ['Screen', ...BRIGHTNESS]],
+  lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'],
+    ['Timer progress', 'timer_ring_light', 'timer_ring_light_colour', 'timer_ring_light_brightness'],
+    ['Live from Home Assistant', 'ring_live'], ['Screen', ...BRIGHTNESS]],
 };
 
 // help: what it does, in the user's terms.  ha: also in Home Assistant (true), or for features the entities it adds.
 // icon: features.  parent: shown inside that feature's card while it is on.  tag: an extra badge.
 const HELP = {
+  timer_ring_light: { help: 'Off by default. The ring follows the active timer ending first: full at the start, then LEDs go out in order. With only paused timers, the shortest remaining one pulses slowly. Voice, volume, mute and alerts keep priority; decorative live lights return when no timer is shown. Works without Light ring live. Timers are supplied by Home Assistant over ESPHome, not Wyoming.' },
+  timer_ring_light_colour: { help: 'The colour of the remaining LEDs, including the slow pause pulse.' },
+  timer_ring_light_brightness: { help: 'A percentage of the ring’s current brightness (including automatic brightness); never exceeds its calibrated safe level.' },
   mic_level: { help: 'How loud your voice reaches speech-to-text. The Echo adjusts its gain to hold speech at this level. Raise it if quiet commands get misheard or cut off; lower it if loud speech comes out distorted. Default −26 dBFS.' },
   noise_reduction: { help: 'Takes steady background noise (fans, traffic, the dishwasher) out of what speech-to-text hears, by up to 6, 9 or 12 dB. The wake word always gets the untouched sound. Try it if commands fail in a noisy room.' },
   wake_sound: { ha: true, help: 'A tone when the Echo starts listening. Off keeps the sound you chose: on again, yours or Alexa\'s plays as before.' },
@@ -1096,6 +1101,10 @@ const modeOf = (modes, c) => modes[c] || (c.startsWith('plugin:')
 
 function control(s, prefix = 's-') {
   const id = prefix + s.name;
+  if (s.name === 'timer_ring_light_colour') {
+    const i = h('input', { type: 'color', id, onchange: () => set(s.name, String(parseInt(i.value.slice(1), 16))) });
+    return { el: i, update: (x) => { if (!i.matches(':focus')) i.value = '#' + Number(x.value).toString(16).padStart(6, '0'); } };
+  }
   if (s.type === 'bool') {
     const i = h('input', { type: 'checkbox', id, role: 'switch', onchange: async () => {
       const v = i.checked ? 'on' : 'off', before = (HELP[s.name] || {}).before;      // a dialog of the page's own first

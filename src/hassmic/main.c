@@ -2744,7 +2744,7 @@ static const enum sound timer_sounds[] = { [TIMER_SOUND_TIMER] = SND_TIMER, [TIM
  * one goes first (one Home Assistant forgot while paused would hold a slot for good), else the oldest */
 #define RUNNING_MAX 8
 #define TIMER_STALE_MS 10000
-static struct { char id[40], name[64]; unsigned total; int active; long long end, left; } running[RUNNING_MAX];  /* lock held */
+static struct { char id[40], name[64]; unsigned total; int active; long long end, left, duration; } running[RUNNING_MAX];  /* lock held */
 static int nrunning;                                            /* lock held; end: mono_ms (active), left: ms (paused) */
 static atomic_llong timers_stale_at = LLONG_MAX;                /* mono_ms the first active one is overdue */
 
@@ -2765,11 +2765,34 @@ static void running_stale_at(void)      /* lock held */
     long long at = LLONG_MAX;
     for (int i = 0; i < nrunning; i++) if (running[i].active && running[i].end + TIMER_STALE_MS < at) at = running[i].end + TIMER_STALE_MS;
     atomic_store(&timers_stale_at, at);
+    int best = -1;
+    for (int i = 0; i < nrunning; i++) {
+        if (best < 0 || (running[i].active && !running[best].active)
+            || (running[i].active == running[best].active
+                && (running[i].active ? running[i].end < running[best].end : running[i].left < running[best].left))) best = i;
+    }
+    if (best < 0) ringlive_timer_snapshot(0, 0, 0);
+    else ringlive_timer_snapshot(running[best].active ? running[best].end : running[best].left,
+                                 running[best].duration, !running[best].active);
 }
 
 void core_timer_running(const char *id, const char *name, unsigned total, unsigned left, int active)
 {
     int i = running_find(id);
+    long long now = mono_ms();
+    long long duration = total * 1000LL;
+    if (i >= 0) {
+        /* HA keeps total_seconds at its original value when adjusting a timer. Compare remaining seconds instead;
+         * permit one second of rounding on the satellite's independently ticking monotonic clock. */
+        long long before = running[i].active ? running[i].end - now : running[i].left;
+        if (before < 0) before = 0;
+        long long change = left * 1000LL - before;
+        duration = running[i].duration;
+        if (total != running[i].total) duration += ((long long)total - running[i].total) * 1000;
+        else if (active == running[i].active && llabs(change) > 1000)
+            duration += ((change + (change > 0 ? 500 : -500)) / 1000) * 1000;
+        if (duration < left * 1000LL) duration = left * 1000LL;
+    }
     if (i < 0) {
         if (nrunning == RUNNING_MAX) {
             int old = 0;
@@ -2781,7 +2804,8 @@ void core_timer_running(const char *id, const char *name, unsigned total, unsign
     }
     snprintf(running[i].name, sizeof running[i].name, "%s", name);
     running[i].total = total; running[i].active = active;
-    running[i].left = left * 1000LL; running[i].end = mono_ms() + running[i].left;
+    running[i].duration = duration;
+    running[i].left = left * 1000LL; running[i].end = now + running[i].left;
     running_stale_at();
     screen_timers_changed();
     if (connected && proto->timers_changed) proto->timers_changed();

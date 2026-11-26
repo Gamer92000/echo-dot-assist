@@ -118,7 +118,7 @@ enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, 
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, CALL_MIC, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
-          VOL_EVEN, NSET };
+          VOL_EVEN, TIMER_LIGHT, TIMER_LIGHT_LEVEL, TIMER_LIGHT_COLOUR, NSET };
 
 /* Features ("Features" group, feature = 1): Home Assistant lists their entities only while they are on (proto_esphome.c
  * listed()); everything else here is on the settings page only, except what Home Assistant always shows (wake sound,
@@ -165,6 +165,9 @@ static const struct setting table[NSET] = {
     [BT_LANG]     = { "bluetooth_announcement_language", "Announcement language", "Bluetooth", NULL, S_CHOICE, 0, 0, 1, 0 },
     [LED_AUTO]    = { "led_auto_brightness", "LED auto brightness", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [LED_LEVEL]   = { "led_brightness", "LED brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
+    [TIMER_LIGHT] = { "timer_ring_light", "Timer ring progress", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
+    [TIMER_LIGHT_LEVEL] = { "timer_ring_light_brightness", "Timer ring brightness", "Lights", "%", S_INT, 0, 100, 1, 0 },
+    [TIMER_LIGHT_COLOUR] = { "timer_ring_light_colour", "Timer ring colour", "Lights", NULL, S_INT, 0, 16777215, 1, 0 },
     /* ring.c keeps it: where the light's fill starts.  Not exported: it is for how this Echo stands */
     [RING_ROT]    = { "ring_rotation", "Light ring rotation", "Lights", "LEDs", S_INT, 0, 23, 0, 0 },   /* settings_max() */
     /* screen.c tells the UI (src/ui/scene.c music_page_tick): the Playing tab in place of the face, or of the home app
@@ -305,6 +308,7 @@ static int present(enum id i)
     case LED_AUTO: return core_led_has_auto();
     case WIFI_MOTION: case WIFI_SENS: return wifimotion_present();
     case RING_LIVE: return ringlive_available();
+    case TIMER_LIGHT: case TIMER_LIGHT_LEVEL: case TIMER_LIGHT_COLOUR: return ringlive_available();
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case BT_CALLS: return ble_present() && hfp_present();
@@ -395,6 +399,9 @@ static int switched_sound(int i)
 int settings_get(const struct setting *s)
 {
     switch (s - table) {
+    case TIMER_LIGHT: return ringlive_timer_option(RING_TIMER_ON, -1);
+    case TIMER_LIGHT_LEVEL: return ringlive_timer_option(RING_TIMER_BRIGHTNESS, -1);
+    case TIMER_LIGHT_COLOUR: return ringlive_timer_option(RING_TIMER_COLOUR, -1);
     case WAKE_ENGINE: return core_wake_engine(-1);
     case SPEECH_LANG: return speech_lang;
     case WAKE_ADAPT: return wake_adapt;
@@ -483,6 +490,9 @@ int settings_get(const struct setting *s)
 static void put(enum id i, int v)
 {
     switch (i) {
+    case TIMER_LIGHT: ringlive_timer_option(RING_TIMER_ON, v); break;
+    case TIMER_LIGHT_LEVEL: ringlive_timer_option(RING_TIMER_BRIGHTNESS, v); break;
+    case TIMER_LIGHT_COLOUR: ringlive_timer_option(RING_TIMER_COLOUR, v); break;
     case WAKE_ENGINE: core_wake_engine(v); break;
     case SPEECH_LANG: speech_lang = v; screen_language_changed(); break;
     case WAKE_ADAPT: wake_adapt = v; break;

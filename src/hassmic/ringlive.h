@@ -42,6 +42,15 @@ void ringlive_yield_end(void);          /* after ring_set: ring_busy() now holds
  * colour, the live effects, its fill) under the LEDs' own lights; off, all of it off and the palette back */
 void ringlive_enable(int on);
 int  ringlive_enabled(void);
+/* Timer progress is independent of Home Assistant's live-light switch. Options: enabled, brightness (0..100),
+ * RGB (0x000000..0xffffff). -1 reads. Snapshot: monotonic end for active timers, remaining ms for paused ones;
+ * duration is the adjusted whole length. duration <= 0 clears it. Any caller lock, but not ringlive's. */
+enum { RING_TIMER_ON, RING_TIMER_BRIGHTNESS, RING_TIMER_COLOUR };
+int  ringlive_timer_option(int option, int value);
+void ringlive_timer_snapshot(long long end_or_left, long long duration, int paused);
+/* Pure frame in fill order, useful for tests; 1 while a timer is displayed. */
+int ringlive_timer_frame(long long now, long long end_or_left, long long duration, int paused,
+                        int colour, int brightness, int count, float out[][3]);
 void ringlive_fade(int ms);             /* the next change fades in over ms (a light's transition) */
 void ringlive_shutdown(void);           /* the dark frame if ours shows, the writer ended (at most 1 s) */
 /* A design's text (ringdesign.h), as drawn: the settings page's "Show on the Echo".  0, or -1 with why */
