@@ -35,11 +35,14 @@
 #define _GNU_SOURCE                     /* pipe2 on glibc */
 #endif
 #include "screen.h"
+#include "arb.h"
 #include "board.h"
 #include "core.h"
 #include "call.h"
+#include "dropin.h"
 #include "json.h"
 #include "mass.h"
+#include "net.h"
 #include "ring.h"
 #include "sendspin.h"
 #include "settings.h"
@@ -63,6 +66,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -685,6 +689,74 @@ static void web_url(char *out, size_t n)
 }
 
 #define NTIMERS 8
+/* Visible peer name only: never used as a Drop In target or published as its machine-readable state. */
+static char peer_node[64], peer_name[64];                       /* lock */
+
+static int peer_hello_name(const char *host, int port, const char *node, char name[64])
+{
+    char ps[8], req[200], buf[8192]; size_t have = 0; int bad = 0;
+    snprintf(ps, sizeof ps, "%d", port);
+    int fd = net_connect(host, ps, 2);
+    if (fd < 0) return -1;
+    int n = snprintf(req, sizeof req, "GET /api/hello HTTP/1.0\r\nHost: %s:%d\r\nConnection: close\r\n\r\n", host, port);
+    for (int sent = 0; sent < n;) {
+        ssize_t k = send(fd, req + sent, (size_t)(n - sent), MSG_NOSIGNAL);
+        if (k < 0 && errno == EINTR) continue;
+        if (k <= 0) { bad = 1; break; }
+        sent += (int)k;
+    }
+    long long until = mono_ms() + 2000;
+    while (!bad && have < sizeof buf - 1 && mono_ms() < until) {
+        ssize_t k = recv(fd, buf + have, sizeof buf - 1 - have, 0);
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0) { bad = 1; break; }
+        if (!k) break;
+        have += (size_t)k;
+    }
+    close(fd); buf[have] = 0;
+    if (bad || have == sizeof buf - 1 || have < 12 || memcmp(buf, "HTTP/1.", 7) || memcmp(buf + 9, "200", 3)) return -1;
+    char *body = strstr(buf, "\r\n\r\n"), visible[256]; struct json j = {0};
+    if (!body) return -1;
+    if (json_parse(&j, body + 4, have - (size_t)(body + 4 - buf))) { json_free(&j); return -1; }
+    int nt = json_get(&j, 0, "name");
+    int ok = json_streq(&j, json_get(&j, 0, "node"), node) && json_type(&j, nt) == J_STR &&
+             json_str(&j, nt, visible, sizeof visible) && visible[0] && strlen(visible) < 64;
+    if (ok) clean_cut(name, 64, visible);
+    json_free(&j);
+    return ok ? 0 : -1;
+}
+
+/* Network reads never block the UI writer or hold core_lock/lock. Names are public, display-only hints from hello.
+ * Peers normally share the web port; if a port differs or a peer is offline, its stable node remains the fallback. */
+static void *peer_names(void *arg)
+{
+    (void)arg;
+    char last[64] = ""; long long next = 0;
+    for (;;) {
+        char node[64] = "", visible[64] = "", host[INET_ADDRSTRLEN]; unsigned ip; unsigned char id[8];
+        if (dropin_running() && dropin_status(node, sizeof node) == DROPIN_IDLE) node[0] = 0;
+        long long now = mono_ms();
+        if (strcmp(last, node)) {
+            snprintf(last, sizeof last, "%s", node); next = 0;
+            pthread_mutex_lock(&lock); snprintf(peer_node, sizeof peer_node, "%s", node); peer_name[0] = 0; kick(); pthread_mutex_unlock(&lock);
+        }
+        if (node[0] && now >= next) {
+            next = now + 30000;
+            if (core_web_port && !arb_member(node, id, &ip)) {
+                struct in_addr addr = { ip };
+                if (inet_ntop(AF_INET, &addr, host, sizeof host) && !peer_hello_name(host, core_web_port, node, visible)) {
+                    char current[64]; dropin_status(current, sizeof current);
+                    if (!strcmp(current, node)) {
+                        pthread_mutex_lock(&lock); snprintf(peer_name, sizeof peer_name, "%s", visible); kick(); pthread_mutex_unlock(&lock);
+                    }
+                }
+            }
+        }
+        sleep(1);
+    }
+    return NULL;
+}
+
 static struct { int mute, dnd, oobe, evol, kiosk, mpage; char timers[300], peer[64], web[96]; struct core_timer run[NTIMERS]; int nrun; } now_s, sent_s;
 static struct core_timer hidden[NTIMERS]; static int nhidden = -1;   /* (the writer's) the list tapped away: -1 none */
 static unsigned tl_seq;                                         /* (the writer's) the last "tl" sent */
@@ -713,7 +785,10 @@ static void read_core(int slow)
     if (nhidden >= 0 && (nhidden != now_s.nrun || memcmp(hidden, now_s.run, sizeof hidden))) nhidden = -1;
     atomic_store(&keep_on, show && (names[0] || (active && nhidden < 0)));
     if (core_call_status(peer, sizeof peer) == CALL_IDLE) peer[0] = 0;      /* a call over: no peer */
-    clean_cut(now_s.peer, sizeof now_s.peer, peer);           /* (cut to the UI's 64 bytes at a character's edge) */
+    pthread_mutex_lock(&lock);
+    if (peer[0] && !strcmp(peer, peer_node) && peer_name[0]) snprintf(peer, sizeof peer, "%s", peer_name);
+    pthread_mutex_unlock(&lock);
+    clean_cut(now_s.peer, sizeof now_s.peer, peer);           /* preserve UTF-8 for non-Drop In callers too */
     if (slow) {                                                   /* every 10 s: what changes rarely */
         now_s.kiosk = kiosk_installed();
         web_url(now_s.web, sizeof now_s.web);
@@ -924,6 +999,7 @@ void screen_start(void)
     if (!go) return;
     marker(screen_ui() ? getpid() : 0);                         /* (one of the last run's goes: its pid is no more) */
     if (screen_ui()) mass_start();
+    if (screen_ui() && !pthread_create(&t, NULL, peer_names, NULL)) pthread_detach(t);
     for (int i = 0; i < 2; i++) if (!pthread_create(&t, NULL, commands, &cq[i])) pthread_detach(t);
     if (!pthread_create(&t, NULL, writer, NULL)) pthread_detach(t);
 }

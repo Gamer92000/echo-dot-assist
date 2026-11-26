@@ -191,8 +191,8 @@ static void hold_poke(void);
 static struct { uint32_t addr; long long at; int n; } asks[8], asks_all;      /* lk: ask_rate */
 static atomic_int nconn;
 static char start_id[17];           /* new at every start: the page knows a restart from an answer of the old process */
-/* A note of the owner's ("Kitchen, by the window"), shown under the name (issue #153): the name is the model and the
- * MAC's end, and several Echos of one model told apart only by six hex digits.  In state/note, one line; in the
+/* A note of the owner's ("Kitchen, by the window"), shown under the visible name (issue #153), independently of
+ * the name override. In state/note, one line; in the
  * unsigned hello, as the name is, since the login page is where it helps most (which Echo's button to press): a
  * location, readable to anyone on the LAN who asks.  Not in exports: it is this Echo's, as the name.  Own lock: hello
  * runs on every connection thread without lk */
@@ -4011,6 +4011,15 @@ static void handle(int fd)
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         core_identify();
         respond_sjson(fd, &r, 200, "{\"identify\":true}");
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/name")) {         /* UTF-8 name; empty restores automatic */
+        char err[160], ej[320], o[360]; int e;
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        pthread_mutex_lock(&core_lock);
+        e = core_name_save(r.body ? r.body : "", r.body ? r.blen : 0, err, sizeof err);
+        pthread_mutex_unlock(&core_lock);
+        if (e) { jesc(ej, sizeof ej, err); snprintf(o, sizeof o, "{\"error\":\"%s\"}", ej); respond_sjson(fd, &r, 400, o); }
+        else respond_sjson(fd, &r, 200, "{\"restart\":true}");
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/note")) {         /* body: the note, empty clears it */
         char o[NOTE_MAX * 2 + 24], nt[NOTE_MAX * 2 + 8];
