@@ -2,6 +2,13 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — The wake word keeps working after many in a row
+
+- **The Echo no longer stops hearing its wake word after a burst of them.** Amazon's wake word engine restarts
+  itself after about a dozen wake words in a short time, as a guard against running away. hassmic did not start it
+  again, so the Echo stayed deaf to the wake word, while still connected, until it was restarted. Now it starts
+  again at once, as on a stock Echo, and the log says so.
+
 ## 2026-11-26 — Wi-Fi: moving to a stronger access point
 
 - **Echo Dots and the Echo 2 now move between the access points of a mesh** (issue #234). Before, an Echo stayed on
