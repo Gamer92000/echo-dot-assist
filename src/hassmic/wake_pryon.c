@@ -9,6 +9,7 @@
 #include <zlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include "pryon_api.h"
 
 /* slot 0 keeps the names of the one decoder there was before */
@@ -108,9 +109,38 @@ static int pryon_open(int slot, const char *manifest, wake_cb cb)
     return 0;
 }
 
+/* The decoder ends itself, and refuses every push after: "Defensively restarting Pryon decoder due to too many
+ * detection events in a short period of time.  Accept count: 12" (libpryon's own guard against a spotter firing on and
+ * on: "Unexpected situation encountered on keyword spotter. Will attempt restart."), then "Decoder thread hassmic-dec
+ * has terminated" on each push.  The restart is the caller's: stock's libWakeWordManager.so catches it and starts its
+ * engine again at once ("Restarting ape due to engine failure").  Without that the Echo stayed deaf to its wake word
+ * until hassmic restarted, connected all the while (a Dot 3, twelve "Alexa" in about a minute while testing the
+ * listening ring, 2026-11-26).  So the decoder anew on the model set it had, which stays loaded; at most once a
+ * second, should a new one fail too.  Its results count from where the stream is, as at open. */
+static long long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000; }
+
+static void restart_decoder(int slot)               /* capture thread */
+{
+    static long long next[WAKE_SLOTS];
+    PryonMultichannelAudioFormat fmt;
+    long long now = now_ms();
+    if (now < next[slot]) return;
+    next[slot] = now + 1000;
+    pthread_mutex_lock(&props_lock);                /* no hints to the decoder while it is gone (pryon_property) */
+    opened[slot] = 0;
+    atomic_store(&afe_known[slot], 0);
+    PryonDecoder_Delete(decoder[slot]);
+    PryonDecoder_NewPryonMultichannelAudioFormat_Default(&fmt);
+    int ok = !PryonDecoder_NewSpotterAudioDecoder(decoder[slot], model_set[slot], "pryon", fmt, "{}");
+    if (ok) { opened[slot] = 1; push_props(slot); }
+    pthread_mutex_unlock(&props_lock);
+    fprintf(stderr, "wake: the engine ended its decoder%s, %s\n", slot ? " (second wake word)" : "",
+            ok ? "started again" : "could not start it again: trying once a second");
+}
+
 static void pryon_feed(int slot, const int16_t *samples, size_t count)
 {
-    PryonDecoder_PushAudioEventSamples(decoder[slot], sample_index[slot], samples, count);
+    if (PryonDecoder_PushAudioEventSamples(decoder[slot], sample_index[slot], samples, count)) restart_decoder(slot);
     sample_index[slot] += count;
 }
 

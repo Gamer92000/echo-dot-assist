@@ -471,6 +471,15 @@ Run in this order. Each step says what it proves.
       2026-09-22 (`PryonDecoder_PushClientEvents`, reversed in `docs/re-pryon.md`; verified under qemu: ECHO threshold 0.751 → 0.452
       with `AlarmState`; `pryon_test -p name=value`). hassmic: alarm ringing, Sendspin stream, reply playing. Pushed 2026-09-22, user: works nicely
       The `pryon WARN ... Invalid bitmask frame indices` line in `boot.log` is one per wake word in every version since 0.0.2: harmless
+- [x] The decoder started again when the engine ends it (2026-11-26, Dot 3). After twelve accepts in about a minute
+      libpryon logs "Defensively restarting Pryon decoder due to too many detection events in a short period of time.
+      Accept count: 12" and ends the decoder; every push after fails ("Decoder thread hassmic-dec has terminated in
+      PryonDecoder_PushAudioEventSamples", 2729 of them in 1.5 minutes). The restart is the client's: stock's
+      libWakeWordManager.so "Restarting ape due to engine failure". hassmic ignored the push's status and stayed deaf
+      to its wake word until it was restarted, connected to Home Assistant all the while. Now `restart_decoder`
+      (wake_pryon.c): the decoder made again on the loaded model set, its client properties pushed again. Measured:
+      the guard at 13:52:30.773, "wake: the engine ended its decoder, started again" at .857, the next wake word heard
+      at 13:52:34.5, none refused after.
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
 - [x] Nothing lost between the wake word's end and the stream (2026-10-12). Pryon accepts 116-128 ms after the keyword's
       end (`endSampleIndex` against samples fed at the callback: 6 accepts 116-128 ms, 11 type-2 results 116-144 ms, from
