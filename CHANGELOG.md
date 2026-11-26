@@ -2,6 +2,15 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — Timer progress on the light ring
+
+- **Timer ring progress** (Lights, off by default) lights the ring when a Home Assistant Assist timer starts, then
+  extinguishes LEDs in order as its remaining fraction decreases. The active timer ending first wins; if all are
+  paused, the one with least time remaining pulses slowly without counting down. Added or removed time adjusts
+  the fraction. Choose a colour and brightness on the web page; preferences survive restarts.
+- Voice, volume, mute and ringing alerts retain priority. Works independently of **Light ring live**, on devices
+  with direct LED-frame support; requires ESPHome timer events. No new timer support is added to Wyoming.
+
 ## 2026-11-26 — Wi-Fi: moving to a stronger access point
 
 - **Echo Dots and the Echo 2 now move between the access points of a mesh** (issue #234). Before, an Echo stayed on
