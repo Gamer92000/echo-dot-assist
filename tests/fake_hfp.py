@@ -6,6 +6,7 @@ based flow control, modem status), the audio gateway's side of the AT exchange a
 eSCO link with its audio as SCO data over HCI (the PC's backend, HASSMIC_SCO=hci: 8 kHz s16, CVSD the controller's).
 Home Assistant over the keyed link: the "Phone call", "Phone caller" and "Phone" sensors, answering, ending, a call
 dialled from an action, a call taken on the handset and brought here, do not disturb leaving the ring to the phone,
+"<wake word>, abnehmen" answering (no setting: Home Assistant answers a phone's call anyway),
 no audio link taken without a call (it would carry the microphone).
 The call's audio both ways: the phone's 1 kHz on the Echo's Voip stream (HASSMIC_VOIP), the Echo's call microphone
 (HASSMIC_CALL_CAP, 700 Hz) in the SCO data the Echo sends.  Remote volume (+VGS both ways, none taken outside a call),
@@ -17,7 +18,7 @@ import asyncio, base64, math, os, queue, shutil, signal, struct, subprocess, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
-from aioesphomeapi import APIClient
+from aioesphomeapi import APIClient, VoiceAssistantEventType as Ev
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT, WEB, ARB = 17090, 17091, 17092
@@ -559,6 +560,25 @@ async def main():
         check("ATA" not in ph.at_seen, "do not disturb: the action button answers nothing")
         ph.at_send("+CIEV: 2,0"); cli.switch_command(dnd.key, False)
         check(await until(lambda: st.get("phone_call") == "idle"), "the caller gave up: idle")
+
+        # "<wake word>, abnehmen" while the phone rings (issue #240): Home Assistant answers a phone's call anyway
+        # ("Answer phone call"), so answer_by_voice (off here) is not asked, nor what began the run
+        starts = []
+        async def h_start(conv, flags, settings, phrase): starts.append(time.monotonic()); return 0
+        async def h_stop(abort): pass
+        async def h_audio(data, *_): pass
+        unsub = cli.subscribe_voice_assistant(handle_start=h_start, handle_stop=h_stop, handle_audio=h_audio)
+        await asyncio.sleep(0.5)
+        ph.at_seen.clear(); ph.at_send("+CIEV: 2,1", "RING")
+        check(await until(lambda: st.get("phone_call") == "ringing"), "ringing")
+        l0 = len(open(log).read()); proc.send_signal(signal.SIGUSR1)
+        check(await until(lambda: starts, 3), "the wake word while the phone rings: a request")
+        for e, d in ((Ev.VOICE_ASSISTANT_RUN_START, None), (Ev.VOICE_ASSISTANT_STT_START, None), (Ev.VOICE_ASSISTANT_STT_END, {"text": "Abnehmen."})):
+            cli.send_voice_assistant_event(e, d)
+        check(ph.at_expect("ATA") is not None and "said answer: the call answered" in open(log).read()[l0:], "\"<wake word>, abnehmen\": ATA")
+        ph.at_send("OK", "+CIEV: 1,1", "+CIEV: 2,0"); await asyncio.sleep(0.3); ph.at_send("+CIEV: 1,0")
+        check(await until(lambda: st.get("phone_call") == "idle"), "ended on the handset: idle")
+        unsub(); await asyncio.sleep(0.3)
 
         # the phone again, now with codec negotiation: mSBC
         ph.rf(2, 1, 0x53)                                                        # DISC of the hands-free DLC

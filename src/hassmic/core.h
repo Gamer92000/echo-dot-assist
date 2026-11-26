@@ -125,6 +125,8 @@ int  core_sound_on(int s, int set);              /* sounds.h's sound has its swi
 int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
 int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
+int  core_answer_by_voice(int set);              /* "<wake word>, answer" also answers a Drop In or a plugin's call (main.c
+                                                    core_transcript; a phone's always), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */
 int  core_dnd(int set);                          /* same: do not disturb, announcements are dropped (the protocol checks) */
@@ -318,7 +320,8 @@ void   core_bt_pairing(int on);                             /* the Bluetooth spe
  * core_dropin_result: what came of a Drop In call this Echo made (DROPIN_R_*; here: refused before it started, nothing
  * else told).  core_call_refusal: why a call cannot run right now (muted; incoming: do not disturb too), NULL if it can.
  * What a person here does to the call that runs, whoever carries it: core_call_button (the action button: answers a
- * ringing one, ends any other; 1 if there was one), core_call_answer (the screen's Answer: a ringing one only),
+ * ringing one, ends any other; 1 if there was one), core_call_answer (the screen's Answer: a ringing one only; a
+ * spoken "answer" is core_transcript's),
  * core_call_hangup (a "stop", "hang up", the screen; 1 if there was one).  core_call_status: the state shown, PEER */
 void   core_call(int who, int state, const char *peer, int outgoing);
 void   core_dropin_result(int result, const char *peer, int here);

@@ -2810,6 +2810,21 @@ Run in this order. Each step says what it proves.
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked
       about, not built.
+- [x] A ringing call answered by voice (issue #240, 2026-11-26): "<wake word>, answer" (and "pick up", "accept",
+      "abnehmen", "décroche", "contesta", "rispondi", "opnemen", "răspunde", ...: main.c `core_transcript`'s
+      `answers[]`, whole transcripts only, beside `hangups[]`) while `call_was` is ringing.  A phone's call (HFP)
+      always: Home Assistant answers those anyway.  A Drop In ("ask") and a plugin's call only with setting
+      `answer_by_voice` (Voice, page only, exported, off) and only in a run this Echo's own engine began (`run_source`
+      PLUGIN_REQ_WAKE_WORD and `core_local_wake`, from idle or cutting a reply: barge_src): a follow-up
+      (continue_conversation), start_conversation and -w remote's wake word are runs Home Assistant opens itself; the
+      transcript is Home Assistant's in every run, and the engine also hears what Home Assistant plays on the Echo
+      (docs/SECURITY.md: residual, the owner's choice).  A phone's in any run, a question back included.  Not
+      answered: the words go on to Home Assistant, the log says why (also when the call stopped ringing meanwhile).  Tests: fake_plugins_call
+      5b (off, a follow-up refused, answered), fake_ha_dropin (off, "Réponds !" on), fake_hfp ("Abnehmen." without the
+      setting).  Not done (the issue's second half, declined: docs/plugins.md 1, "a plugin in Home Assistant's place"):
+      spoken commands declared by plugins; Home Assistant's sentence triggers on a plugin's `ha.actions` do that.
+      Open: arbitration does not favour the ringing Echo, so "<wake word>, answer" said where another Echo wins the
+      round answers nothing; Wyoming never asks `core_transcript` (neither "hang up" nor "answer" there).
 - [~] Phone calls over Bluetooth, the Echo as hands-free unit (HFP 1.7 HF, CVSD; issue #233, 2026-11-25): hfp.c,
       scoaudio.c, cvsd.c, setting `bluetooth_calls` (off).  docs/re-hfp.md has where each chip puts the audio and every
       measurement.  No chip moves SCO data over HCI; the audio goes as stock's HAL has it: cannoli DL6/UL5 through

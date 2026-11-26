@@ -114,7 +114,7 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, ANSWER_VOICE, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
           WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, CALL_MIC, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
@@ -157,6 +157,10 @@ static const struct setting table[NSET] = {
     /* buttons.c keeps it: double press of the action button = next, triple = previous; a single press waits 450 ms */
     [MULTI_PRESS] = { "multi_press", "Double and triple press of the action button", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* main.c core_transcript (issue #240): "<wake word>, answer" answers a ringing Drop In or plugin's call too, in a run
+     * this Echo's own wake word began.  No entity in Home Assistant (the page, an import, a preset set it): Home
+     * Assistant may not grant itself what it lets it do (SECURITY.md) */
+    [ANSWER_VOICE] = { "answer_by_voice", "Answer calls by voice", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* main.c: the request's audio from the wake word on (replay_whole); not with Home Assistant's wake word */
     [WAKE_IN_REQ] = { "wake_word_in_request", "Wake word in the request", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* micend.c, issue #66: ESPHome only (Wyoming has no end of audio here) */
@@ -411,6 +415,7 @@ int settings_get(const struct setting *s)
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
     case TIMER_STOP_OTHERS: return ringstop_from_others(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
+    case ANSWER_VOICE: return core_answer_by_voice(-1);
     case MULTI_PRESS: return buttons_multi_press(-1);
     case WAKE_IN_REQ: return core_wake_in_request(-1);
     case END_REQ: return core_end_of_request(-1);
@@ -499,6 +504,7 @@ static void put(enum id i, int v)
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
     case TIMER_STOP_OTHERS: ringstop_from_others(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
+    case ANSWER_VOICE: core_answer_by_voice(v); break;
     case MULTI_PRESS: buttons_multi_press(v); break;
     case WAKE_IN_REQ: core_wake_in_request(v); break;
     case END_REQ: core_end_of_request(v); break;

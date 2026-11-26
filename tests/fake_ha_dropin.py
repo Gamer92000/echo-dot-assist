@@ -2,7 +2,8 @@
 """Drop In between two Echos (build/hassmic-host x2) of one arbitration network, under a fake Home Assistant, plus a third
 Echo outside the network.  The two start with the same network key in state/arbitration, as after a join.
 The kitchen Echo's microphone is speech (testdata), the hall's is silence: the call carries the kitchen's voice to the
-hall's Voip stream (HASSMIC_VOIP) and nothing back.  Then: answer by button (drop_in_answer=ask), hang up by button,
+hall's Voip stream (HASSMIC_VOIP) and nothing back.  Then: answer by button (drop_in_answer=ask), by "<wake word>,
+answer" (only with answer_by_voice: off, the words go on to Home Assistant), hang up by button,
 by "<wake word>, stop", by "auflegen", from Home Assistant, from the settings page; refusals (do not disturb, Drop In
 off, an Echo outside the network, a name nobody has); an Echo in an empty room, whose noise must stay there; and an
 Echo that vanishes mid-call.  For each call the kitchen
@@ -236,7 +237,35 @@ async def main():
         check(await until(lambda: b.dropin()[0] == "ringing", 2), "ringing again")
         a.press("end_drop_in")
         check(await until(lambda: a.results()[-1:] == ["cancelled"] and b.dropin()[0] == "idle", 2), f"cancelled on the kitchen: result {a.results()[-1:]}, hall {b.dropin()}")
+        # "<wake word>, answer" on the hall while it rings (issue #240): answer_by_voice off, it rings on and Home Assistant
+        # gets the words; on, "Réponds !" in a run its own wake word began connects (the follow-up's refusal is
+        # fake_plugins_call.py's: the same rule for both)
+        def heard(e, t):
+            for ev, d in ((Ev.VOICE_ASSISTANT_RUN_START, None), (Ev.VOICE_ASSISTANT_STT_START, None), (Ev.VOICE_ASSISTANT_STT_END, {"text": t})):
+                e.cli.send_voice_assistant_event(ev, d)
+        await asyncio.sleep(0.3); await a.call(b.node)
+        check(await until(lambda: b.dropin()[0] == "ringing", 2), "ringing again")
+        l0 = len(b.text()); n0 = len(b.starts); b.proc.send_signal(signal.SIGUSR1)
+        check(await until(lambda: len(b.starts) > n0, 2), "the wake word on the hall while it rings: a pipeline starts")
+        heard(b, "Answer.")
+        check(await until(lambda: "said answer: the call not answered: answering by voice is off" in b.text()[l0:], 2) and b.dropin()[0] == "ringing",
+              "answer_by_voice off: \"answer\" answers nothing, it rings on")
+        b.cli.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+        a.press("end_drop_in")
+        check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle", 2), "(the kitchen gives up)")
+        b.page.set(answer_by_voice="on")
+        await asyncio.sleep(0.3); await a.call(b.node)
+        check(await until(lambda: b.dropin()[0] == "ringing", 2), "ringing again")
+        l0 = len(b.text()); n0 = len(b.starts); b.proc.send_signal(signal.SIGUSR1)
+        check(await until(lambda: len(b.starts) > n0, 2), "(the wake word on the hall)")
+        heard(b, "Réponds !")
+        check(await until(lambda: a.dropin()[0] == "connected" and b.dropin()[0] == "connected", 2) and "said answer: the call answered" in b.text()[l0:],
+              "answer_by_voice on: \"<wake word>, réponds\" connects")
+        b.proc.send_signal(signal.SIGUSR2)
+        check(await until(lambda: a.dropin()[0] == "idle" and b.dropin()[0] == "idle", 3), "hung up by button")
+        b.page.set(answer_by_voice="off")
         b.page.set(drop_in_answer="auto")
+        await asyncio.sleep(2)      # (the hall's wake word claimed a round: a wake word on the kitchen within it is the same word)
 
         # 4. "auflegen" in a request during the call ends it, and Home Assistant never gets the run
         await a.call(b.node)

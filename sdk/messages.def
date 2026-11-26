@@ -313,7 +313,7 @@ msg ACTION 93 < ha.actions "One of the plugin's actions, called by Home Assistan
 # ---------------------------------------------------------------- calls (call)
 msg CALL_INCOMING 100 > call "A call comes in: the Echo rings (its ringtone, its light, on a Show the plugin's name beside WHO) until a person answers here (CALL_ANSWER) or it ends.  OK: it rings; ERR BUSY: another call is on (a Drop In, another plugin's, this one's), or a ring asked faster than its looks at the line allow: each ring refused busy costs one, one a second come back and two at most kept, and with none left it is refused busy without a look; DENIED: do not disturb, or the microphones are off; LIMIT: three rings of this plugin unanswered in the last ten minutes; BAD: before READY."
     str who 64 "the caller as the plugin names it (a number, a name): shown, never interpreted"
-msg CALL_ANSWER 101 < call "A person here answered the ringing call (the action button, the Show's screen): answer it on the far side, then CALL_LIVE."
+msg CALL_ANSWER 101 < call "A person here answered the ringing call (the action button, the Show's screen, or \"<wake word>, answer\" where the owner turned on answer_by_voice): answer it on the far side, then CALL_LIVE."
 msg CALL_HANGUP 102 < call "hassmic ended the call (any state): end it on the far side.  No CALL_END is needed after it."
     u8 why enum:HANGUP "HANGUP_*"
 msg CALL_OUT 103 > call "Place a call: only with a token an ACTION marked calls just brought (a person asked for it).  The Echo shows the call going out.  OK; ERR DENIED: no such token, used, older than 10 s, or the microphones are off; BUSY: another call is on; BAD."

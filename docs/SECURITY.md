@@ -382,6 +382,16 @@ someone else's native code on the Echo, so what holds it matters:
     link or from an approved browser, so the owner's Home Assistant can have the plugin call out: an automation there
     on such an action opens the room's microphone to the far side as a person's press would, and the call shows on
     the ring and the screen from its first moment to its end. The install says which actions can.
+  - "Answer calls by voice" (Voice, off by default, issue #240) lets "<wake word>, answer" answer a ringing plugin's
+    call or Drop In too. The words are Home Assistant's: its speech to text turns the request into them. So the
+    Echo takes them only in a request its own wake word engine began, from idle or cutting a reply (never one Home
+    Assistant opened: a question back, an announcement that listens, Home Assistant's wake word). With the setting
+    on, a Home Assistant that put "answer" into such a request's transcript answers the call; and the engine hears
+    the wake word from any sound, a TV's, or a reply or media Home Assistant plays on the Echo itself (its echo
+    canceller takes most of its own sound out, not all), so a Home Assistant set on it could also start that request.
+    That is the owner's choice to make: the settings page (an approved browser), an import or a preset switch it,
+    Home Assistant has no entity for it. A phone's call over Bluetooth answers by voice without it, in any request:
+    Home Assistant answers those anyway ("Answer phone call").
   - "Answered only at the Echo" holds in hassmic's terms: the Echo's own ring is answered only by a person here. What
     a call going out is on the far side is the plugin's to decide: a SIP plugin can take an action marked `"calls"`
     as "end my ring here, then `CALL_OUT` with the token" and have its server treat that as its accept of a call
@@ -878,7 +888,8 @@ calls travel signed with the network's key), Home Assistant only over its encryp
 an approved browser. Each call gets its own key from a fresh key exchange between the two Echos, so a recording stays
 closed even to someone who gets the network key later. The audio goes straight between the two Echos and nowhere else.
 Do not disturb and the microphone switches refuse calls; "Drop In answers: after the action button" makes every call
-wait for a press on the Echo called; "Drop In" off stops calls both ways.
+wait for a press on the Echo called (or, where "Answer calls by voice" is on, "<wake word>, answer" in a request
+that Echo's own wake word began: the words are Home Assistant's, see Plugins, calls); "Drop In" off stops calls both ways.
 A packet of a call sent again by someone else on the network decrypts as it did the first time, so each frame is
 taken once, and only a frame newer than all before it can move where the Echo sends its microphone or keep the call
 open (until 2026-11-22 a replayed packet could cut short bits of the other side's voice, have the Echo send its own

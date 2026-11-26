@@ -162,8 +162,8 @@ struct hm_callbacks {
     /* ha.actions: one of its actions, from Home Assistant or its card's button (HM_FROM_*), with its arguments.  An
      * action the manifest marks "calls" brings a call token: hm_action_token() in here */
     void (*action)(void *ctx, const char *name, int from, const struct hm_arg *args, int n);
-    /* ---- call: a person here answered the call that rings (the action button, the Show's screen): answer
-     * it on the far side, then hm_call_live */
+    /* ---- call: a person here answered the call that rings (the action button, the Show's screen, or "<wake
+     * word>, answer" where the owner turned on answer_by_voice): answer it on the far side, then hm_call_live */
     void (*call_answer)(void *ctx);
     /* call: hassmic ended the call, in whatever state (HM_HANGUP_*: the button, "stop" or "hang up", the screen, a
      * ring nobody answered, no hm_call_live in time after an answer, the plugin stopped): end it on the far side.  The

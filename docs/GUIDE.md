@@ -377,11 +377,25 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
 - **From the settings page**: the Drop In button on another Echo's card under Echos.
 
 The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it
-rings for 30 s instead and only its action button connects. The ring shows Alexa's call animations meanwhile. To end a
+rings for 30 s instead and only its action button connects (on a Show also its screen; with "Answer calls by voice"
+on, below, also "<wake word>, answer"). The ring shows Alexa's call animations meanwhile. To end a
 call: the action button, "<wake word>, stop", "<wake word>, hang up" (or "auflegen", "raccroche", "cuelga",
 "riattacca", "ophangen", "închide") on either Echo, or "End Drop In".
 Music on the Echo pauses when a call connects (it does not resume by itself). The volume buttons work during a call; the wake word too, but not while the other side talks (its "Alexa" for its own
 Echo would wake this one).
+
+**Answering by voice.** "Answer calls by voice" (Voice page, Calls; off by default) lets "<wake word>, answer" pick
+up a call that rings on this Echo: a Drop In and a plugin's call (a phone's call over Bluetooth answers by voice
+anyway). The words, each alone after the wake word: "answer", "answer the call", "pick up", "accept"; "abnehmen",
+"annehmen", "rangehen"; "décroche", "réponds"; "contesta", "responde", "atiende"; "rispondi"; "opnemen", "neem op";
+"răspunde". Only a request this Echo's own wake word began counts (also one where it cut a reply), not a question
+Home Assistant asks back, an announcement that listens or Home Assistant's own wake word: those Home Assistant opens
+itself, and a call that only a person at the Echo may answer must not be answered by Home Assistant. Home Assistant
+still turns your words into text, so with the setting on it could answer such a call by putting "answer" into one of
+your requests, and so could a TV (or a sound Home Assistant plays on the Echo) that says the wake word and "answer"
+while it rings ([SECURITY.md](SECURITY.md#drop-in)). Say it to the Echo that
+rings: when another Echo answers the wake word, nothing is answered. Off, "answer" goes to Home Assistant as any
+request does, and the log says why the call was not answered.
 
 Calls are refused with do not disturb on, with the microphones off, or with another call running; the caller's log and
 Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
@@ -411,9 +425,11 @@ Bluetooth speaker) as read from their firmware, not tried on them yet ([docs/re-
   Assistant's "Bluetooth pairing" switch, as for music. A phone paired before the switch was on must be paired again:
   a phone looks at what the Echo offers only when it pairs. While it is on, every phone paired with the Echo sends its
   calls here whenever it is connected.
-- **A call comes in**: the Echo rings with its call animation (the phone rings too). The action button answers, and
+- **A call comes in**: the Echo rings with its call animation (the phone rings too). The action button or
+  "<wake word>, answer" (Drop In's words, "Answering by voice"; no setting needed here) answers, and
   the call talks through the Echo's speaker and its call microphone, with Amazon's echo cancelling for calls ("Call
-  microphone" under Drop In). The action button, "<wake word>, stop" or "hang up" end it.
+  microphone" under Drop In). Those words answer in any request while it rings, a question Home Assistant asks back
+  too: an "accept" meant for it answers the phone instead. The action button, "<wake word>, stop" or "hang up" end it.
 - **Where a call talks is the phone's choice**, as with a car kit: a call answered on the phone talks on the Echo when
   the phone sends its audio over Bluetooth (most do for a connected hands-free device), and the phone's audio picker
   moves it back to the handset. A paired phone can so turn on the Echo's microphone for its call ([SECURITY.md](SECURITY.md#bluetooth)).

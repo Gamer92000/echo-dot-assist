@@ -2,6 +2,16 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — Answering a call by voice
+
+- **"<wake word>, answer" picks up a call that rings** (issue #240), as "hang up" ends one: also "pick up", "accept",
+  and in German, French, Spanish, Italian, Dutch and Romanian ("abnehmen", "décroche", "contesta", "rispondi",
+  "opnemen", "răspunde"). A phone's call over Bluetooth answers this way at once. A Drop In ("Drop In answers: after
+  the action button") and a plugin's call promise that only someone at the Echo connects them, so for those turn on
+  **Answer calls by voice** (Voice page, off by default): it counts only in a request the Echo's own wake word began,
+  never in one Home Assistant opened. Home Assistant still turns your words into text, so with it on Home Assistant
+  could answer such a call; the guide says what that means.
+
 ## 2026-11-26 — Wi-Fi: moving to a stronger access point
 
 - **Echo Dots and the Echo 2 now move between the access points of a mesh** (issue #234). Before, an Echo stayed on

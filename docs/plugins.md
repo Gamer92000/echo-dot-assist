@@ -1215,7 +1215,12 @@ capability of its own that the owner accepted in its own words: all the time, to
 - A call's audio goes to a `call` plugin only while the call is live. An incoming call is live only after a person
   answered it **at the Echo**: the action button, the Show's screen. Nothing else answers one: not Home Assistant,
   not the settings page, no token, and there is no automatic answer for plugins (Drop In's `drop_in_answer` does not
-  apply).
+  apply).  The owner can add "<wake word>, answer" (setting `answer_by_voice`, page only, off; issue #240): main.c
+  `core_transcript` takes it only while the call rings and only in a run this Echo's own engine began, from idle
+  or cutting a reply (`run_source` `PLUGIN_REQ_WAKE_WORD` with `core_local_wake`: no follow-up, `start_conversation`
+  or `-w remote` wake word, which Home Assistant opens itself); the words are still Home Assistant's transcript, and
+  the engine hears sound Home Assistant plays too, which docs/SECURITY.md says.  The
+  plugin hears `CALL_ANSWER` as from the button.
   *As built:* the button and the screen send `CALL_ANSWER`; the core is told the call was answered
   (`CALL_ANSWERING`: the ringtone stops at the press, the light and the screen show it connected while the far side
   comes in), and the plugin says `CALL_LIVE` once it has the far side.  `CALL_LIVE` for a call that still rings is

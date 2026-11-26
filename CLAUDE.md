@@ -574,7 +574,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   estimate peak-held against the far end's level held after it stops), listening mode only while this side talks
   (`core_call_listen`); the far end talks when it plays over -55 dBFS and 25 dB over its own floor (`far_voice`). Core side in `main.c` (`core_call`, Drop In one of its
   callers: call LED animations, comms sounds, ringtones via
-  `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; wake word ignored while the far end
+  `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; "<wake word>, answer" answers (`core_transcript`
+  `answers[]`: a phone's always, a Drop In's or a plugin's only with `answer_by_voice` and in a run this Echo's own
+  wake word began, `run_source`; issue #240); wake word ignored while the far end
   talks; `proto->dropin_changed` for Drop In's calls only).  One call on the Echo at a time: call.c's claim
   (`call_claim`/`call_release`/`call_claimed`, an atomic, taken from calling or ringing on, let go by whoever tells
   the core only after its "idle" went through `core_call`, which shows only the claim's `who`); Drop In refuses "busy"
