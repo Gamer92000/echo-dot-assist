@@ -19,7 +19,7 @@ struct http {
     int lan;                            /* 1: a plain socket(), which the egress lock keeps on the local network; 0:
                                            net_socket (any address) */
     int verify;                         /* 1: the certificate checked (tls.c) */
-    /* times (s; 0: none): CONNECT_S for each address's connection and TLS handshake, TOTAL_S for all of it from the
+    /* times (s; 0: none, but CONNECT_S 0 is 30 s): CONNECT_S for each address's connection and TLS handshake, TOTAL_S for all of it from the
      * name lookup on, and the transfer fails when fewer than LOW_BYTES came in any LOW_S (libcurl's low speed limit:
      * LOW_BYTES 1 = nothing in LOW_S; a moving window, LOW_S at most 64) */
     int connect_s, total_s, low_s; long low_bytes;

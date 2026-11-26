@@ -42,7 +42,9 @@ static ssize_t w_read_full(int fd, struct tls *t, int ms, void *buf, size_t n)
 static int w_write_all(int fd, struct tls *t, const void *buf, size_t n)
 {
     if (!t) return write_all(fd, buf, n);
-    return tls_write(t, buf, n, 30000) == (ssize_t)n ? 0 : -1;   /* a server that takes nothing for 30 s is gone */
+    /* 5 s, as the plain socket's SO_SNDTIMEO (net_connect): every send runs under mass.c's wslk, which mass_set and
+     * mass_stop wait for */
+    return tls_write(t, buf, n, 5000) == (ssize_t)n ? 0 : -1;
 }
 
 static int read_headers(int fd, struct tls *t, char *buf, size_t cap)      /* up to and including the blank line */

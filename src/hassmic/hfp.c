@@ -69,7 +69,7 @@ static struct { int state, second; char caller[64], phone[80], other[64]; } show
 static char dial_number[40];
 
 static struct ag {
-    int on, link; uint64_t addr;
+    int on, link; uint64_t addr; unsigned cod;                 /* cod: its class of device, 0 unknown */
     int mux, dlci, dlc, cfc, tx_cred, rx_cred, n1;
     char rx[512]; size_t rxn;
     char q[8][64]; int qh, qn, waiting; long long sent_at; char sent[64];
@@ -119,8 +119,8 @@ static unsigned crc8(const unsigned char *p, size_t n) { unsigned f = 0xff; whil
 
 enum { SABM = 0x2f, UA = 0x63, DM = 0x0f, DISC = 0x43, UIH = 0xef, PF = 0x10 };
 
-/* a frame on DLCI: CR the address's C/R bit, credits >= 0 rides along (UIH with P/F) */
-static void rf_send(int dlci, int cr, unsigned ctrl, const void *info, size_t n, int credits)
+/* a frame on DLCI of LINK: CR the address's C/R bit, credits >= 0 rides along (UIH with P/F) */
+static void rf_send_on(int link, int dlci, int cr, unsigned ctrl, const void *info, size_t n, int credits)
 {
     unsigned char f[8 + N1]; size_t h;
     if (n > N1) n = N1;
@@ -130,8 +130,9 @@ static void rf_send(int dlci, int cr, unsigned ctrl, const void *info, size_t n,
     if (credits >= 0) f[h++] = credits;
     if (n) memcpy(f + h, info, n);
     f[h + n] = 0xff - crc8(f, (ctrl & ~PF) == UIH ? 2 : fh);
-    a2dp_rfcomm_send(ag.link, f, h + n + 1);
+    a2dp_rfcomm_send(link, f, h + n + 1);
 }
+static void rf_send(int dlci, int cr, unsigned ctrl, const void *info, size_t n, int credits) { rf_send_on(ag.link, dlci, cr, ctrl, info, n, credits); }
 
 static void mcc_send(unsigned type, int command, const unsigned char *v, size_t n)    /* a multiplexer command on DLCI 0 */
 {
@@ -418,9 +419,45 @@ static void mcc_rx(const unsigned char *p, size_t n)
     }
 }
 
+/* The major device class "Phone" (Bluetooth Assigned Numbers, class of device bits 8-12) */
+static int is_phone(unsigned cod) { return (cod >> 8 & 0x1f) == 0x02; }
+
+/* gateways refused while another had the place, their RFCOMM channel still open: the first phone among them (else the
+ * first) gets the place when it is free again, so its next SABM is answered */
+static struct { int on, link, sabm; long long sabm_at; uint64_t addr; unsigned cod; } waitq[4];   /* sabm: its SABM on DLCI 0
+                                                                                                     unanswered, since sabm_at */
+#define SABM_T1_MS 60000                /* an unanswered SABM is the sender's for this long: T1 is 20 s in Fluoride, longer
+                                           in BlueZ; a UA after the sender gave up is ignored, so the longest is kept */
+static int wait_sabm(int i) { return waitq[i].sabm && ms() - waitq[i].sabm_at < SABM_T1_MS; }
+/* one that may take the place: its SABM still answerable, or none sent yet (it will come).  One whose SABM ran out of
+ * time gave up on this channel: dropped, it would hold the place with no session */
+static int wait_live(int i)
+{
+    if (!waitq[i].on) return 0;
+    if (waitq[i].sabm && !wait_sabm(i)) { waitq[i].on = 0; return 0; }
+    return 1;
+}
+static void wait_drop(int link) { for (int i = 0; i < 4; i++) if (waitq[i].on && waitq[i].link == link) waitq[i].on = 0; }
+static void wait_add(int link, uint64_t addr, unsigned cod)        /* a phone or of no known class (no other waits) */
+{
+    wait_drop(link);
+    int at = -1;
+    for (int i = 0; i < 4 && at < 0; i++) if (!waitq[i].on) at = i;
+    for (int i = 0; i < 4 && at < 0; i++) if (is_phone(cod) && !is_phone(waitq[i].cod)) at = i;  /* full: a phone first */
+    if (at < 0) { fprintf(stderr, "phone: %012llx not kept waiting: four wait already\n", (unsigned long long)addr); return; }
+    if (waitq[at].on) {                         /* told at once: its SABM is not to wait for a UA (sent only once) */
+        fprintf(stderr, "phone: %012llx no longer waits: a phone does\n", (unsigned long long)waitq[at].addr);
+        if (waitq[at].sabm) rf_send_on(waitq[at].link, 0, 1, DM | PF, NULL, 0, -1);
+    }
+    waitq[at].on = 1; waitq[at].link = link; waitq[at].addr = addr; waitq[at].cod = cod; waitq[at].sabm = 0;
+}
+
+
 void hfp_rfcomm_rx(int link, const unsigned char *p, size_t n)
 {
-    if (!ag.on || link != ag.link || n < 4) return;
+    if (n < 4 || !ag.on) return;
+    int other = link != ag.link;                        /* another gateway's frame: only its SABM and DISC count */
+    if (other && (p[1] & ~PF) != SABM && (p[1] & ~PF) != DISC) return;     /* (its UIH: credits of its own, not ours) */
     unsigned dlci = p[0] >> 2, ctrl = p[1] & ~PF, pf = p[1] & PF; size_t len, h;
     if (p[2] & 1) { len = p[2] >> 1; h = 3; } else { if (n < 5) return; len = p[2] >> 1 | p[3] << 7; h = 4; }
     int credits = ctrl == UIH && pf && ag.cfc && dlci ? p[h] : -1;
@@ -430,6 +467,23 @@ void hfp_rfcomm_rx(int link, const unsigned char *p, size_t n)
         size_t c = ctrl == UIH ? 2 : h; unsigned char t[5];
         memcpy(t, p, c); t[c] = p[at + len];
         if (crc8(t, c + 1) != 0xcf) { fprintf(stderr, "phone: RFCOMM frame with a bad FCS\n"); return; }
+    }
+    if (other) {
+        /* a waiter's SABM on DLCI 0 kept (answered UA when it gets the place, within T1), its DISC forgets it; one that
+         * is no phone (a TV box refused, or the one a phone took the place from) is answered DM, so it stops asking
+         * rather than waiting out its timers (TS 07.10: DM, a disconnected mode) */
+        unsigned lc = a2dp_link_cod(link);
+        for (int i = 0; i < 4; i++) if (waitq[i].on && waitq[i].link == link && !dlci) {
+            if (ctrl == SABM) { waitq[i].sabm = 1; waitq[i].sabm_at = ms(); }
+            if (ctrl == DISC) waitq[i].on = 0;     /* it gave up on the mux: no longer waits */
+        }
+        /* TS 07.10: a DISC in disconnected mode is answered DM (a waiter's mux was never opened: its SABM was held) */
+        if (ctrl == DISC) { rf_send_on(link, dlci, 1, DM | PF, NULL, 0, -1); return; }
+        int waits = 0;
+        for (int i = 0; i < 4; i++) waits |= waitq[i].on && waitq[i].link == link;
+        /* no phone, or one not kept waiting (evicted by a phone, or four wait already): DM, it is not to wait for UA */
+        if (ctrl == SABM && ((lc && !is_phone(lc)) || !waits)) rf_send_on(link, dlci, 1, DM | PF, NULL, 0, -1);
+        return;
     }
     const unsigned char *info = p + at;
     switch (ctrl) {
@@ -465,13 +519,45 @@ void hfp_rfcomm_rx(int link, const unsigned char *p, size_t n)
     at_pump();
 }
 
-void hfp_rfcomm_up(int link, uint64_t addr)
+static void ag_gone(void);
+static int call_on(void);
+
+
+/* One audio gateway at a time, and a phone before anything else that is one.  An Android TV box (a Mi Box, Android 14)
+ * paired as a music source connects for calls too, at once and with no way to turn that off in its settings, and held
+ * the place: the phone that connected after it got music only (issue #233).  So a phone (its class of device says so)
+ * takes the place from a device that is no phone and has no call; another phone (or one of no known class) waits for
+ * the place to be free (waitq), and one known to be no phone is turned away (DM) until it connects again.
+ * An unknown class (a phone whose Connection Request a2dp.c did not pair with its link) takes it from a holder known to
+ * be no phone, as a phone does, and loses it to nobody */
+void hfp_rfcomm_up(int link, uint64_t addr, unsigned cod)
 {
     if (!atomic_load(&enabled)) return;
-    if (ag.on && ag.link != link) { fprintf(stderr, "phone: a second phone's RFCOMM: only one at a time\n"); return; }
+    if (ag.on && ag.link != link) {
+        /* (an unknown class: a phone whose request a2dp.c did not pair with its link; against a holder known to be no
+         * phone it counts as one) */
+        /* a phone (or one of no known class) takes it only from a holder known to be no phone: a holder of no known
+         * class may be a phone with its service level connection up (a link whose request a2dp.c did not keep), and
+         * is never put out for another; never with a call, its audio link or the claim */
+        int takes = (is_phone(cod) || !cod) && ag.cod && !is_phone(ag.cod);
+        if (!takes || call_on() || ag.sco || ag.claimed) {
+            fprintf(stderr, "phone: %012llx (class 0x%06x) opened RFCOMM, but %012llx (class 0x%06x) has the place: one at a time\n",
+                    (unsigned long long)addr, cod, (unsigned long long)ag.addr, ag.cod);
+            if (!cod || is_phone(cod)) wait_add(link, addr, cod);     /* (one that is no phone is answered DM) */
+            return;
+        }
+        fprintf(stderr, "phone: %012llx is a phone or of no known class (0x%06x): it takes the place of %012llx (class 0x%06x, no phone, no call)\n",
+                (unsigned long long)addr, cod, (unsigned long long)ag.addr, ag.cod);
+        /* the other's DLC and multiplexer closed (DISC: a command, ours C/R 0); its frames after this are on a link
+         * that is not ag.link and go unread, its SABMs answered DM (no phone).  Not put in waitq: such a device
+         * connects for calls again by itself (the Mi Box at every connection), and the phone is what was wanted */
+        if (ag.dlc) rf_send(ag.dlci, 0, DISC | PF, NULL, 0, -1);
+        if (ag.mux) rf_send(0, 0, DISC | PF, NULL, 0, -1);
+        ag_gone();
+    }
     if (!crc_t[1]) crc_init();
-    if (!ag.on) { memset(&ag, 0, sizeof ag); ag.on = 1; ag.link = link; ag.addr = addr; ag.n1 = N1; ag.codec = SCO_CVSD; ag.vgs = -1; }
-    fprintf(stderr, "phone: %012llx opened RFCOMM\n", (unsigned long long)addr);
+    if (!ag.on) { memset(&ag, 0, sizeof ag); ag.on = 1; ag.link = link; ag.addr = addr; ag.cod = cod; ag.n1 = N1; ag.codec = SCO_CVSD; ag.vgs = -1; }
+    fprintf(stderr, "phone: %012llx opened RFCOMM (class 0x%06x)\n", (unsigned long long)addr, cod);
 }
 
 static void ag_gone(void)
@@ -483,8 +569,24 @@ static void ag_gone(void)
     apply();
 }
 
-void hfp_rfcomm_down(int link) { if (ag.on && link == ag.link) { fprintf(stderr, "phone: RFCOMM closed\n"); ag_gone(); } }
-void hfp_lost(void) { ag_gone(); }
+void hfp_rfcomm_down(int link)
+{
+    wait_drop(link);
+    if (!ag.on || link != ag.link) return;
+    fprintf(stderr, "phone: RFCOMM closed\n");
+    ag_gone();
+    int w = -1;
+    for (int i = 0; i < 4; i++) if (wait_live(i) && (w < 0 || (is_phone(waitq[i].cod) && !is_phone(waitq[w].cod)))) w = i;
+    if (w >= 0) {
+        waitq[w].on = 0;
+        fprintf(stderr, "phone: %012llx waited for the place: it has it now\n", (unsigned long long)waitq[w].addr);
+        int sabm = wait_sabm(w);
+        hfp_rfcomm_up(waitq[w].link, waitq[w].addr, waitq[w].cod);
+        /* RFCOMM does not send a SABM twice (it waits for UA until T1, then gives up): the one it sent is answered */
+        if (sabm && ag.on && ag.link == waitq[w].link) { ag.mux = 1; rf_send(0, 1, UA | PF, NULL, 0, -1); }
+    }
+}
+void hfp_lost(void) { memset(waitq, 0, sizeof waitq); ag_gone(); }
 
 /* ---------------------------------------------------------------- the call */
 
@@ -652,10 +754,31 @@ unsigned hfp_sdp_features(void) { return 0x17 | (sco_wideband() ? 0x20 : 0); }
 static int vgs_now(void) { int v = atomic_load(&call_vol); return v < 0 ? -1 : (v * 15 + 50) / 100; }
 static int vgs_due(void) { return ag.gen && ag.slc && vgs_now() >= 0 && vgs_now() != ag.vgs; }
 
-int hfp_busy(void) { return ag.waiting || ag.qn || ag.answer_until || ag.dialed || ag.clcc_due || vgs_due() || (ag.on && ag.slc && (ag.setup || in_call()) && !ag.claimed); }
+/* (a phone waiting for the place: upkeep looks each round, so wait_retake hands it over once the holder is idle) */
+static int waiting_any(void) { for (int i = 0; i < 4; i++) if (waitq[i].on) return 1; return 0; }
+int hfp_busy(void) { return ag.waiting || ag.qn || ag.answer_until || ag.dialed || ag.clcc_due || vgs_due() || (ag.on && ag.slc && (ag.setup || in_call()) && !ag.claimed) || waiting_any(); }
+
+/* A phone that waited because the holder (no phone) had a call, an audio link or the claim: the place once it is idle
+ * again (controller thread, from upkeep: not inside apply/ag_gone) */
+static void wait_retake(void)
+{
+    if (!ag.on || !ag.cod || is_phone(ag.cod) || call_on() || ag.sco || ag.claimed) return;
+    int i = -1;                                         /* a known phone first, else one of no known class */
+    for (int k = 0; k < 4; k++) if (wait_live(k) && (is_phone(waitq[k].cod) || !waitq[k].cod) && (i < 0 || (is_phone(waitq[k].cod) && !is_phone(waitq[i].cod)))) i = k;
+    if (i >= 0) {
+        int link = waitq[i].link, sabm = wait_sabm(i); uint64_t addr = waitq[i].addr; unsigned cod = waitq[i].cod;
+        waitq[i].on = 0;
+        fprintf(stderr, "phone: %012llx waited: the place is free of calls now\n", (unsigned long long)addr);
+        hfp_rfcomm_up(link, addr, cod);                 /* (takes it from the holder: no phone, no call) */
+        if (sabm && ag.on && ag.link == link) { ag.mux = 1; rf_send(0, 1, UA | PF, NULL, 0, -1); }
+        return;
+    }
+}
 
 int hfp_upkeep(void)
 {
+    if (atomic_load(&enabled)) wait_retake();
+    if (!atomic_load(&enabled)) memset(waitq, 0, sizeof waitq);    /* off: nobody waits for the place */
     if (ag.on && !atomic_load(&enabled)) {                          /* switched off: the phone loses us */
         if (ag.dlc) rf_send(ag.dlci, 0, DISC | PF, NULL, 0, -1);
         if (ag.mux) rf_send(0, 0, DISC | PF, NULL, 0, -1);

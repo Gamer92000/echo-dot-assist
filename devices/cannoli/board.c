@@ -38,6 +38,12 @@ const struct board board = {
     .speaker_gain = "Speaker Volume A",
     .speaker_gain_stock = 10,
     .speaker_gain_limit = 16,
+    /* micHfp in call mode (2026-11-26, a user's Dot 5 with a phone over HFP, issue #233): speech -10..-30 dBFS (micAsr
+     * -50..-58), the room between words -88; a count from 30 cm, 1.5 m and 3 m at -27, -28, -29 dBFS median, every
+     * frame past the gate after the first second; WhatsApp's far end "a huge difference".  Stock's own calls record it
+     * too (libpjmedia-audiodev.so), and AFE.cfg's "Voice" path is biscuit's (AEC, Frequency Masking RES, FB AGC -23) */
+    .call_mic = 1,
+    .call_echo_cap_db = -30,                        /* (board.h: the echo measured well under it) */
     /* phone calls (docs/re-hfp.md): the MT7663's PCM on the SoC's PCM1, from the kernel's DAPM routes (mt8519-afe-pcm,
      * mendocino "HFP Out"/"HFP In"): DL6 -> O00/O01 -> PCM1, PCM1 -> O02/O03 -> UL5 (two channels whatever is asked,
      * and only while DL6 plays).  The chip's PCM side the driver sets itself after every reset (0xfc72 49 00 80 00) */

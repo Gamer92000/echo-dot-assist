@@ -2,6 +2,25 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — Calls: Amazon's call processing on every Echo, quick replies, the phone before a TV box
+
+- **A phone gets the calls when a TV box connected first** (issue #233). An Android TV box paired for music also
+  connects for calls, at once and with no setting to stop it, and the phone that connected after it got music only.
+  Now a phone takes the place from a device that is not a phone and has no call.
+- **Calls from an Echo Dot 5 are clear from across the room** (issue #233). It now sends Amazon's call processing
+  (noise reduction, an even level, the echo canceller for calls), as the Dot 2 and Dot 3 do, in place of the
+  assistant's microphone, which came out quiet and full of the room. Measured by a user with a phone: the same level
+  at 30 cm, 1.5 m and 3 m, and on WhatsApp "a huge difference".
+- **The first words of a quick reply are no longer quiet** in a Drop In or phone call.
+  The Echo's own echo check, on top of Amazon's echo canceller, took a reply right after the
+  other side spoke for its echo and turned it down for up to 2.5 s.
+- **Every Echo sends Amazon's call processing in calls, the Echo Shows and the Echo Input too**, done as their own
+  calls did it: on the Shows and the Input Android's call mode and the call's own recording beside the wake word's. The setting "Call microphone" is gone: there was no reason to send the assistant's
+  stream instead. Run on an Echo Show 5; on the Echo 2, Echo Show 5 2nd gen, Echo Show 8 and Echo Input taken from
+  their firmware and not tried yet: if a call from one of them sounds wrong, please say so.
+- **The log says what a call sent**: at the end of every call a `call: sent ...` line names the microphone, how much
+  of the call this side talked, at what level in and out, the gain, and how much went out without being turned down.
+
 ## 2026-11-26 — HTTPS with TLS 1.3
 
 - **Replies play from a Home Assistant on the "Modern" SSL profile** (issue #236). That profile allows TLS 1.3 only,

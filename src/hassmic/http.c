@@ -15,8 +15,10 @@
  * 7.50.1 sent them along).
  */
 #include "http.h"
+#include "logread.h"
 #include <arpa/inet.h>
 #include <ctype.h>
+#include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -91,16 +93,60 @@ static int url_parse(const char *s, struct url *u, char *err, size_t cap)
     return 0;
 }
 
-/* LOC (a Location header's value) against the request's address BASE, into OUT */
+/* RFC 3986 5.2.4: "." and ".." segments of a path taken out, in place (the path up to its query; the rest kept) */
+static void dot_segments(char *p)
+{
+    size_t end = strcspn(p, "?#"); char tail[2048], *o = p; const char *i = p;
+    if (end >= sizeof tail || strlen(p + end) >= sizeof tail) return;      /* (url_parse refuses such lengths anyway) */
+    snprintf(tail, sizeof tail, "%s", p + end);
+    p[end] = 0;
+    while (*i) {
+        if (!strncmp(i, "/./", 3)) i += 2;
+        else if (!strcmp(i, "/.")) { *o++ = '/'; i += 2; }
+        else if (!strncmp(i, "/../", 4) || !strcmp(i, "/..")) {
+            int last = !i[3];
+            i += 3;
+            while (o > p && *--o != '/') ;                      /* drop the segment before */
+            if (last) *o++ = '/';
+        }
+        else { do *o++ = *i++; while (*i && *i != '/'); }
+    }
+    if (o == p) *o++ = '/';
+    *o = 0;
+    strcat(p, tail);
+}
+
+/* LOC (a Location header's value) against the request's address BASE, into OUT.  -1 too long, -2 another scheme */
 static int url_join(const struct url *base, const char *loc, char *out, size_t cap)
 {
     const char *scheme = base->https ? "https" : "http";
-    if (!strncasecmp(loc, "https://", 8) || !strncasecmp(loc, "http://", 7)) return snprintf(out, cap, "%s", loc) >= (int)cap ? -1 : 0;
-    if (loc[0] == '/' && loc[1] == '/') return snprintf(out, cap, "%s:%s", scheme, loc) >= (int)cap ? -1 : 0;
-    if (loc[0] == '/') return snprintf(out, cap, "%s://%s%s", scheme, base->hostport, loc) >= (int)cap ? -1 : 0;
-    size_t dir = strcspn(base->path, "?");                         /* relative: beside the request's own path */
-    while (dir && base->path[dir - 1] != '/') dir--;
-    return snprintf(out, cap, "%s://%s%.*s%s", scheme, base->hostport, (int)dir, base->path, loc) >= (int)cap ? -1 : 0;
+    char path[2048]; int n;
+    /* another scheme (ftp:, data:, mailto:): no redirect of ours; read as a path it would go to this server with its
+     * headers.  RFC 3986 3.1: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":" before any "/", "?" or "#" */
+    {   size_t k = 0;
+        if (isalpha((unsigned char)loc[0])) { while (isalnum((unsigned char)loc[k]) || loc[k] == '+' || loc[k] == '-' || loc[k] == '.') k++; }
+        if (k && loc[k] == ':' && strncasecmp(loc, "https://", 8) && strncasecmp(loc, "http://", 7)) return -2;   /* ("https:x" too) */
+    }
+    if (!strncasecmp(loc, "https://", 8) || !strncasecmp(loc, "http://", 7) || (loc[0] == '/' && loc[1] == '/')) {
+        n = loc[0] == '/' ? snprintf(path, sizeof path, "%s:%s", scheme, loc) : snprintf(path, sizeof path, "%s", loc);
+        if (n < 0 || n >= (int)sizeof path) return -1;
+        char *p = strstr(path, "//") + 2; p += strcspn(p, "/?#");     /* past scheme://host[:port] */
+        if (*p == '/') dot_segments(p);
+        return snprintf(out, cap, "%s", path) >= (int)cap ? -1 : 0;
+    }
+    size_t dir = strcspn(base->path, "?");
+    /* a fragment alone is the same document: path and query as they were (the fragment is never sent) */
+    if (loc[0] == '#') return snprintf(out, cap, "%s://%s%s", scheme, base->hostport, base->path) >= (int)cap ? -1 : 0;
+    /* a query alone is the same path with that query (RFC 3986 5.2.2: "?page=2" on /dir/file?x is /dir/file?page=2) */
+    if (loc[0] == '?') return snprintf(out, cap, "%s://%s%.*s%s", scheme, base->hostport, (int)dir, base->path, loc) >= (int)cap ? -1 : 0;
+    if (loc[0] == '/') n = snprintf(path, sizeof path, "%s", loc);
+    else {                                                          /* relative: beside the request's own path */
+        while (dir && base->path[dir - 1] != '/') dir--;
+        n = snprintf(path, sizeof path, "%.*s%s", (int)dir, base->path, loc);
+    }
+    if (n < 0 || n >= (int)sizeof path) return -1;
+    dot_segments(path);
+    return snprintf(out, cap, "%s://%s%s", scheme, base->hostport, path) >= (int)cap ? -1 : 0;
 }
 
 /* ---------------------------------------------------------------- the clocks */
@@ -117,6 +163,9 @@ struct run {
     long long ticks[TICKS];             /* bytes per quarter second, ring */
     char *err; size_t cap;
     int why;                            /* what ended it: HTTP_FAILED, HTTP_CANCELLED */
+    const char *host;                   /* the exchange's (for what is said) */
+    int up;                             /* a connection is up: the low speed limit counts from then (libcurl's: during
+                                           the transfer only), not over addresses tried and handshakes */
 };
 
 static void tick_to(struct run *x, long long now)      /* the ring moved on to NOW's quarter second */
@@ -135,7 +184,7 @@ static int clocks(struct run *x)
     if (x->r->stop && *x->r->stop) { snprintf(x->err, x->cap, "cancelled"); x->why = HTTP_CANCELLED; return -1; }
     if (x->deadline && now >= x->deadline) { snprintf(x->err, x->cap, "no answer within %d s", x->r->total_s); return -1; }
     int low = x->r->low_s > 64 ? 64 : x->r->low_s;
-    if (low > 0 && now - x->start >= low * 1000LL) {
+    if (low > 0 && x->up && now - x->start >= low * 1000LL) {
         long long sum = 0; int n = low * 1000 / TICK_MS;
         tick_to(x, now);
         for (int i = 0; i < n; i++) sum += x->ticks[(x->tick - i + TICKS) % TICKS];
@@ -170,7 +219,7 @@ static int connect_one(struct run *x, const struct sockaddr *a, socklen_t al, in
     for (;;) {
         if (clocks(x)) { close(fd); return -1; }
         long long left = until - tls_now_ms();
-        if (left <= 0) { snprintf(x->err, x->cap, "connect: no answer within %d s", x->r->connect_s); close(fd); return -1; }
+        if (left <= 0) { snprintf(x->err, x->cap, "connect: no answer within %d s", x->r->connect_s > 0 ? x->r->connect_s : 30); close(fd); return -1; }
         struct pollfd p = { .fd = fd, .events = POLLOUT }; int s = slice(x);
         int r = poll(&p, 1, left < s ? (int)left : s);
         if (r < 0 && errno != EINTR) { snprintf(x->err, x->cap, "connect: %s", strerror(errno)); close(fd); return -1; }
@@ -381,7 +430,23 @@ static int read_body(struct run *x, struct conn *c, const struct answer *a, int 
             int f = conn_fill(x, c);
             if (f < 0) return -1;
             if (!f) {
-                if (left < 0) return 0;                 /* no length: the connection's end is the body's */
+                /* no length: the connection's end is the body's; one that ended without TLS's close_notify may have
+                 * been cut off (a dropped link, a FIN put in on the way): said, the body as it came (what matters is
+                 * checked anyway: bundles and packages by signature, size and digest) */
+                if (left < 0) {
+                    static char said_host[256];         /* once per host in a row: a server that closes so does it always
+                                                           (struct url's host fits) */
+                    static pthread_mutex_t said_mu = PTHREAD_MUTEX_INITIALIZER;     /* (every fetching thread) */
+                    if (c->t && !tls_closed_clean(c->t) && x->host) {
+                        pthread_mutex_lock(&said_mu);
+                        int say_it = strcmp(said_host, x->host) != 0;
+                        if (say_it) snprintf(said_host, sizeof said_host, "%s", x->host);
+                        pthread_mutex_unlock(&said_mu);
+                        /* (private: a media host is often the household's own name) */
+                        if (say_it) log_private("https: %s ended an answer of no length without TLS's close_notify: it may be cut off", x->host);
+                    }
+                    return 0;
+                }
                 snprintf(x->err, x->cap, "cut off after %lld of %lld bytes", got, a->length);
                 return -1;
             }
@@ -428,25 +493,31 @@ static int exchange(struct http *r, char *err, size_t cap, struct conn *c)
     if (r->plain && u.https) { snprintf(err, cap, "only http:// here"); return HTTP_FAILED; }
     snprintf(host0, sizeof host0, "%s", u.host); snprintf(port0, sizeof port0, "%s", u.port); origin_https = u.https;
     for (;;) {
+        x.up = 0;
         if (conn_open(&x, &u, c)) return x.why;
+        x.up = 1; x.start = tls_now_ms(); x.tick = 0; memset(x.ticks, 0, sizeof x.ticks); x.host = u.host;
         if (send_request(&x, c, &u, method, headers, with_body) || read_head(&x, c, &a)) { conn_close(c); return x.why; }
         int redirect = a.status >= 300 && a.status < 400 && a.status != 304 && a.location[0] && r->redirects > 0;
         if (redirect) {
             conn_close(c);
             if (++hops > r->redirects) { snprintf(err, cap, "more than %d redirects", r->redirects); return HTTP_FAILED; }
             if (a.location_cut) { snprintf(err, cap, "a redirect's address is longer than %d bytes", URL_MAX - 1); return HTTP_FAILED; }
-            if (url_join(&u, a.location, next, sizeof next)) { snprintf(err, cap, "a redirect's address is too long"); return HTTP_FAILED; }
+            int j = url_join(&u, a.location, next, sizeof next);
+            if (j == -2) { snprintf(err, cap, "a redirect to another scheme than http(s) refused"); return HTTP_FAILED; }
+            if (j) { snprintf(err, cap, "a redirect's address is too long"); return HTTP_FAILED; }
             struct url nu; char e[160];
             if (url_parse(next, &nu, e, sizeof e)) { snprintf(err, cap, "a redirect to a bad address: %s", e); return HTTP_FAILED; }
             if (r->plain && nu.https) { snprintf(err, cap, "a redirect away from the local network refused"); return HTTP_FAILED; }
             if (r->redirect_https && !nu.https) { snprintf(err, cap, "a redirect to plain http:// refused"); return HTTP_FAILED; }
-            if (a.status == 303 || ((a.status == 301 || a.status == 302) && !strcmp(method, "POST"))) { method = "GET"; with_body = 0; }
+            /* (HEAD stays HEAD on a 303: RFC 9110 15.4.4) */
+            if ((a.status == 303 && strcmp(method, "HEAD")) || ((a.status == 301 || a.status == 302) && !strcmp(method, "POST"))) { method = "GET"; with_body = 0; }
             /* another origin: none of the caller's headers (tokens; or meant for the first server alone), and no body
              * (Amazon's carry tokens too: a 307 or 308 that would take one elsewhere is refused) */
-            if (nu.https != origin_https || strcasecmp(nu.host, host0) || strcmp(nu.port, port0)) {
-                if (with_body) { snprintf(err, cap, "a redirect that would take the request's body to another server refused"); return HTTP_FAILED; }
-                headers = 0;
-            }
+            /* once off to another origin, off for the rest of the chain: back on the first origin, a path the other
+             * server chose would get the caller's tokens */
+            int same = nu.https == origin_https && !strcasecmp(nu.host, host0) && !strcmp(nu.port, port0);
+            if (!same && with_body) { snprintf(err, cap, "a redirect that would take the request's body to another server refused"); return HTTP_FAILED; }
+            headers = headers && same;
             u = nu;
             continue;
         }

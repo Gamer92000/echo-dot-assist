@@ -76,6 +76,11 @@ const struct board board = {
     .light_sensor = { "tcs3400:/sys/devices/virtual/input" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
     /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    /* Amazon's call processing (audio_android.c "a call as stock's calls have it"): stock's calls record
+     * VOICE_COMMUNICATION, which this HAL gives libasp's "Voice" pipeline (getAspPipelineType: 7 -> 1), in
+     * MODE_IN_COMMUNICATION, beside the wake word's HOTWORD (2026-11-26: the Show 5 ran it, the others by the same
+     * firmware code) */
+    .call_mic = 1,
     .volume_curve = board_vol_dot2,
     /* TI TAS5805m amplifier: its "Master TAS5805m Playback Volume" is a digital volume, 0..158, 100 at boot, no dB table
      * (0.5 dB steps assumed: the chip's own).  Listened to with music at full volume, 2026-10-15: 115 and 120 clean, 122

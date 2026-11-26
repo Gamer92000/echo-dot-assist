@@ -34,6 +34,8 @@ const char *tls_version(struct tls *t);
 
 /* close_notify (once, without waiting) and everything freed; not the socket */
 void tls_free(struct tls *t);
+/* after tls_read's 0: the peer said close_notify (1), or the connection just ended (0) */
+int  tls_closed_clean(struct tls *t);
 
 /* Monotonic ms, the clock tls_open's deadline is on */
 long long tls_now_ms(void);

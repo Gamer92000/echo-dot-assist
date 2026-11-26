@@ -2866,7 +2866,51 @@ Run in this order. Each step says what it proves.
       link table not read) set from their firmware, never run; cupcake donut's path (its bootloader's GPIO table muxes
       the 2nd I2S, its device tree does not), never run; rejecting a waiting call from the Echo (AT+CHLD=0: none of
       its controls does it yet).
-- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
+      A real phone (2026-11-25/26, a user's Echo Dot 5 with a Redmi 12C, issue #233): SLC with features 0xf67, mSBC,
+      downlink clean (e.g. 4831 frames in, 4827 played, 0 lost, 0 late); the uplink (micAsr, the call's gain and gate)
+      heard but quiet from across the room, clearly better at 30 cm, WhatsApp worse than a cellular call; noise
+      reduction made no difference (it is the pipeline's, not the call's).  Talker -50..-58 dBFS in micAsr at a
+      normal distance, at NEAR_MIN_DB.  Then (2026-11-26): cannoli `call_mic` 2 (offered, micAsr by default: from
+      the firmware only, stock's libpjmedia-audiodev.so plays Voip and records micHfp as on donut and biscuit, and
+      its AFE.cfg "Voice" path is biscuit's: AEC, Frequency Masking RES, the same NR and CNG, FB AGC -23 dBFS, +20
+      constant, +12 at most, 16 kHz mono); "Call microphone" moved to the Voice page's Calls card and shown with Drop
+      In or HFP on (it was a child of Drop In: hidden without it); a `call: sent ...` line at every call's end
+      (microphone, talk share, level in/out, gain, unducked share).  An Android TV box (Mi Box, Android 14) paired
+      as a music source connected for calls first and kept the phone out: a phone (class of device major 0x02) now
+      takes the place from a gateway that is no phone and has no call (fake_hfp.py "two gateways").  Seen in the same
+      log: calls the user took for incoming came as callsetup 2/3 (the phone's own "outgoing"), no RING or +CLIP:
+      asked.  The same user then built `call_mic = 1` on cannoli and measured it (HASSMIC_DROPIN_TRACE, WhatsApp and
+      cellular): micHfp never stalled; speech -10..-30 dBFS (micAsr -50..-58), the room between words -88; a count at
+      30 cm, 1.5 m, 3 m: -27, -28, -29 dBFS median, all past the gate after the first second; the far end "a huge
+      difference".  cannoli `call_mic` 1 since.  Left: call.c's echo suppressor on micHfp.  The far end plays at
+      -6..-10 dBFS, micHfp's AGC brings speech near that, so a reply's first DOUBLE_TALK_N frames were learnt as echo,
+      `es_c` reached its 0 dB cap within seconds and no reply passed as double talk again; with the hold falling
+      20 dB/s, speech within 1 s of the far end went out at full level 7..36 %, 1-2.5 s 68..86 %, later 96..100 %.  Now
+      on micHfp where measured (`board.call_echo_cap_db` -30 on the Dots): `es_c` capped at -30 after 2 s, double talk after 2 frames, the hold falling 50 dB/s; unmeasured models keep micAsr's tuning.
+      `make unit-call` H1 (the user's pattern: 0 of 154 reply frames at full level before, 144 after) and H2 (an echo
+      28 dB under the playback left in micHfp stays ducked).  radar `call_mic` 2 (offered from its firmware: stock's
+      pjmedia records micHfp, AFE.cfg's "Voice" path VAEC + Lite RES, AGC -26).  The Shows and the Echo Input the way
+      their stock calls do it (static, docs/re-checkers.md "Calls"): MODE_IN_COMMUNICATION (media.audio_policy
+      setPhoneState, 3 on Android 7, 4 on 9), the call on the music stream (stock's voice stream has another volume
+      curve: speaker -24..0 dB against music's -58..0, Show 5), the recorder on VOICE_COMMUNICATION
+      (the HAL's libasp "Voice" pipeline), board `call_mic` 2 on checkers, cronos, crown, athena, cupcake.  Beside
+      the assistant's as stock's: Fire OS's policy lets a second recorder start only beside HOTWORD/2999/3000, so
+      the assistant's records HOTWORD while Amazon's call processing is chosen (the firmware's android::AudioRecord
+      by dlsym on SDK 25, OpenSL ES preset 6 on athena); where that fails, VOICE_RECOGNITION and the one recorder
+      switched for the call.  On the user's Show 5 (2026-11-26, a Drop In to a Dot 3, nobody talking): HOTWORD
+      capture 6 s in 6 s at the room's -62 dBFS (a read that does not wait answers WOULD_BLOCK: fixed after the first
+      try took it for an error and fell back), setPhoneState status 0 both ways, the VOICE_COMMUNICATION recorder
+      beside it carried 96 % of the call while the HOTWORD capture went on (5 s in 5 s), 0 frames missing.  Open: a
+      talker's levels and the wake word on HOTWORD.  Then (same day, the maintainer: "no reason to ever disable
+      it"): the setting `call_mic` removed (settings.c `retired`: an export's or config's line read without a word),
+      Amazon's call processing on every model that has it, `board.call_mic` 1 on radar and the Android five.
+      HOTWORD only for a call (`hot_for_call`, callmic_open to _close: a review's point, an Echo that makes no calls
+      records as before); on the Show 5 the switch at a call's start ~80 ms, both recorders, back after.  Reviewed in
+      22 rounds (code-review high); the last ones' findings were edge cases, most in the HTTPS client of #236.  Left
+      open from them: http.c tries a name's addresses one after another with the whole connect_s each (libcurl's happy
+      eyeballs tried IPv4 ~200 ms after IPv6), so a network with broken IPv6 waits or fails; the capture thread's
+      fatal end waits in main()'s accept() until a client comes (before this work too).  Open: a talker's levels and the wake word during a
+      call on a Show; radar, cronos, crown, athena, cupcake never run. (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
 - [~] Calls with Amazon's call microphone (2026-11-13, Echo Dot 3): a user's calls from a Dot 3 sounded dull and full of

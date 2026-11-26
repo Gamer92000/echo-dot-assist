@@ -25,6 +25,8 @@ PORT, WEB, ARB = 17090, 17091, 17092
 PHONE = bytes.fromhex("a1b2c3d4e5f6")[::-1]          # its address as the air has it (least significant octet first)
 ACL, SCO = 0x0010, 0x0020                          # the handles this controller gives the phone's links
 NAME = "Pixel Test"
+BOX = bytes.fromhex("0a0b0c0d0e0f")[::-1]            # an Android TV box: a music source that connects for calls too
+PHONE2 = bytes.fromhex("b1b2b3b4b5b6")[::-1]
 
 
 def check(cond, what):
@@ -67,22 +69,28 @@ def tone_share(pcm, rate, f):
 
 
 class Phone:
-    """The Echo's Bluetooth chip as hassmic sees it through /dev/stpbt (H4), with a phone behind it"""
-    def __init__(self):
+    """The Echo's Bluetooth chip as hassmic sees it through /dev/stpbt (H4), with a phone behind it.  CTL: another
+    device behind the same chip (its own address, ACL handle, class of device and name), the chip being CTL's"""
+    def __init__(self, ctl=None, addr=PHONE, handle=ACL, cod=bytes([0x0c, 0x02, 0x5a]), name=NAME):
+        self.addr, self.handle, self.cod, self.name = addr, handle, cod, name
+        self.sig = queue.Queue(); self.chans = {}                # L2CAP: signalling packets; our CID -> its frames
+        self.at = queue.Queue(); self.dlc_cred = 0; self.at_seen = []
+        self.calls = []; self.clcc_asked = 0                         # what it answers AT+CLCC with
+        self.next_cid = 0x40; self.ident = 1
+        if ctl:                                                      # the chip is the other's
+            self.ctl = ctl; self.cmds = ctl.cmds; ctl.devs[handle] = self
+            return
+        self.ctl = self; self.devs = {handle: self}
         self.m, self.s = os.openpty()
         tty.setraw(self.m); tty.setraw(self.s)
         self.path = os.ttyname(self.s)
         self.lock = threading.Lock(); self.buf = b""; self.acl_rx = {}; self.cmds = queue.Queue()
-        self.sig = queue.Queue(); self.chans = {}                # L2CAP: signalling packets; our CID -> its frames
         self.sco_out = bytearray(); self.sco_count = 0; self.sco_on = False
-        self.at = queue.Queue(); self.dlc_cred = 0
-        self.calls = []; self.clcc_asked = 0                         # what it answers AT+CLCC with
         self.refuse = set(); self.refuse_completes = False           # commands this controller refuses (and ends)
-        self.next_cid = 0x40; self.ident = 1
         threading.Thread(target=self.reader, daemon=True).start()
 
     def send(self, b):
-        with self.lock: os.write(self.m, b)
+        with self.ctl.lock: os.write(self.ctl.m, b)
 
     def event(self, code, par): self.send(bytes([4, code, len(par)]) + par)
 
@@ -107,7 +115,7 @@ class Phone:
                     r = self.acl_rx.get(h, b"")
                     r = data if pb != 1 else r + data
                     if len(r) >= 4 and len(r) >= 4 + (r[0] | r[1] << 8):
-                        l, cid = struct.unpack("<HH", r[:4]); self.l2(cid, r[4:4 + l]); r = b""
+                        l, cid = struct.unpack("<HH", r[:4]); self.devs.get(h, self).l2(cid, r[4:4 + l]); r = b""
                     self.acl_rx[h] = r
                 elif t == 3:
                     if len(self.buf) < 4 or len(self.buf) < 4 + self.buf[3]: break
@@ -131,8 +139,8 @@ class Phone:
         self.cmds.put((op, par))
         if op == 0x042a and par[:6] == PHONE:                                    # a rejected link ends as the spec has it
             self.event(0x2c, bytes([par[6] if len(par) > 6 else 0x0d]) + struct.pack("<H", 0) + PHONE + bytes([2, 0, 0]) + struct.pack("<HH", 0, 0) + bytes([0]))
-        if op == 0x0419 and par[:6] == PHONE:                                    # Remote Name Request
-            self.event(0x07, bytes([0]) + PHONE + NAME.encode().ljust(248, b"\0"))
+        for d in list(self.devs.values()):                                       # Remote Name Request
+            if op == 0x0419 and par[:6] == d.addr: self.event(0x07, bytes([0]) + d.addr + d.name.encode().ljust(248, b"\0"))
 
     def expect_cmd(self, op, secs=5):
         end = time.time() + secs
@@ -145,7 +153,7 @@ class Phone:
     # ------------------------------------------------ L2CAP
     def acl(self, cid, pdu):
         l2 = struct.pack("<HH", len(pdu), cid) + pdu
-        self.send(bytes([2]) + struct.pack("<HH", ACL | 0x2000, len(l2)) + l2)
+        self.send(bytes([2]) + struct.pack("<HH", self.handle | 0x2000, len(l2)) + l2)
 
     def l2(self, cid, pdu):
         if cid == 1: self.sig.put(pdu)
@@ -185,10 +193,10 @@ class Phone:
 
     # ------------------------------------------------ links
     def connect(self):
-        self.event(0x04, PHONE + bytes([0x0c, 0x02, 0x5a, 1]))                 # Connection Request: a smartphone, ACL
+        self.event(0x04, self.addr + self.cod + bytes([1]))                    # Connection Request: a smartphone, ACL
         p = self.expect_cmd(0x0409)
         if p is None: return False
-        self.event(0x03, bytes([0]) + struct.pack("<H", ACL) + PHONE + bytes([1, 1]))   # complete, encrypted (bonded)
+        self.event(0x03, bytes([0]) + struct.pack("<H", self.handle) + self.addr + bytes([1, 1]))   # complete, encrypted (bonded)
         return True
 
     def sco_request(self, air=2):
@@ -373,11 +381,12 @@ async def until(fn, secs=5):
     return fn()
 
 
-def echo(state, config, voip, mic, extra=None, arb=ARB):
+def echo(state, config, voip, mic, extra=None, arb=ARB, paired=()):
     with open(os.path.join(state, "config"), "w") as f: f.write(config)
     key = base64.b64encode(os.urandom(32)).decode()
     with open(os.path.join(state, "api_key"), "w") as f: f.write(key + "\n")
-    with open(os.path.join(state, "bt_keys"), "w") as f: f.write("a1b2c3d4e5f6 4 " + "11" * 16 + "\n")     # paired before
+    with open(os.path.join(state, "bt_keys"), "w") as f:                       # paired before
+        for a in (PHONE,) + tuple(paired): f.write(a[::-1].hex() + " 4 " + "11" * 16 + "\n")
     ph = Phone()
     log = os.path.join(state, "log")
     env = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
@@ -512,6 +521,10 @@ async def main():
         check(ph.at_expect("AT+CHUP") is not None, "Home Assistant's End phone call: AT+CHUP")
         ph.at_send("OK", "+CIEV: 1,0"); ph.sco_close()
         check(await until(lambda: st.get("phone_call") == "idle" and st.get("phone_caller") == ""), f"idle again ({st.get('phone_call')}, {st.get('phone_caller')!r})")
+        # what went to the phone, said at the call's end (issue #233: the log named no microphone): the call microphone
+        # (HASSMIC_CALL_CAP stands for micHfp) nearly all the call, its 700 Hz tone counted as this side talking
+        sent = wait(lambda: next((l for l in open(log) if "call: sent " in l), None), 3)
+        check(sent is not None and "% of micHfp" in sent and "this side talked in" in sent and "sent unducked" in sent, f"the call's end: what went to the phone ({sent and sent.strip()})")
         check(wait(lambda: "phone: call audio stopped" in open(log).read(), 3), "the call's audio stopped")
         ph.at_send("+VGS: 9"); ph.pump(0.5)
         check("phone: its volume (9 of 15) not taken outside a call" in open(log).read(), "a +VGS outside a call not taken")
@@ -688,6 +701,61 @@ async def main():
         check(ph.at_expect("AT+BCS=1") is not None, "chip mSBC: the phone's retry as CVSD"); ph.at_send("OK")
         acc = ph.sco_request(air=2)
         check(isinstance(acc, bytes) and len(acc) == 21 and acc[16:18] == b"\x60\x00", "chip mSBC: then accepted as CVSD")
+    finally:
+        proc.terminate(); proc.wait()
+    if check.failed: print("     the Echo's log, last lines:\n" + "".join("       " + l for l in open(log, errors="replace").read().splitlines(True)[-30:]))
+
+    # Two audio gateways (issue #233): an Android TV box (class of device Audio/Video, set-top box: no phone) connects
+    # for calls first, as a Mi Box does with no way to turn it off; the phone after it takes the place, the box's DLC and
+    # multiplexer closed.  The box again, and a second phone, find the place taken
+    state4 = os.path.join(tmp, "state4"); os.makedirs(state4)
+    proc, ph, key, log = echo(state4, "bluetooth_calls=on\n", voip, mic, arb=0, paired=(BOX, PHONE2))
+    try:
+        wait(lambda: any(o == 0x0c1a and p[:1] == b"\x02" for o, p in list(ph.cmds.queue)), 10)
+        box = Phone(ph, BOX, 0x0011, bytes([0x24, 0x04, 0x24]), "Mi Box")
+        check(box.connect(), "two gateways: the TV box's link accepted")
+        box.rcid, box.rdcid, _ = box.open_chan(3)
+        ok, what = mux(box)
+        check(ok and all(slc(box)), f"two gateways: the TV box connected for calls ({what})")
+        check(wait(lambda: "opened RFCOMM (class 0x240424)" in open(log).read(), 3), "two gateways: the box's class of device known")
+        check(ph.connect(), "two gateways: the phone's link accepted")
+        ph.rcid, ph.rdcid, _ = ph.open_chan(3)
+        discs = set()
+        for _ in range(4):
+            f = box.rf_get(1)
+            if f and f[2] == 0x53 and f[1] == 0: discs.add(f[0])
+        check(discs == {0, 2}, f"two gateways: the box's DLC and multiplexer closed (DISC on {sorted(discs)})")
+        ok, what = mux(ph)
+        check(ok and all(slc(ph)), f"two gateways: the phone's service level connection ({what})")
+        check(wait(lambda: "is a phone or of no known class (0x5a020c): it takes the place of 0a0b0c0d0e0f" in open(log).read(), 3), "two gateways: the log says the phone took the place")
+        cli, by, svcs, st = await ha(PORT, key)
+        check(await until(lambda: st.get("phone_call") == "idle" and st.get("phone") == NAME), f"two gateways: Home Assistant shows the phone ({st.get('phone')})")
+        ph.at_send("+CIEV: 2,1", "RING", '+CLIP: "+4930123456",145,,,"Alice"')
+        check(await until(lambda: st.get("phone_call") == "ringing"), f"two gateways: the phone's call rings ({st.get('phone_call')})")
+        box.sig_cmd(0x06, struct.pack("<HH", box.rdcid, box.rcid)); box.sig_get(0x07)   # as a stack does after DISC: its channel closed
+        box.rcid, box.rdcid, _ = box.open_chan(3)                                 # the box once more
+        box.rf(0, 1, 0x3f)
+        f = box.rf_get(1)
+        check(f is not None and f[0] == 0 and f[2] == 0x1f, f"two gateways: the box's RFCOMM again: DM, refused ({f})")
+        check(wait(lambda: "0a0b0c0d0e0f (class 0x240424) opened RFCOMM, but a1b2c3d4e5f6 (class 0x5a020c) has the place" in open(log).read(), 3),
+              "two gateways: the box finds the place the phone's")
+        p2 = Phone(ph, PHONE2, 0x0012)
+        check(p2.connect(), "two gateways: a second phone's link accepted")
+        p2.rcid, p2.rdcid, _ = p2.open_chan(3)
+        check(wait(lambda: "b1b2b3b4b5b6 (class 0x5a020c) opened RFCOMM, but a1b2c3d4e5f6" in open(log).read(), 3),
+              "two gateways: a phone never takes another phone's place")
+        check(st.get("phone_call") == "ringing" and st.get("phone") == NAME, f"two gateways: the first phone's call still rings ({st.get('phone_call')}, {st.get('phone')})")
+        # the second phone sends its SABM while it waits (unanswered: RFCOMM sends it once and waits for UA); the first
+        # goes (its RFCOMM channel closed): the second gets the place, and the SABM it sent its UA
+        p2.rf(0, 1, 0x3f)
+        check(p2.rf_get(0.5) is None, "two gateways: the waiting phone's SABM not answered while the place is taken")
+        ph.sig_cmd(0x06, struct.pack("<HH", ph.rdcid, ph.rcid)); ph.sig_get(0x07)
+        check(wait(lambda: "b1b2b3b4b5b6 waited for the place: it has it now" in open(log).read(), 3), "two gateways: the first phone gone, the waiting one has the place")
+        ua = p2.rf_get(2)
+        check(ua is not None and ua[0] == 0 and ua[2] == 0x73, f"two gateways: its SABM answered UA as it gets the place ({ua})")
+        ok, what = mux(p2)
+        check(ok and all(slc(p2)), f"two gateways: the second phone's RFCOMM now answered, its service level connection ({what})")
+        await cli.disconnect()
     finally:
         proc.terminate(); proc.wait()
     if check.failed: print("     the Echo's log, last lines:\n" + "".join("       " + l for l in open(log, errors="replace").read().splitlines(True)[-30:]))

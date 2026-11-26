@@ -600,18 +600,18 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `CALL_CODEC_PCM` (a plugin's: the gated, gain-corrected frame as s16le, in by number, a missing one the last
   faded by `PCM_FADE` a frame; `make unit-call`). Lock order: call.c's `tx_mu` (one sender at a time; `send` and `core_call_listen` run under it) before
   `core_lock`, `dl` and plugin.c's `cml`, `dl` and plugin.c's `bl` before call.c's `ml`; nobody calls `call_mic` holding `core_lock`, `dl` or `bl`.
-  Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`: the mixer's where
-  `board.call_mic`, measured: donut, biscuit; radar and cannoli have the path in AFE.cfg, unmeasured): `micHfp` is
+  Call microphone (always where `callmic_present()`, no setting since 2026-11-26: `call_mic` is in settings.c's `retired`, an old line read without a word; `board.call_mic`: donut, biscuit, cannoli measured, radar from its firmware (stock's pjmedia records micHfp), the Android five as stock's calls (audio_android.c: for a call the assistant's on HOTWORD (`hot_for_call`, VOICE_RECOGNITION outside calls), libmedia's AudioRecord by dlsym on SDK 25 (a read that does not wait answers WOULD_BLOCK), OpenSL preset 6 on athena; in a call MODE_IN_COMMUNICATION by media.audio_policy setPhoneState 3/4, the music stream (the voice stream's curve differs), a VOICE_COMMUNICATION recorder beside it; `board.call_echo_cap_db` -30 on the Dots, call.c's cap only where measured; HOTWORD failing: VOICE_RECOGNITION and the one recorder switched and tee'd; docs/re-checkers.md "Calls")): `micHfp` is
   Amazon's "Voice" pipeline (AFE.cfg: (V)AEC, RES, NR, CNG, AGC -22/-23 dBFS, Tx EQ, limiter; no beamformer) once the
   front end is in call mode (a Voip stream open; on biscuit opening micHfp alone starts it). `callmic_thread` opens it
-  after the playout has the Voip stream (`voip_gen`), sends it without micgain and with the gate's duck at -12 dB
+  after the playout has the Voip stream (`voip_gen`), sends it without micgain, the gate's duck at -12 dB; where `board.call_echo_cap_db` (measured: -30 on the Dots; `callmic_echo_cap()`) the echo estimate held that far under what plays after `HFP_WARMUP_MS`, the hold falling `FAR_FALL_HFP` and double talk after `DOUBLE_TALK_N_HFP` (its AGC puts speech at the playback's level: uncapped every quick reply was ducked; `make unit-call` H1/H2); unmeasured models keep micAsr's tuning
   (`SUPPRESS_HFP_DB`, `NEAR_MIN_HFP_DB`), `call_mic` (micAsr) stands aside (`src_hfp`) while micHfp came within
   `HFP_STALE_MS` (`hfp_at`; the mixer's read waits 1.5 s for a block that does not come, the far end gives up after
   5 s); no stream, 3 empty reads or the Voip stream failed (`voip_gen` -1): micAsr for the rest of the call. Record
   streams' format getters answer -1 (mixcap.c): never refuse on that. `audio_file.c`: `HASSMIC_CALL_CAP` (tests: the
   hall's 700 Hz tone in `fake_ha_dropin.py`), `HASSMIC_CALL_CAP_STALL` (a file: while it exists reads stall, 7c),
   `HASSMIC_VOIP_FAIL` (a file: the Voip stream fails, 7d), `HASSMIC_FAKE_LISTEN` (the front end's listening mode
-  logged); Android: none.  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
+  logged); Android: none.  `call_end` logs `call: sent ...` (the sender's counts, `tx` under `sl`, a leaf lock:
+  call_end runs under dl, never take `tx_mu` there).  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
   (`listen_on`, `near_until`): reset, the core never heard "off" and kept the front end listening for the call.
 - **Phone calls over Bluetooth** (`hfp.c`, `scoaudio.c`, `cvsd.c`, `msbc.c`; docs/re-hfp.md; issue #233): the Echo as a
   phone's hands-free unit (HFP 1.7 HF), setting `bluetooth_calls` (Features, off).  CVSD everywhere; mSBC (wideband)
@@ -631,7 +631,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   waiting" (`hfp_second`).  On a2dp.c's links (hooks in
   `hci.h`): a Hands-Free SDP record (RFCOMM channel `HFP_CHANNEL`), PSM 3, the class of device's telephony bit and the
   EIR's UUID, all only while it is on; RFCOMM as responder (the phone opens it), credit flow, the AT exchange of the
-  service level connection, calls from the phone's indicators.  call.c's claim `CALL_HFP`: ringing (not with do not
+  service level connection, calls from the phone's indicators.  One gateway at a time: a phone (class of device major 0x02, a2dp.c `cod` from the Connection Request)
+  takes the place from one that is no phone and has no call (`hfp_rfcomm_up`: the old DLC and mux sent DISC; a TV box, issue
+  #233); a refused phone or unknown class waits (`waitq`, its DLCI 0 SABM kept within `SABM_T1_MS` and answered UA when it gets the place: `hfp_rfcomm_down`, `wait_retake` from upkeep once a non-phone holder is idle), one that is no phone is answered DM.  call.c's claim `CALL_HFP`: ringing (not with do not
   disturb or the mics off: `core_call_refusal`), answered here (`ANSWER_MS` for the audio link), connected (the
   synchronous link up: call.c's media in `CALL_CODEC_PCM`), on the phone (nothing shown).  `core_call_button` /
   `_answer` / `_hangup` reach `hfp_*`; Home Assistant's "Phone call", "Phone caller", "Phone", answer / end / take-here

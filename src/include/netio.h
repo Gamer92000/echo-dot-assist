@@ -43,7 +43,7 @@ static inline int net_accept(int s)
 static inline int net_accept_kept(int *ls, int port, const char *who)
 {
     static time_t said; static unsigned unsaid;
-    int c = *ls >= 0 ? net_accept(*ls) : -1, e = *ls >= 0 ? errno : EBADF, lost;
+    int had = *ls >= 0, c = had ? net_accept(*ls) : -1, e = had ? errno : EBADF, lost;     /* had: a listener to accept on */
     if (c >= 0) return c;
     lost = e == EINVAL || e == EBADF || e == ENOTSOCK;
     struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
@@ -52,9 +52,11 @@ static inline int net_accept_kept(int *ls, int port, const char *who)
         *ls = net_listen(port);
     }
     unsaid++;
-    if (!said || now.tv_sec - said >= 10) {
-        fprintf(stderr, "%s: accept on port %d: %s%s (%u since the last word)\n", who, port, strerror(e),
-                !lost ? "" : *ls >= 0 ? ", listening again" : ", cannot listen yet, trying every second", unsaid);
+    if (!said || now.tv_sec - said >= 10 || (lost && *ls >= 0)) {     /* (a listener back is always said) */
+        if (!had) fprintf(stderr, "%s: port %d: %s (%u since the last word)\n", who, port,
+                          *ls >= 0 ? "listening" : "cannot listen yet, trying every second", unsaid);
+        else fprintf(stderr, "%s: accept on port %d: %s%s (%u since the last word)\n", who, port, strerror(e),
+                     !lost ? "" : *ls >= 0 ? ", listening again" : ", cannot listen yet, trying every second", unsaid);
         said = now.tv_sec ? now.tv_sec : 1; unsaid = 0;
     }
     if (lost) { if (*ls < 0) sleep(1); return -1; }

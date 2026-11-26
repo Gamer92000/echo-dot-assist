@@ -1151,6 +1151,8 @@ int mass_set(const char *u, const char *t)
     { char *e = strstr(nu, "://"); if (e) for (char *c = nu; c < e; c++) *c = (char)tolower((unsigned char)*c); }   /* (tls_url) */
     int tok = t && !strcmp(t, "-") ? 0 : t && t[0] ? 1 : token[0] != 0;
     if (tok && !nu[0]) { pthread_mutex_unlock(&lk); return -2; }
+    /* against the stored address as written: an older build's "HTTPS://host" ran as ws:// 8095 (tls_url), and taken as
+     * "https://host" the kept token would go to wss:// 443, which it was never given for (a review of this, 2026-11-26) */
     if (tok && !(t && t[0]) && strcmp(nu, url)) { pthread_mutex_unlock(&lk); return -3; }
     char ou[sizeof url], ot[sizeof token]; memcpy(ou, url, sizeof url); memcpy(ot, token, sizeof token);
     memcpy(url, nu, sizeof url);

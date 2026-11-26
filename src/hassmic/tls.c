@@ -129,6 +129,7 @@ struct tls {
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
     int sys_errno;                      /* the socket's, when bio_send/bio_recv failed */
+    int unclean;                        /* the peer closed the connection without close_notify */
     size_t wpend;                       /* m: the payload of the record a write left pending (WANT_WRITE), 0 none */
     const unsigned char *wptr;          /* m: where that payload began in the caller's buffer */
     char err[200];
@@ -258,7 +259,7 @@ ssize_t tls_read(struct tls *t, void *buf, size_t n, int timeout_ms)
         pthread_mutex_unlock(&t->m);
         if (rc > 0) return rc;
         /* the end: close_notify, or the connection closed without it (HTTP knows its length where it matters) */
-        if (rc == 0 || rc == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || rc == MBEDTLS_ERR_SSL_CONN_EOF) return 0;
+        if (rc == 0 || rc == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || rc == MBEDTLS_ERR_SSL_CONN_EOF) { t->unclean = rc != MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY; return 0; }
         if (rc == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET) continue;     /* a TLS 1.3 ticket: not kept */
         if (rc != MBEDTLS_ERR_SSL_WANT_READ && rc != MBEDTLS_ERR_SSL_WANT_WRITE) return -1;
         int ms = -1;
@@ -290,9 +291,18 @@ ssize_t tls_write(struct tls *t, const void *buf, size_t n, int timeout_ms)
             return -1;
         }
         if (t->wpend && !t->ssl.MBEDTLS_PRIVATE(out_left)) rc = (int)t->wpend;   /* sent by the reader meanwhile */
+        else if (!t->wpend && t->ssl.MBEDTLS_PRIVATE(out_left)) {
+            /* a record the reader left half sent (an alert it queued): mbedtls_ssl_write would take it for ours, flush
+             * it and answer our length with nothing of ours framed (ssl_write_real's out_left branch).  Out first,
+             * with a write of nothing (that branch flushes and answers 0), then ours */
+            rc = mbedtls_ssl_write(&t->ssl, p, 0);
+            if (rc == 0) { pthread_mutex_unlock(&t->m); continue; }
+        }
         else {
-            size_t max = (size_t)mbedtls_ssl_get_max_out_record_payload(&t->ssl);
+            size_t max = (size_t)mbedtls_ssl_get_max_out_record_payload(&t->ssl), had = t->wpend;
             rc = mbedtls_ssl_write(&t->ssl, p, left);
+            /* a pending record flushed answers the length asked now, though only what was framed then went out */
+            if (had && rc > (int)had) rc = (int)had;
             if (rc == MBEDTLS_ERR_SSL_WANT_WRITE && !t->wpend) { t->wpend = left < max ? left : max; t->wptr = p; }
         }
         if (rc > 0) { t->wpend = 0; t->wptr = NULL; }
@@ -323,3 +333,5 @@ void tls_free(struct tls *t)
     pthread_mutex_destroy(&t->m);
     free(t);
 }
+
+int tls_closed_clean(struct tls *t) { return !t->unclean; }

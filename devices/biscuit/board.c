@@ -43,6 +43,7 @@ const struct board board = {
     /* micHfp in call mode, 300-3400 Hz (2026-11-17): a talker 22 dB over the room (micAsr 11), at -30 dBFS (micAsr -55);
      * the Echo's own speech 15 dB under micRaw's */
     .call_mic = 1,
+    .call_echo_cap_db = -30,                        /* (board.h: the echo measured well under it) */
     /* phone calls (docs/re-hfp.md): MediaTek's integrated Bluetooth (CONSYS behind WMT): no PCM pins, the air's CVSD
      * through BTCVSD's /dev/ebc (group media, device.conf), coded here as the HAL's libcvsd_mtk.so does */
     .sco = SCO_EBC,

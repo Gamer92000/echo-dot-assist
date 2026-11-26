@@ -220,3 +220,19 @@ address under hassmic, and the PC could not page the idme's (`br-connection-page
 sets it (`GORMcmd_HCC_Set_Local_BD_Addr`, 0xfc1a).  0xfc1a with the idme's six bytes (HCI order), then Read BD_ADDR:
 the idme's.  `ble.c` now does that after every reset where the controller says something else; the other models'
 drivers set it already.
+
+## A real phone (2026-11-25/26, a user's Echo Dot 5)
+
+A Redmi 12C (Android) against a Dot 5, cellular and WhatsApp calls: service level connection (AG features 0xf67),
+mSBC, the downlink clean (0 lost, 0 late).  The uplink from the assistant's micAsr through call.c's gain and gate was
+heard but quiet from across the room, clearly better at 30 cm; the talker's level in micAsr there, -50..-58 dBFS,
+is at the gate's floor (`NEAR_MIN_DB` -58).  The Dot 5's micHfp (stock's own calls record it: `libpjmedia-audiodev.so`)
+was offered then (board `call_mic` 2), and the user measured it: speech -10..-30 dBFS against micAsr's -50..-58,
+the same level at 30 cm, 1.5 m and 3 m, the far end "a huge difference": `call_mic` 1.  call.c's own echo suppressor,
+made for micAsr, then ducked quick replies (micHfp's AGC puts speech at the playback's level, which its echo estimate
+took for echo): capped on micHfp since (PLAN.md).
+
+Two gateways: an Android TV box (Mi Box, Android 14) paired as a music source connects for calls as well, first, and
+its settings cannot stop it.  hfp.c takes one gateway at a time; a phone (class of device, major class Phone) now
+takes the place from a gateway that is no phone and has no call (its DLC and multiplexer closed with DISC).
+

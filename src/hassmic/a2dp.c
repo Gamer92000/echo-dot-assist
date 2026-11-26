@@ -177,7 +177,11 @@ static struct link {
     int avctp, av_label, vol_label, vol_pct;    /* AVRCP: our CID, 0 = none; next transaction label of ours; label of the
                                                    device's volume notification (-1: none registered), the volume it knows */
     char name[80]; int named, told;             /* the device's name (Remote Name Request), asked yet; connect announced */
+    unsigned cod;                               /* its class of device (Connection Request), 0 unknown: a link we paged */
 } links[MAX_LINKS];
+/* The class of device of the last connection requests, until the link is complete (hfp.c prefers a phone, issue #233) */
+static struct { uint64_t addr; unsigned cod; long long at; } req_cod[4]; static unsigned req_cod_n;
+#define REQ_COD_MS 30000                        /* a request whose link never completed: forgotten after this */
 
 static unsigned acl_len = 27, acl_num = 1; static int credits;
 struct frag { struct frag *next; int handle; size_t len; unsigned char b[]; };
@@ -1433,7 +1437,7 @@ static void maybe_tell(struct link *l)
 
 static void chan_opened(struct link *l, struct chan *c)
 {
-    if (c->psm == PSM_RFCOMM) { hfp_rfcomm_up((int)(l - links), l->addr); return; }
+    if (c->psm == PSM_RFCOMM) { hfp_rfcomm_up((int)(l - links), l->addr, l->cod); return; }
     if (c->psm == PSM_AVCTP && !l->avctp) { l->avctp = c->lcid; l->vol_label = -1; atomic_fetch_add(&avrcp_links, 1);
                                             fprintf(stderr, "a2dp: %012llx: remote control\n", (unsigned long long)l->addr); }
     if (c->psm != PSM_AVDTP) return;
@@ -1540,7 +1544,11 @@ int a2dp_event(const unsigned char *e, size_t n)
                 return 1;
             }
             for (int i = 0; i < MAX_LINKS; i++) free_slot |= !links[i].used;
-            if (q[9] == 1 && free_slot && (pairing || key_for(a))) { unsigned char role = 0x01; later_addr(OP_ACCEPT, q, &role, 1); }
+            if (q[9] == 1 && free_slot && (pairing || key_for(a))) {
+                unsigned char role = 0x01; later_addr(OP_ACCEPT, q, &role, 1);
+                unsigned k = req_cod_n++ % 4;
+                req_cod[k].addr = a; req_cod[k].cod = q[6] | q[7] << 8 | q[8] << 16; req_cod[k].at = ms();
+            }
             else {
                 unsigned char why = q[9] != 1 || !free_slot ? 0x0d : 0x0f;        /* limited resources / unacceptable address */
                 fprintf(stderr, "a2dp: connection from %012llx refused\n", (unsigned long long)a);
@@ -1551,6 +1559,11 @@ int a2dp_event(const unsigned char *e, size_t n)
     case EV_CONN_COMPLETE: {                                /* status, handle, address, link type, encryption */
         if (qn < 11) return 1;
         int paged = 0;
+        unsigned req_class = 0;                         /* the request's class of device, whatever became of it */
+        for (int k = 0; k < 4; k++) if (req_cod[k].addr == addr_of(q + 3)) {
+            if (ms() - req_cod[k].at < REQ_COD_MS) req_class = req_cod[k].cod;
+            req_cod[k].addr = 0;
+        }
         if (out.addr && addr_of(q + 3) == out.addr && out.paging) {
             out.paging = 0; paged = 1;
             if (q[0]) {                                     /* page timeout (0x04) mostly: off, or out of reach */
@@ -1564,6 +1577,7 @@ int a2dp_event(const unsigned char *e, size_t n)
         for (int i = 0; i < MAX_LINKS; i++) if (!links[i].used) {
             l = &links[i]; memset(l, 0, sizeof *l);
             l->used = 1; l->handle = u16(q + 1) & 0x0fff; l->addr = addr_of(q + 3); l->enc = q[10];
+            l->cod = req_class;
             fprintf(stderr, "a2dp: %012llx connected\n", (unsigned long long)l->addr);
             { unsigned char r[4] = { 0x01, 0, 0, 0 }; later_addr(OP_REMOTE_NAME, q + 3, r, 4); }   /* page scan R1, clock offset unknown */
             if (is_speaker(l)) out_link_up(l, paged);
@@ -1755,6 +1769,7 @@ void a2dp_rfcomm_send(int link, const void *frame, size_t n)
 void a2dp_later(unsigned op, const void *par, unsigned n) { later(op, par, n); }
 unsigned a2dp_link_handle(int link) { return link >= 0 && link < MAX_LINKS && links[link].used ? (unsigned)links[link].handle : 0; }
 const char *a2dp_link_name(int link) { return link >= 0 && link < MAX_LINKS && links[link].used ? links[link].name : ""; }
+unsigned a2dp_link_cod(int link) { return link >= 0 && link < MAX_LINKS && links[link].used ? links[link].cod : 0; }
 
 /* ---------------------------------------------------------------- API */
 

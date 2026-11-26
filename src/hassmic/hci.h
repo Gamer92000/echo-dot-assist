@@ -25,7 +25,8 @@ int  a2dp_streaming(void);                                  /* audio flows: LE s
 #define HFP_CHANNEL 1                                       /* our RFCOMM server channel, in the SDP record */
 int  hfp_listed(void);                                      /* the feature is on: the SDP record, RFCOMM's PSM, the
                                                                class of device's telephony bit */
-void hfp_rfcomm_up(int link, uint64_t addr);                /* an RFCOMM L2CAP channel opened on LINK */
+void hfp_rfcomm_up(int link, uint64_t addr, unsigned cod);  /* an RFCOMM L2CAP channel opened on LINK; COD: the device's
+                                                               class of device, 0 unknown */
 void hfp_rfcomm_rx(int link, const unsigned char *p, size_t n);
 void hfp_rfcomm_down(int link);
 int  hfp_sco_request(uint64_t addr, int esco);              /* a synchronous link asked for: 0 refuse, else the codec
@@ -42,4 +43,5 @@ void a2dp_rfcomm_send(int link, const void *frame, size_t n);    /* on LINK's RF
 void a2dp_later(unsigned op, const void *par, unsigned n);       /* an HCI command, sent in upkeep */
 unsigned a2dp_link_handle(int link);
 const char *a2dp_link_name(int link);                       /* the device's name, "" until known */
+unsigned a2dp_link_cod(int link);                           /* its class of device, 0 unknown (hfp.c) */
 #endif

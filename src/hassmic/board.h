@@ -72,9 +72,16 @@ struct board {
     int cold_lead_ms;
     /* audio_mixer.c: the mixer's micHfp carries the front end's call path ("Voice" in AFE.cfg: echo canceller, residual
      * echo suppressor, noise reduction, AGC) while a Voip stream is open, measured on this model; a call then sends it
-     * (call.c, setting call_mic).  0: not measured, the assistant's micAsr as before.  Measured: donut (a talker,
-     * 2026-11-13), biscuit (a talker and the echo, 2026-11-17); PLAN.md "Calls with Amazon's call microphone" */
+     * (call.c), always: no setting (2026-11-26, the maintainer: no reason ever to send the assistant's instead).
+     * 0: none, the assistant's micAsr.  Measured: donut (a talker, 2026-11-13), biscuit (a talker and the echo,
+     * 2026-11-17), cannoli (a user's phone calls, 2026-11-26); PLAN.md "Calls with Amazon's call microphone"; the
+     * Android models' as stock's (audio_android.c), radar's from the firmware */
     int call_mic;
+    /* call.c's echo estimate on that path held this many dB under what plays (after a call's first 2 s): micHfp's AGC
+     * puts speech at the playback's level, and an uncapped estimate ducked every quick reply.  Measured: the echo left
+     * well under it (donut, biscuit: PLAN.md "Calls with Amazon's call microphone"; cannoli, a user's traces,
+     * 2026-11-26).  0 (unmeasured): uncapped, as on micAsr: a quick reply's start ducked, never an echo let through */
+    float call_echo_cap_db;
 
     /* Phone calls over Bluetooth (hfp.c, scoaudio.c; docs/re-hfp.md): where a call's audio goes once the phone opened its
      * synchronous link.  No chip here moves it over HCI: each puts it where the model's stock HAL takes it, measured per

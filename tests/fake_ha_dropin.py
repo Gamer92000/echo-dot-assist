@@ -31,9 +31,15 @@ _x = _rng.standard_normal(16000 * 7) * 32768 * 10 ** (-74 / 20)
 for _i in range(0, len(_x), 11200): _x[_i:_i + 2400] *= 10 ** (10 / 20)
 _x.astype("<i2").tofile(QUIET)
 # the call pipeline's microphone (audio_file.c HASSMIC_CALL_CAP, the Dots' micHfp in call mode): a 700 Hz tone at
-# -20 dBFS, as Amazon's AGC leaves a talker; the hall has it, switched off until section 7b
+# -20 dBFS, as Amazon's AGC leaves a talker; the hall has it, its room silent until section 7b (its config keeps an
+# old call_mic=assistant line: a setting that is gone, read without a word)
 CALL_CAP = os.path.join(EARCONS, "callmic.raw")
-(32768 * 10 ** (-20 / 20) * np.sqrt(2) * np.sin(2 * np.pi * 700 * np.arange(32000) / 16000)).astype("<i2").tofile(CALL_CAP)
+def call_cap(tone):
+    """what the hall's call microphone hears from the next call on: the tone, or (until 7b) its silent room: every call
+    takes the call microphone since 2026-11-26, and the checks before 7b listen for the hall's silence"""
+    x = 32768 * 10 ** (-20 / 20) * np.sqrt(2) * np.sin(2 * np.pi * 700 * np.arange(32000) / 16000) if tone else np.zeros(32000)
+    x.astype("<i2").tofile(CALL_CAP + ".new"); os.replace(CALL_CAP + ".new", CALL_CAP)
+call_cap(False)
 
 
 def check(cond, what):
@@ -356,9 +362,11 @@ async def main():
         check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
         await asyncio.sleep(0.3)
 
-        # 7b. the call pipeline's microphone (call_mic, the Dots' micHfp): the hall sends it as it comes, without the
-        # assistant's gain; back to the assistant's (its silence) on the page, at once, in the same call
-        r = b.page.set(call_mic="call"); check(r.get("applied") == 1, f"the hall: call_mic=call on the page ({r})")
+        # 7b. the call pipeline's microphone (the Dots' micHfp, always where a model has it: no setting since
+        # 2026-11-26): the hall sends it as it comes, without the assistant's gain; an old export's call_mic line is
+        # passed over without a word
+        call_cap(True)
+        r = b.page.set(call_mic="assistant"); check(r.get("applied") == 0 and not r.get("errors"), f"the hall: an old call_mic line taken quietly, nothing applied ({r})")
         await a.call(b.node)
         check(await until(lambda: a.dropin()[0] == "connected", 3), "connected")
         check(await until(lambda: "call: the call pipeline's microphone (micHfp)" in b.text(), 3), "  the hall's log: the call pipeline's microphone")
@@ -368,11 +376,6 @@ async def main():
         await asyncio.sleep(3.5)
         tdb = tone(a.voip, 2)
         check(-30 < tdb < -14 and tdb > level(a.voip, 2) - 1, f"  the kitchen plays the hall's 700 Hz at its own level ({tdb:.1f} dB of {level(a.voip, 2):.1f} dBFS; -20 sent)")
-        b.page.set(call_mic="assistant")
-        check(await until(lambda: "call: switched to the assistant's: the assistant's microphone for the rest of this call" in b.text(), 2),
-              "  call_mic=assistant mid-call: the assistant's microphone from then on")
-        await asyncio.sleep(2.5)
-        check(level(a.voip, 1) < -60, f"  the kitchen plays the hall's silence again ({level(a.voip, 1):.1f} dBFS)")
         a.cli.switch_command(a.by["mute"].key, False)
         a.press("end_drop_in")
         check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
@@ -383,7 +386,6 @@ async def main():
         # stall: micHfp back, and the listening mode its tone had switched on goes off while micAsr's silence fills in
         # (a swap of sources once left it on for good).  A long one: after three empty reads the hall gives micHfp up
         # for the rest of the call
-        b.page.set(call_mic="call")
         mark = len(b.text())
         await a.call(b.node)
         check(await until(lambda: a.dropin()[0] == "connected", 3), "connected")
@@ -446,7 +448,6 @@ async def main():
         check(await until(lambda: a.dropin()[0] == "idle", 2), "hung up")
         await asyncio.sleep(1)
         check("call mode ended" not in b.text()[mark:], "  a normal hang-up: no word of call mode ending")
-        b.page.set(call_mic="assistant")
         await asyncio.sleep(0.3)
 
         # 8. the hall vanishes mid-call: the kitchen notices

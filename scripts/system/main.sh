@@ -918,6 +918,12 @@ ota_watch() {
                 while [ -d $WIFI/lock ] && [ -n "$(cat $WIFI/lock/pid 2>/dev/null)" ] && kill -0 "$(cat $WIFI/lock/pid)" 2>/dev/null; do sleep 1; done   # a switch running ends first
                 [ -f $D/wifi.sh ] && sh $D/wifi.sh forget 2>&1 | stamped
                 st=/data/local/hassmic/state
+                # a call the stopped hassmic left in Android's call mode (audio_android.c's state/call-mode): back to
+                # MODE_NORMAL before its mark goes with state/ (media.audio_policy setPhoneState: 3 on Android 7, 4 on 9)
+                if [ -n "$ANDROID" ] && [ -f $st/call-mode ]; then
+                    [ "$(getprop ro.build.version.sdk)" -ge 28 ] 2>/dev/null && tx=4 || tx=3
+                    service call media.audio_policy $tx i32 0 > /dev/null 2>&1 && say "factory reset: Android's call mode left by a call set back"
+                fi
                 for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
                 rm -f $PAGE_PUB                     # (the settings page's Sources: gone with state/sources)
                 rm -f /data/misc/avahi/services/hassmic.service

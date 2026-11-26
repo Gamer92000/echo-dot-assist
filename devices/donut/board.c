@@ -34,6 +34,7 @@ const struct board board = {
     .speaker_gain = "DAC Playback Volume",
     /* micHfp in call mode: speech -20 dBFS against -43 in its pauses, where micAsr had -48/-65 (2026-11-13) */
     .call_mic = 1,
+    .call_echo_cap_db = -30,                        /* (board.h: the echo measured well under it) */
     .speaker_gain_stock = 16,
     .speaker_gain_steps = 2,
     /* phone calls (docs/re-hfp.md): the MT7668 on the SoC's 2nd I2S, stock's mixer_paths.xml "bt-sco" paths: DL2

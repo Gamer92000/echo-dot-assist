@@ -148,6 +148,52 @@ ACTIVE_INPUT_SOURCE 5, SOUND_SOURCE_LOCALIZATION 12/15, PIPELINE_STATUS 19.
 On donut `main.c` reaches these through `lipc-set-prop com.doppler.lasp`; checkers has no LIPC tools, so those calls fail
 there (harmlessly) until a small `/dev/binder` client sends transaction 3.
 
+## Calls: how stock records and plays them (static, 2026-11-26)
+
+Every Android Echo (checkers, cronos, crown, athena: `com.amazon.comms.multimodaltachyonarm`; cupcake:
+`headlesstachyon`) calls through the same code, read with dexdump from each APK:
+
+- `com.amazon.comms.devicecalling.audio.AudioController`: audio focus on the music stream (`requestAudioFocus(l, 3,
+  AUDIOFOCUS_GAIN_TRANSIENT)`), `setMode(3)` = MODE_IN_COMMUNICATION for the call (`setCommunicationsModeTask`, the
+  mode before it saved and put back by `restoreAudioModeTask`), and `setParameters("VOIP_CALL_START=1")`, which no
+  library of checkers' firmware reads (only the APK has the string).
+- The media: WebRTC's `org.webrtc.voiceengine`, OpenSL ES disallowed (`WebRTCMediaManager`: Java AudioRecord and
+  AudioTrack), `WebRtcAudioRecord.getDefaultAudioSource` = 7 (VOICE_COMMUNICATION), `WebRtcAudioTrack`'s usage 2
+  (USAGE_VOICE_COMMUNICATION); WebRTC's own echo canceller only where the device's parameters prefer it.
+- The HAL (`audio.primary.mt8163.so`, cronos's and crown's the same code, cupcake's mt8167, athena's mt8183):
+  `AudioALSACaptureDataClient::getAspPipelineType` maps the record source to a libasp pipeline: 7 -> 1, 1 (MIC) ->
+  2, 6 (VOICE_RECOGNITION) and 1999 (HOTWORD) -> 0 (9 with a flag), 2999 -> 6.  libasp's table is "ASR", "Voice",
+  "Mic", "Playback" (0..3), as AFE.cfg's pipelines: VOICE_COMMUNICATION is the "Voice" path, the Dots' micHfp.  The
+  playback side always opens pipeline 3 ("Playback", `AudioALSAPlaybackHandlerNormal::asp_open`), whatever the
+  stream: it is the echo reference for every capture pipeline.
+- Two recorders at once: Fire OS's AudioPolicyManager (`libaudiopolicymanagerdefault.so`,
+  `startInput_fosExt_supportMultipleInputStreams` = 1) lets a recorder start beside running ones only where it is
+  HOTWORD (1999), 2999 or 3000, or every running one is (`startInput_fosExt_allowMultipleInputStreams`).  Stock's
+  wake word (amazon.speech.sim) records 1999 and 2999, so the call's VOICE_COMMUNICATION starts beside it.  OpenSL
+  ES has no HOTWORD preset on Android 7 ("unknown or invalid preset" for anything but AOSP's); athena's libwilhelm
+  has Amazon's presets 6, 7, 8 = sources 1999, 2999, 3002.
+- The mode from a native process: AudioService's `setMode` links to the caller's binder (a native daemon has none to
+  give through the service tool), so hassmic sets it one level down, IAudioPolicyService's `setPhoneState`
+  (AudioSystem's path, which also sets AudioFlinger's and the HAL's mode): transaction 3 on Android 7 (checkers'
+  libmedia.so: the onTransact case that calls vtable slot 24, AudioSystem::setPhoneState's) and 4 on Android 9
+  (athena's libaudioclient.so: slot 28).
+
+- The firmware's native `android::AudioRecord` (libmedia.so, exported, one signature on the four SDK 25 models;
+  athena's libaudioclient.so has another) takes any source: what stock's Java recorder does, without Java.
+
+hassmic since (audio_android.c, board `call_mic` on the five; no setting: always), for each call: the assistant's
+recording on HOTWORD (outside calls VOICE_RECOGNITION as before; the switch at a call's start takes ~80 ms) (the native AudioRecord on
+SDK 25, OpenSL ES preset 6 on athena; the same ASR pipeline as VOICE_RECOGNITION), and in a call the phone state
+MODE_IN_COMMUNICATION, the call's player on the music stream (the voice stream's volume curve is not music's:
+speaker VOICE_CALL -24..0 dB, MUSIC -58..0, on the Show 5) and a second recorder on VOICE_COMMUNICATION beside it,
+as stock's.  Where HOTWORD fails: VOICE_RECOGNITION as before, and for a call the one recorder changes source (the
+wake word hears the call's path meanwhile).  On the Show 5 (2026-11-26, a Drop In to a Dot 3, nobody talking): HOTWORD
+capture through the native AudioRecord (its reads that do not wait answer WOULD_BLOCK, -11, while nothing is ready:
+not an error), 6 s in 6 s, the room at -62 dBFS median as VOICE_RECOGNITION's; setPhoneState(3) status 0 and back to
+0 at the end; the VOICE_COMMUNICATION recorder beside it delivered at once and carried 96 % of the call (micHfp's
+place in call.c), the HOTWORD capture went on beside it (5 s in 5 s, no stall); the call played, 492
+frames in, 486 played, none missing.  Levels with a talker: not yet.
+
 ## Stock's wake word path
 
 `priv-app/SpeechInteractionManager` (package `amazon.speech.sim`, persistent) loads `lib/libwakewordserver_jni.so`

@@ -74,6 +74,11 @@ const struct board board = {
      * Flat at the top and steep at the bottom, unlike the Dot's: 90 is 4 dB under 100 (Dot 10), 10 is 51 (Dot 41).
      * hassmic's volume v plays at index (30 v + 50) / 100: a point every 5, each that index's (the curve between them
      * within 1 dB of the index played); index 1 is under the room's noise, 0 silent */
+    /* Amazon's call processing (audio_android.c "a call as stock's calls have it"): stock's calls record
+     * VOICE_COMMUNICATION, which this HAL gives libasp's "Voice" pipeline (getAspPipelineType: 7 -> 1), in
+     * MODE_IN_COMMUNICATION, beside the wake word's HOTWORD (2026-11-26: the Show 5 ran it, the others by the same
+     * firmware code) */
+    .call_mic = 1,
     .volume_curve = (const struct board_vol[]){
         { 0, -66 }, { 5, -60.0f }, { 10, -51.2f }, { 15, -43.7f }, { 20, -41.0f }, { 25, -34.9f }, { 30, -31.8f },
         { 35, -26.7f }, { 40, -24.8f }, { 45, -20.8f }, { 50, -19.7f }, { 55, -17.8f }, { 60, -15.8f }, { 65, -13.0f },

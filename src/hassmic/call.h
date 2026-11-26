@@ -53,10 +53,5 @@ float call_far_level(void);             /* the loudest of the far end that can b
 int  call_far_talking(void);            /* the other side's voice plays here now (or did, ECHO_MS ago) */
 
 int  call_start(void);                  /* the playout and call microphone threads, once.  0 ok */
-/* Where a call's microphone comes from: Amazon's call pipeline (audio.h callmic_*) where the backend has one, read by a
- * thread of call.c's own while the call's Voip stream is open, else the assistant's micAsr from call_mic.  set: 1 the
- * call pipeline (the default), 0 the assistant's, -1 reads; a call running keeps the one it started with until it ends,
- * except that switching to the assistant's takes effect at once */
-int  call_mic_source(int set);
 
 #endif

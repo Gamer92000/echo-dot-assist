@@ -37,7 +37,6 @@ const char *const denoise_names[4] = { "Off", "Low", "Medium", "High" };
 static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
-static const char *const call_mics[2] = { "call", "assistant" };         /* call_mic_source() 1, 0 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
 /* the aligner's languages first (tools/wakealign/build.sh; main.c speech_locale), then those it has no model for yet,
@@ -115,7 +114,7 @@ static int colour_actual(void)
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, ANSWER_VOICE, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, CALL_MIC, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -245,9 +244,6 @@ static const struct setting table[NSET] = {
     /* hfp.c keeps it: the Echo as a phone's hands-free unit (issue #233).  A feature: Home Assistant's "Phone call"
      * entities; off by default, as the hands-free record makes every phone paired after it send its calls here */
     [BT_CALLS]    = { "bluetooth_calls", "Phone calls over Bluetooth", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
-    /* call.c keeps it: a call's microphone from Amazon's call pipeline (micHfp) or the assistant's (micAsr); only where
-     * the backend has the first (the Dots' mixer) */
-    [CALL_MIC]    = { "call_mic", "Call microphone", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* https.c keeps it: media from a Home Assistant that serves HTTPS itself (issue #30) */
     [HTTPS_VERIFY] = { "https_verify", "Check HTTPS certificates", "System", NULL, S_BOOL, 0, 1, 1, 0 },
@@ -312,7 +308,6 @@ static int present(enum id i)
     case ARB: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
     case BT_CALLS: return ble_present() && hfp_present();
-    case CALL_MIC: return callmic_present() && (dropin_running() || (ble_present() && hfp_present()));
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
     case MULTI_PRESS: return !board.action_combo;               /* the Shows: no action key, the volume pair stands in */
@@ -376,7 +371,6 @@ int settings_choices(const struct setting *s, const char *const **names)
     case WAKE_ENGINE: return core_wake_engines(names);        /* the fixed three and the wake plugins (main.c) */
     case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
-    case CALL_MIC: *names = call_mics; return 2;
     case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
@@ -457,7 +451,6 @@ int settings_get(const struct setting *s)
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
     case BT_CALLS: return hfp_enable(-1);
-    case CALL_MIC: return call_mic_source(-1) ? 0 : 1;
     case SPK_GAIN: return spkgain_get();
     case DUCK: return duck_db;
     case DUCK_OTHERS: return duck_for_others(-1);
@@ -551,7 +544,6 @@ static void put(enum id i, int v)
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
     case BT_CALLS: hfp_enable(v); break;
-    case CALL_MIC: call_mic_source(v == 0); break;
     case SPK_GAIN: spkgain_set(v); break;
     case DUCK: duck_db = v; break;
     case DUCK_OTHERS: duck_for_others(v); break;
@@ -897,6 +889,17 @@ static int export_from_before_switches(const char *text)
     return 1;
 }
 
+/* Settings that are gone: an export or a config of an older build may still have them.  Passed over without a word
+ * (a model that lacks a setting says "no such setting on this Echo"; these no Echo has) */
+static const char *const retired[] = {
+    "call_mic",                 /* 2026-11-26: Amazon's call processing wherever a model has it, no choice (issue #233) */
+};
+static int retired_name(const char *k)
+{
+    for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) if (!strcmp(k, retired[i])) return 1;
+    return 0;
+}
+
 int settings_apply_text(const char *text, char *err, size_t errsz)
 {
     int applied = 0; size_t en = 0;
@@ -910,6 +913,7 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
         if (!*k || *k == '#' || !(eq = strchr(k, '='))) continue;
         *eq = 0; v = eq + 1;
         const struct setting *s = settings_find(k);
+        if (!s && retired_name(k)) continue;
         if ((s ? rank((int)(s - table)) : RANKS - 1) != pass) continue;   /* plugins, the switches, then the rest */
         char e[160];
         if (!settings_set(k, v, e, sizeof e)) applied++;

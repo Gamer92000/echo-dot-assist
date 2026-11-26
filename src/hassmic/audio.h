@@ -75,9 +75,12 @@ int       voip_open(unsigned rate, unsigned channels);
  * front end is in call mode (a Voip stream open; AFE.cfg: VoIP echo canceller, residual echo suppressor, noise
  * reduction, comfort noise, AGC to -22 dBFS, a presence EQ, a limiter; no beamformer) and the bare mic otherwise
  * (2026-11-13, donut: speech -20 dBFS against -43 in its pauses, where micAsr had -48 and -65; little left over 4 kHz).
- * 16 kHz mono s16 in 50 ms blocks.  callmic_present: the backend has one (Android's HAL has no such stream: 0).
- * callmic_read: bytes, 0 nothing yet, -1 the stream is gone */
+ * 16 kHz mono s16 in 50 ms blocks.  callmic_present: the backend has one (board.call_mic; Android's: its HAL's call
+ * pipeline as stock's calls record it).  callmic_read: bytes, 0 nothing yet, -1 the stream is gone */
 int       callmic_present(void);
+/* the echo estimate's cap on that path (call.c), dB under what plays (board.call_echo_cap_db: measured, -30 on the
+ * Dots); 0: none, the estimate learns up to 0 dB as on micAsr */
+float     callmic_echo_cap(void);
 int       callmic_open(void);
 int       callmic_read(const void **data);
 void      callmic_close(void);

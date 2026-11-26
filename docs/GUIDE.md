@@ -403,13 +403,15 @@ Calls are refused with do not disturb on, with the microphones off, or with anot
 Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
 Assistant in between.
 
-**Your side's sound.** On the Echo Dot 3 and Echo Dot 2 a call sends what Amazon's own calls sent: the front end's
-call processing, with noise reduction, an even level and an echo canceller made for calls. It sounds natural and
-steady, a little duller than the assistant's stream (little over 4 kHz). "Call microphone" (Features, under Drop In)
-switches back to the assistant's stream, brighter and with more of the room. Should the call microphone stop during a
-call, the assistant's takes over at once. The Echo 2 and the Echo Dot 5 send the assistant's stream for now (they have
-the call processing too, but it has not been tried on them yet); the Echo Shows and the Echo Input have only the
-assistant's.
+**Your side's sound.** Every Echo sends what Amazon's own calls sent: the front end's call processing, with noise
+reduction, an even level and an echo canceller made for calls. It sounds natural and steady, a little duller than the
+assistant's stream (little over 4 kHz), and it carries across a room; there is no setting for it. The Echo Shows and
+the Echo Input do it as their own calls did (Android's call mode, the call path of Amazon's front end inside the audio
+system, the wake word recorded beside it for the call). Should the call processing stop during a call, the assistant's stream
+takes over at once. Measured on the Echo Dot 2, 3 and 5; run on the Echo Show 5; on the Echo 2, Echo Show 5 2nd gen,
+Echo Show 8 and Echo Input from their firmware, not tried yet. At the end of every call the log says what went to the
+other side (`call: sent ...`: which microphone, how much of the call this side talked, at what level in and out, the
+gain, and how much went out without being turned down).
 
 **Echo.** The Echo puts Amazon's audio front end into its call mode, whose echo canceller works on the other side's
 voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
@@ -429,8 +431,7 @@ Bluetooth speaker) as read from their firmware, not tried on them yet ([docs/re-
   calls here whenever it is connected.
 - **A call comes in**: the Echo rings with its call animation (the phone rings too). The action button or
   "<wake word>, answer" (Drop In's words, "Answering by voice"; no setting needed here) answers, and
-  the call talks through the Echo's speaker and its call microphone, with Amazon's echo cancelling for calls ("Call
-  microphone" under Drop In). Those words answer in any request while it rings, a question Home Assistant asks back
+  the call talks through the Echo's speaker and Amazon's call processing (above). Those words answer in any request while it rings, a question Home Assistant asks back
   too: an "accept" meant for it answers the phone instead. The action button, "<wake word>, stop" or "hang up" end it.
 - **Where a call talks is the phone's choice**, as with a car kit: a call answered on the phone talks on the Echo when
   the phone sends its audio over Bluetooth (most do for a connected hands-free device), and the phone's audio picker
@@ -449,6 +450,10 @@ Bluetooth speaker) as read from their firmware, not tried on them yet ([docs/re-
   waiting call you do not answer stops when the caller gives up (or answer or reject it on the phone).
 - **Only for calls**: the Echo's microphone goes to the phone only while the phone has a call (or one dialled or
   answered here); an audio link the phone opens without one (its voice assistant, an app's) is refused.
+- **One phone at a time**: the first device that connects for calls has the Echo's calls. A phone takes that place
+  from a device that is no phone and has no call (an Android TV box paired for music connects for calls too, and
+  most have no setting against it). Another phone waits and gets the place when the first disconnects; a device
+  that is no phone is turned away until it connects again.
 - **Do not disturb** and the microphones off: the Echo does not ring, the phone does; "Phone call" still says
   `ringing`. One call at a time on the Echo: during a Drop In a phone's call stays on the phone.
 - **Volume**: the Echo plays a call at its call volume: the volume, or "Call volume" (Sound) with separate volumes.

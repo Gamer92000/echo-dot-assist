@@ -42,6 +42,11 @@ const struct board board = {
     /* No speaker: a 3.5 mm line out (the MT8167's own codec) and Bluetooth.  No amplifier to raise; the volume is
      * Android's music stream (audio_android.c), whose curve is not measured on this model yet: the Echo Dot 2's
      * stands in (devices/README.md: how to measure) */
+    /* Amazon's call processing (audio_android.c "a call as stock's calls have it"): stock's calls record
+     * VOICE_COMMUNICATION, which this HAL gives libasp's "Voice" pipeline (getAspPipelineType: 7 -> 1), in
+     * MODE_IN_COMMUNICATION, beside the wake word's HOTWORD (2026-11-26: the Show 5 ran it, the others by the same
+     * firmware code) */
+    .call_mic = 1,
     .volume_curve = board_vol_dot2,
     /* phone calls (docs/re-hfp.md): donut's path, from the firmware, not run here.  The same MT8516 and MT7668, donut's
      * "bt-sco" paths in its mixer_paths.xml, its own kernel's link "2ND EXT Codec" (2ND I2S, linux_bt_sco_codec), and

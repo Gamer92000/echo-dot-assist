@@ -20,7 +20,7 @@
  * faded (PCM_FADE a frame, for PLC_FRAMES), where Opus conceals by itself.  G.711, its filter, RTP and SIP are the
  * plugin's; gate, echo suppressor, call microphone, listening mode and the Voip stream stay these.
  *
- * The call's own microphone (call_mic_source, audio.h callmic_*): on the Dots the mixer's micHfp carries Amazon's call
+ * The call's own microphone (audio.h callmic_*), always where the model has one: on the Dots the mixer's micHfp carries Amazon's call
  * pipeline once the front end is in call mode, which our Voip stream puts it in.  It already has an echo canceller and
  * residual echo suppressor of its own, noise reduction and an AGC (speech at -20 dBFS against -43 in its pauses, where
  * micAsr had -48 and -65, 2026-11-13, donut: the same take on all streams), so micgain stays out of it and the gate
@@ -98,6 +98,20 @@ enum { OPUS_APPLICATION_VOIP = 2048, OPUS_SET_BITRATE = 4002, OPUS_SET_COMPLEXIT
  * less; its AGC puts speech near -20 dBFS and the room near -43 (2026-11-13) */
 #define SUPPRESS_HFP_DB -12.0f
 #define NEAR_MIN_HFP_DB -45.0f
+/* ...and its echo canceller and residual echo suppressor took the far end out already, while its AGC brings this
+ * side's voice up to the far end's playback level: speech at -10..-30 dBFS against playback at -6..-10 (a Dot 5 with a
+ * phone, 2026-11-26, issue #233).  Measured as micAsr's is, every reply's first frames counted as echo (DOUBLE_TALK_N
+ * of them each time), the echo estimate rose to its 0 dB cap within seconds and stayed, and no reply passed as double
+ * talk again: what this side said within 1 s of the far end went out at full level 7..36 % of the time, within 2.5 s
+ * 68..86 % (the hold falling 20 dB/s).  So on micHfp the estimate stops callmic_echo_cap() under what plays (the
+ * board's call_echo_cap_db, -30 where measured: Amazon's canceller left the Dot 2's echo 15 dB under the bare mic's, its
+ * RES below the room, PLAN.md), double talk passes
+ * after DOUBLE_TALK_N_HFP frames and the hold falls FAR_FALL_HFP a frame */
+/* ...not before the far end has played HFP_WARMUP_MS on micHfp, while Amazon's canceller still converges and leaves
+ * more of the echo: the estimate learns up to 0 dB then, and is held to the cap after */
+#define HFP_WARMUP_MS 2000
+#define DOUBLE_TALK_N_HFP 2
+#define FAR_FALL_HFP 1.0f
 /* micHfp silent this long (its blocks come every 50 ms): micAsr fills in.  A gap this long plays as the far end's loss
  * concealment (PLC_FRAMES) and a moment of silence; the two sources swapping restarts the encoder and the gate */
 #define HFP_STALE_MS 250
@@ -144,10 +158,19 @@ static long long resync_said; static unsigned resync_unsaid, resync_calls;
 static struct { long long t; float db; } ref[REF_N];
 static unsigned ref_n;
 static float far_floor;                 /* the quietest the far end has played lately (ml): drops at once, rises 1.5 dB/s */
-static atomic_int use_hfp = 1;          /* call_mic_source */
 static atomic_int src_hfp;              /* the call running now sends micHfp (callmic_thread), not micAsr */
 static atomic_int voip_gen = -1;        /* the call whose Voip stream is open (call mode on): the playout's */
 static atomic_llong hfp_at;             /* when callmic_thread last had a block of micHfp (now_ms) */
+/* What went to the other side, for the line at the call's end (issue #233: "quiet" from across the room, and the log
+ * said nothing of the microphone).  The sender's, read by call_end: a lock of its own, a leaf (call_end runs under
+ * dropin.c's dl and the sender's send takes it: tx_mu must not be taken there) */
+static pthread_mutex_t sl = PTHREAD_MUTEX_INITIALIZER;
+static struct txstat {
+    int gen; unsigned n, hfp, own, near, open, far;     /* frames: all, of micHfp, our own sounds, this side talked,
+                                                           sent unducked, the far end talked */
+    double near_pow, sent_pow;                          /* this side's frames as they came in and as they went out */
+    float gain;                                         /* micgain's at the end (micAsr) */
+} tx;
 
 static long long now_ms(void)
 {
@@ -182,11 +205,6 @@ void call_release(int who)
 
 int call_claimed(void) { return atomic_load(&claimed); }
 
-int call_mic_source(int set)
-{
-    if (set >= 0) atomic_store(&use_hfp, set != 0);
-    return atomic_load(&use_hfp);
-}
 
 
 static int call_gen_is(int gen)
@@ -211,13 +229,27 @@ int call_begin(int who, int codec, void (*send)(const uint8_t *, size_t, uint32_
     return gen;
 }
 
+static float pow_db(double p, unsigned n) { return n ? (float)(10 * log10(p / n + 1e-10)) : -100; }
+
 void call_end(int gen)
 {
-    unsigned resyncs = 0;
+    unsigned resyncs = 0; int was = 0;
     pthread_mutex_lock(&ml);
-    if (m.live && m.gen == gen) { m.live = 0; m.gen++; m.send = NULL; pthread_cond_broadcast(&live_cond); resyncs = resync_calls; }
+    if (m.live && m.gen == gen) { m.live = 0; m.gen++; m.send = NULL; pthread_cond_broadcast(&live_cond); resyncs = resync_calls; was = 1; }
     pthread_mutex_unlock(&ml);
     if (resyncs > 1) fprintf(stderr, "call: the far side's frames were numbered anew %u times in this call\n", resyncs);
+    if (!was) return;
+    /* What the other side got: of which microphone, how much of it this side's voice (by the gate: NEAR_DB over the
+     * room and NEAR_MIN_DB), at what level as it came in and as it went out, and how much went out unducked */
+    pthread_mutex_lock(&sl);
+    struct txstat t = tx;
+    pthread_mutex_unlock(&sl);
+    if (t.gen != gen || !t.n) return;
+    char g[32] = "", lv[64] = "";
+    if (t.hfp < t.n) snprintf(g, sizeof g, ", gain %+.1f dB", t.gain);
+    if (t.near) snprintf(lv, sizeof lv, " (%.1f dBFS in, %.1f out%s)", pow_db(t.near_pow, t.near), pow_db(t.sent_pow, t.near), g);
+    fprintf(stderr, "call: sent %u frames (%u s), %u%% of micHfp; this side talked in %u%%%s, the other side in %u%%; "
+            "sent unducked %u%%\n", t.n, t.n / 50, t.hfp * 100 / t.n, t.near * 100 / t.n, lv, t.far * 100 / t.n, t.open * 100 / t.n);
 }
 
 int call_live(void)
@@ -285,6 +317,8 @@ static float far_hold;                  /* what we play, held: falls FAR_FALL dB
 static float floor_db;                  /* the room in micAsr */
 static long long near_until;            /* this side talked until then (+ LISTEN_HANG_MS) */
 static int listen_on;                   /* what we last asked of core_call_listen */
+static int hfp_warm;                    /* frames of this call's micHfp while the far end played (HFP_WARMUP_MS of them:
+                                           Amazon's canceller converges on the far end's audio, not on the clock) */
 static long long listen_at;
 static int16_t mic[FRAME]; static size_t mic_n; static int mic_gen = -1;   /* the capture thread's: a frame filling, of which call */
 
@@ -335,10 +369,15 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
     uint32_t seq = m.tx_seq++;
     pthread_mutex_unlock(&ml);
 
-    /* A new call or another source (micHfp stalled or back, call_mic switched): a fresh encoder, gain and suppressor.
+    /* A new call or another source (micHfp stalled or back): a fresh encoder, gain and suppressor.
      * Listening mode is the front end's, told to the core: kept across a swap, or a side that talked when micHfp stalled
      * left it on for the rest of the call (the core hears of "off" only on a change of want) */
-    if (enc_gen != gen) { near_until = 0; listen_on = 0; listen_at = 0; }    /* the core cleared it as the last call ended */
+    if (enc_gen != gen) {                                /* the core cleared it as the last call ended */
+        near_until = 0; listen_on = 0; listen_at = 0;
+        pthread_mutex_lock(&sl); memset(&tx, 0, sizeof tx); tx.gen = gen; pthread_mutex_unlock(&sl);
+        /* micHfp says so itself once it opens (callmic_thread), which takes a moment: until then micAsr goes */
+        if (!hfp && !callmic_present()) fprintf(stderr, "call: the assistant's microphone (micAsr) through the call's gain and gate\n");
+    }
     if (enc_gen != gen || enc_hfp != hfp) {
         int e = 0;
         if (enc) { opus_encoder_destroy(enc); enc = NULL; }
@@ -351,24 +390,35 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
         }
         micgain_init(&gain, MICGAIN_LEVEL); micgain_start(&gain, 1);
         es_c = -30; es_g = 1; dt_n = 0; far_hold = -100; floor_db = hfp ? -40 : -70;
+        if (hfp) hfp_warm = 0;                        /* (a swap back to micHfp after a stall: its warm-up again) */
         enc_gen = gen; enc_hfp = hfp;
     }
     int16_t f[FRAME];
     memcpy(f, pcm, sizeof f);
     /* echo suppression: the far end talks and the mic is not clearly louder than its echo has been */
     float lv = level_db(f, FRAME), target = 1; long long now = now_ms(); int farend, near;
-    far_hold = far > far_hold - FAR_FALL ? far : far_hold - FAR_FALL;
+    /* the cap only where it was measured (callmic_echo_cap: the Dots); elsewhere the estimate learns as micAsr's does,
+     * which ducks a quick reply's start but never lets an echo the model's canceller leaves through */
+    float cap = hfp ? callmic_echo_cap() : 0;
+    /* the three go together: a faster fall and a shorter wait for double talk only where the cap was measured too
+     * (an unmeasured canceller's tail stays held as micAsr's is) */
+    int tuned = cap < 0 && hfp_warm >= HFP_WARMUP_MS / 20;     /* (all three wait for the canceller's warm-up) */
+    float fall = tuned ? FAR_FALL_HFP : FAR_FALL, es_max = tuned ? cap : 0;
+    if (es_c > es_max) es_c = es_max;
+    int dt_need = tuned ? DOUBLE_TALK_N_HFP : DOUBLE_TALK_N;
+    far_hold = far > far_hold - fall ? far : far_hold - fall;
     farend = far_voice(far_hold, ffloor);
+    if (hfp && farend && hfp_warm < HFP_WARMUP_MS / 20) hfp_warm++;
     int over = farend && lv >= far_hold + es_c + DOUBLE_TALK_DB;
     dt_n = over ? dt_n + 1 : 0;
-    if (farend && !own && dt_n < DOUBLE_TALK_N) {       /* echo, as far as we can tell (not our own sounds): its peak */
+    if (farend && !own && dt_n < dt_need) {             /* echo, as far as we can tell (not our own sounds): its peak */
         float x = lv - far_hold;
         es_c = x > es_c ? x : es_c - 0.04f;
         if (es_c < -60) es_c = -60;
-        if (es_c > 0) es_c = 0;
+        if (es_c > es_max) es_c = es_max;
     }
     floor_db = lv < floor_db ? (lv > -90 ? lv : -90) : floor_db + 0.03f;     /* drops at once, rises 1.5 dB/s */
-    near = !own && lv > floor_db + NEAR_DB && lv > (hfp ? NEAR_MIN_HFP_DB : NEAR_MIN_DB) && (!farend || dt_n >= DOUBLE_TALK_N);
+    near = !own && lv > floor_db + NEAR_DB && lv > (hfp ? NEAR_MIN_HFP_DB : NEAR_MIN_DB) && (!farend || dt_n >= dt_need);
     /* A gate: open while this side talks (and LISTEN_HANG_MS after, unless the far end plays), else ducked.  Ducked only
      * while the far end played (the first try), the gain lifted the room in its pauses from -72 to -48 dBFS while the
      * rest went out at -70: hiss that came and went with every sentence of the other side (2026-10-08) */
@@ -381,6 +431,15 @@ static void send_frame_locked(const int16_t *pcm, int own, int hfp)
     float step = (target - es_g) / FRAME;              /* within a frame: a word's onset is not cut */
     for (int i = 0; i < FRAME; i++) { if ((step < 0 && es_g > target) || (step > 0 && es_g < target)) es_g += step; f[i] = (int16_t)(f[i] * es_g); }
     if (near) near_until = now + LISTEN_HANG_MS;
+    {   float sent = level_db(f, FRAME);
+        pthread_mutex_lock(&sl);
+        if (tx.gen == gen) {
+            tx.n++; tx.hfp += hfp; tx.own += own; tx.far += farend; tx.open += !own && target >= 1;
+            if (near) { tx.near++; tx.near_pow += pow(10, lv / 10); tx.sent_pow += pow(10, sent / 10); }
+            if (!hfp) tx.gain = gain.gain_db;
+        }
+        pthread_mutex_unlock(&sl);
+    }
     int want = now < near_until;
     if (want != listen_on && now - listen_at >= 250) { listen_on = want; listen_at = now; core_call_listen(want); }
     /* HASSMIC_DROPIN_TRACE=<file>: the gate's inputs and decisions per frame, for tuning on a device (export it in
@@ -428,7 +487,7 @@ static void *callmic_thread(void *arg)
         while (!m.live) pthread_cond_wait(&live_cond, &ml);
         int gen = m.gen;
         pthread_mutex_unlock(&ml);
-        if (!atomic_load(&use_hfp) || !callmic_present()) { wait_call_over(gen); continue; }
+        if (!callmic_present()) { wait_call_over(gen); continue; }
         long long t0 = now_ms();
         while (atomic_load(&voip_gen) != gen && call_gen_is(gen) && now_ms() - t0 < 1500) usleep(10000);
         if (!call_gen_is(gen)) continue;
@@ -441,7 +500,6 @@ static void *callmic_thread(void *arg)
         fprintf(stderr, "call: the call pipeline's microphone (micHfp)\n");
         int16_t f[FRAME]; size_t fn = 0; int empty = 0; const char *why = NULL;
         while (call_gen_is(gen)) {
-            if (!atomic_load(&use_hfp)) { why = "switched to the assistant's"; break; }
             /* the Voip stream failed (the playout closed it): call mode off, micHfp the bare mic again on donut, and
              * without our gain.  The playout also clears voip_gen as a call ends: not this, then */
             if (atomic_load(&voip_gen) != gen) { if (call_gen_is(gen)) why = "call mode ended"; break; }
