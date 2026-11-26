@@ -12,6 +12,9 @@ What changed for people using the Echo, newest first. Details and measurements a
   it off.
 - **The Wi-Fi row (System) shows the access point** the Echo is on, its band and signal, and the last move between
   access points. Every move is in the log too.
+- **Phone calls and plugins' calls have sound without Drop In** (issue #239). Where Drop In did not run (Wyoming, Home
+  Assistant's wake word, wake word arbitration off), a phone call over Bluetooth or a plugin's call connected but was
+  silent both ways.
 
 ## 2026-11-25 — Phone calls over Bluetooth
 

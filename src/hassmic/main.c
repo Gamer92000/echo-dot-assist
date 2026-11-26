@@ -4571,6 +4571,10 @@ int main(int argc, char **argv)
     if (arb_running() && duck_start()) fprintf(stderr, "duck: no thread, the other Echos' runs do not duck the music here\n");
     if (arb_running() && ringstop_start()) fprintf(stderr, "ringstop: no thread, a stop here ends no ring elsewhere\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
+    /* Every call's audio, not Drop In's alone: a plugin's and a phone's call too, also where arbitration (and so Drop
+     * In) does not run: Wyoming, -w remote, -a 0.  Started by dropin_start only, those calls connected with no audio
+     * either way (issue #239).  Both threads sleep on a condition until a call's media begins */
+    if (call_start()) fprintf(stderr, "call: no playout thread, calls have no audio\n");
 
     pthread_t cap_t, play_t, ear_t;
     pthread_create(&cap_t, NULL, capture_thread, NULL);

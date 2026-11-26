@@ -372,7 +372,7 @@ async def until(fn, secs=5):
     return fn()
 
 
-def echo(state, config, voip, mic, extra=None):
+def echo(state, config, voip, mic, extra=None, arb=ARB):
     with open(os.path.join(state, "config"), "w") as f: f.write(config)
     key = base64.b64encode(os.urandom(32)).decode()
     with open(os.path.join(state, "api_key"), "w") as f: f.write(key + "\n")
@@ -384,7 +384,7 @@ def echo(state, config, voip, mic, extra=None):
                HASSMIC_ADB_OPEN=os.path.join(state, "adb-open"), HASSMIC_BT_DEV=ph.path, HASSMIC_SCO="hci",
                HASSMIC_VOIP=voip, HASSMIC_CALL_CAP=mic, **(extra or {}))
     proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Phone", "-L", "-z", "0", "-o", "0",
-                             "-a", str(ARB), "-W", str(WEB)], env=env, stderr=open(log, "w"))
+                             "-a", str(arb), "-W", str(WEB)], env=env, stderr=open(log, "w"))
     ph.at_seen = []
     return proc, ph, key, log
 
@@ -394,7 +394,9 @@ async def main():
     voip, mic = os.path.join(tmp, "voip.raw"), os.path.join(tmp, "mic.raw")
     with open(mic, "wb") as f:                                                    # the Echo's call microphone: 700 Hz
         f.write(struct.pack(f"<{16000 * 4}h", *(int(8000 * math.sin(2 * math.pi * 700 * i / 16000)) for i in range(16000 * 4))))
-    proc, ph, key, log = echo(state, "bluetooth_calls=on\n", voip, mic)
+    # without arbitration, so without Drop In: call.c's playout and call microphone are no Drop In's (issue #239: they
+    # were started by dropin_start alone, and a call where it did not run had no audio either way)
+    proc, ph, key, log = echo(state, "bluetooth_calls=on\n", voip, mic, arb=0)
     try:
         check(wait(lambda: any(o == 0x0c1a and p[:1] == b"\x02" for o, p in list(ph.cmds.queue)), 10), "page scan on: a paired device may connect")
         cod = wait(lambda: next((p for o, p in list(ph.cmds.queue) if o == 0x0c24), None), 3)
