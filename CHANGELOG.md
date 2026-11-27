@@ -2,6 +2,25 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-27 — Echo Show: cards on the screen
+
+- **Cards on the Echo Show's screen: what a voice request was about, with its controls, and cards from automations.**
+  "Turn on the kitchen light" shows the kitchen's light, now on, with its switch and brightness, and the room's other
+  devices with theirs; "what's the weather" shows the weather now and the next days; the card is on the Echo that was
+  asked, while it answers and a while after. Automations put cards on the Shows too, written as Home Assistant's own
+  dashboard cards (entities, tile, glance, weather-forecast, markdown, picture-entity, todo-list, calendar...): the
+  doorbell's camera, live; "the washer is done" with a "Remind me" button; the day's calendar. A card follows the house
+  while it shows and every word on it is Home Assistant's; rows take a tap only where they should (never a lock or an
+  alarm); buttons work like a phone notification's actions (`hassmic_cards_action`). An automation's card steps aside
+  for a voice request and comes back, stays through an announcement, and a ringing timer comes before it. Home
+  Assistant's side, `ha/custom_components/hassmic_cards` (copy it into `custom_components`, restart, add "Echo Show cards"
+  in Settings → Devices & services): cards built in Home Assistant's card editor on a dashboard of their own and shown
+  by name, a "Card button" event entity, a device trigger, a "Card on screen" sensor, a "Voice cards" switch and a
+  notify entity per Show, "Show a message" for the automation editor, buttons that snooze a card, refused cards in the
+  logbook, diagnostics, and blueprints for the doorbell's camera, an appliance done and a question answered with a card. "Cards on
+  screen" on the Screen page, on by default. [Cards on the screen](docs/GUIDE.md#cards-on-the-screen),
+  [docs/cards.md](docs/cards.md).
+
 ## 2026-11-26 — Calls: Amazon's call processing on every Echo, quick replies, the phone before a TV box
 
 - **A phone gets the calls when a TV box connected first** (issue #233). An Android TV box paired for music also

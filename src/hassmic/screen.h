@@ -72,4 +72,10 @@ int  screen_motion(void);
  * screen" leaves it dark, a person's choice; a touch, the power button or a pattern's wake ends it.  Kept in memory
  * only: a UI that ends takes it along (none left to say "slept 0"), and so does a restart of hassmic (the docs say so) */
 int  screen_slept(void);
+
+/* A card (cards.c, the UI's card.c): its lines for the UI as cards.c made them ("cb ... ce", or "cx" for none),
+ * kept and sent whenever they change and to a new UI.  Any thread.  screen_card_hold: the card keeps the screen on (a
+ * card until tapped away only for a while: cards.c) */
+void screen_card(const char *lines);
+void screen_card_hold(int on);
 #endif

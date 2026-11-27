@@ -350,6 +350,7 @@ const struct ui_image *img_get(struct scene *s, const char *key, int px)
 
 void scene_image(struct scene *s, const char *key, int px, uint32_t *pixels, int w, int h)
 {
+    if (card_image(s, key, pixels, w, h)) return;                /* a card's picture: the card keeps it */
     for (int i = 0; i < NIMG; i++) {
         struct ui_img *e = &s->img[i];
         if (e->state == IMG_FREE || e->px != px || !eq(e->key, key)) continue;

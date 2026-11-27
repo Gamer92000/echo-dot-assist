@@ -84,9 +84,9 @@ static void *run(void *arg)
     int rc = http_run(&r, err, sizeof err);
     pthread_mutex_lock(&x->m); int began = x->state == 1; pthread_mutex_unlock(&x->m);
     if (x->code)                                    /* (an address with its token: logread.h) */
-        log_private("media: %s: HTTP %d", x->url, x->code);
+        log_private("media: %.*s%s: HTTP %d", url_shown(x->url), x->url, x->url[url_shown(x->url)] ? "..." : "", x->code);
     else if (rc && !(rc == HTTP_ENDED && began))    /* ended by the reader once the body came: it stopped it */
-        log_private("media: %s: %s%s", x->url, err,
+        log_private("media: %.*s%s: %s%s", url_shown(x->url), x->url, x->url[url_shown(x->url)] ? "..." : "", err,
                 http_cert_refused(err) ? " (the settings page's \"Check HTTPS certificates\" off accepts it)" : "");
     set_state(x, -1);
     close(x->wfd);                      /* the reader's EOF */
@@ -98,7 +98,7 @@ int https_open(const char *url)
 {
     int sv[2]; struct xfer *x = calloc(1, sizeof *x); pthread_t t; pthread_attr_t at;
     if (!x) return -1;
-    if (strlen(url) >= sizeof x->url) { log_private("media: an address too long: %.200s...", url); free(x); return -1; }
+    if (strlen(url) >= sizeof x->url) { log_private("media: an address too long: %.*s...", url_shown(url) < 200 ? url_shown(url) : 200, url); free(x); return -1; }
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sv)) { free(x); return -1; }
     pthread_mutex_init(&x->m, NULL); pthread_cond_init(&x->c, NULL);
     x->refs = 2; x->wfd = sv[1];

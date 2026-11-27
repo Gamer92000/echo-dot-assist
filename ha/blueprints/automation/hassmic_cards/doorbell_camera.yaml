@@ -1,0 +1,110 @@
+blueprint:
+  name: Echo Show cards — doorbell camera
+  description: >-
+    When the doorbell rings, the camera's picture on the Echo Shows (it moves while the card shows), and optionally a
+    chime and a few words on voice satellites. The doorbell can be an event entity (a doorbell's ring), a binary sensor
+    (on) or a button.
+  domain: automation
+  source_url: https://github.com/Gamer92000/echo-dot-assist/blob/main/ha/blueprints/automation/hassmic_cards/doorbell_camera.yaml
+  input:
+    doorbell:
+      name: Doorbell
+      selector:
+        entity:
+          domain: [event, binary_sensor, input_button, button]
+    camera:
+      name: Camera
+      selector:
+        entity:
+          domain: camera
+    shows:
+      name: Echo Shows
+      description: "Which Echo Shows (none chosen: every one)"
+      default: {}
+      selector:
+        target:
+          device:
+            integration: hassmic_cards
+    card_id:
+      name: Card id (optional)
+      description: "The card's id, for an automation that clears it (empty: doorbell_ and the camera's name)"
+      default: ""
+      selector:
+        text:
+    time_format:
+      name: Time format
+      description: "The subtitle's ring time (strftime: %H:%M is 24-hour)"
+      default: "%-I:%M %p"
+      selector:
+        text:
+    title:
+      name: Title
+      default: Front door
+      selector:
+        text:
+    message:
+      name: Words beside the picture
+      default: Someone is at the door
+      selector:
+        text:
+    timeout:
+      name: Seconds on screen
+      default: 60
+      selector:
+        number: {min: 10, max: 600, unit_of_measurement: s}
+    satellites:
+      name: Say it on (optional)
+      default: []
+      selector:
+        entity:
+          domain: assist_satellite
+          multiple: true
+    chime:
+      name: Chime before the words (optional; a URL or /local/...)
+      default: ""
+      selector:
+        text:
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input doorbell
+    not_from: [unavailable]
+
+variables:
+  satellites: !input satellites
+  chime: !input chime
+  message: !input message
+  camera: !input camera
+  card_id: !input card_id
+  time_format: !input time_format
+
+conditions:
+  # a ring now: a binary sensor's on, an event's or a button's new time (not the one a restart restores)
+  - "{{ trigger.to_state.domain != 'binary_sensor' or trigger.to_state.state == 'on' }}"
+  - "{{ trigger.to_state.domain == 'binary_sensor' or as_timestamp(trigger.to_state.state, 0) > as_timestamp(now()) - 15 }}"
+
+actions:
+  - action: hassmic_cards.show
+    continue_on_error: true
+    target: !input shows
+    data:
+      id: "{{ card_id or 'doorbell_' ~ camera.split('.')[1] }}"
+      title: !input title
+      subtitle: "{{ now().strftime(time_format) }}"
+      message: !input message
+      timeout: !input timeout
+      card:
+        type: picture-entity
+        entity: !input camera
+        camera_view: live
+  - if: "{{ satellites | count > 0 }}"
+    then:
+      - action: assist_satellite.announce
+        continue_on_error: true
+        target:
+          entity_id: "{{ satellites }}"
+        data: "{{ {'message': message, 'preannounce_media_id': chime} if chime else {'message': message} }}"
+  - delay: 10      # (rings within this are the same visitor)

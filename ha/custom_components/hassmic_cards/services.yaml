@@ -1,0 +1,153 @@
+show:
+  target:
+    device:
+      integration: hassmic_cards
+    entity:
+      integration: hassmic_cards
+  fields:
+    card:
+      required: true
+      example: "type: entities\nentities: [light.kitchen]"
+      selector:
+        object:
+    variables:
+      example: "minutes: 52"
+      selector:
+        object:
+    id:
+      example: laundry
+      selector:
+        text:
+    title:
+      selector:
+        text:
+    subtitle:
+      selector:
+        text:
+    message:
+      selector:
+        text:
+    timeout:
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 86400
+          unit_of_measurement: s
+          mode: box
+    actions:
+      example: "- action: LAUNDRY_LATER\n  title: Remind me\n  snooze: 15\n- action: LAUNDRY_DONE\n  title: Done\n  perform_action: script.laundry_done"
+      selector:
+        object:
+    advanced:
+      collapsed: true
+      fields:
+        scope:
+          default: notice
+          selector:
+            select:
+              translation_key: scope
+              options: ["notice", "request"]
+        conversation_id:
+          selector:
+            text:
+show_message:
+  target:
+    device:
+      integration: hassmic_cards
+    entity:
+      integration: hassmic_cards
+  fields:
+    title:
+      example: The washer is done
+      selector:
+        text:
+    message:
+      example: It ran 52 minutes
+      selector:
+        text:
+          multiline: true
+    subtitle:
+      selector:
+        text:
+    camera:
+      selector:
+        entity:
+          domain: camera
+    live:
+      default: true
+      selector:
+        boolean:
+    image:
+      example: /local/washer.png
+      selector:
+        text:
+    id:
+      example: laundry
+      selector:
+        text:
+    timeout:
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 86400
+          unit_of_measurement: s
+          mode: box
+    buttons:
+      collapsed: true
+      fields:
+        button_1:
+          example: Remind me
+          selector:
+            text:
+        button_1_action:
+          example: LAUNDRY_LATER
+          selector:
+            text:
+        button_1_snooze:
+          selector:
+            number:
+              min: 0
+              max: 1440
+              unit_of_measurement: min
+              mode: box
+        button_2:
+          example: Done
+          selector:
+            text:
+        button_2_action:
+          example: LAUNDRY_DONE
+          selector:
+            text:
+        button_2_snooze:
+          selector:
+            number:
+              min: 0
+              max: 1440
+              unit_of_measurement: min
+              mode: box
+        button_3:
+          selector:
+            text:
+        button_3_action:
+          selector:
+            text:
+        button_3_snooze:
+          selector:
+            number:
+              min: 0
+              max: 1440
+              unit_of_measurement: min
+              mode: box
+clear:
+  target:
+    device:
+      integration: hassmic_cards
+    entity:
+      integration: hassmic_cards
+  fields:
+    id:
+      example: laundry
+      selector:
+        text:

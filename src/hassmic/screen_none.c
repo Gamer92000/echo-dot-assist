@@ -24,6 +24,8 @@ void screen_words(int what, const char *text) { (void)what; (void)text; }
 int  screen_words_on(int set) { (void)set; return -1; }
 int  screen_words_hold(int set) { (void)set; return -1; }
 int  screen_timers_on(int set) { (void)set; return -1; }
+void screen_card(const char *lines) { (void)lines; }
+void screen_card_hold(int on) { (void)on; }
 void screen_timers_changed(void) {}
 int  screen_keep_on(void) { return 0; }
 int  screen_clock(int set) { (void)set; return -1; }
