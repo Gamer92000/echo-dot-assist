@@ -19,8 +19,8 @@ static wake_cb callback;
 static uint64_t sample_index[WAKE_SLOTS];
 static int opened[WAKE_SLOTS];
 
-/* Client properties the model's thresholds depend on.  Kept here so that they can be pushed again after a session end,
- * in case the engine forgets them with the audio.  Set from the playback, alarm and Sendspin threads: under props_lock. */
+/* Client properties the model's thresholds depend on.  Kept here so that a decoder opened later gets them too.  Set
+ * from the playback, alarm and Sendspin threads: under props_lock. */
 static PryonClientProperty props[8];
 static unsigned nprops;
 static pthread_mutex_t props_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -114,12 +114,6 @@ static void pryon_feed(int slot, const int16_t *samples, size_t count)
     sample_index[slot] += count;
 }
 
-static void pryon_reset(int slot)
-{
-    PryonDecoder_SessionEnd(decoder[slot]);
-    pthread_mutex_lock(&props_lock); push_props(slot); pthread_mutex_unlock(&props_lock);
-}
-
 static void pryon_property(const char *name, int value)
 {
     unsigned i;
@@ -143,4 +137,8 @@ static void pryon_close(int slot)
 
 const char *wake_attributes(void) { return PryonApi_GetAttributes(); }
 
-const struct wake_engine wake_vendor = { pryon_open, pryon_feed, pryon_reset, pryon_property, pryon_close, pryon_afe_times };
+/* No reset: PryonDecoder_SessionEnd is for a gap in the audio (docs/re-pryon.md), and by what an Echo Dot 2 did with
+ * and without it, it drops what the decoder has heard.  There is no gap at a run's end, the engine hears on through
+ * the reply (barge-in): a wake word begun before the reply's last sound was lost with it (issue #218).  The models
+ * leave their awake state, where they report STOP, by themselves (op.cfg.json: 175 frames after the wake word). */
+const struct wake_engine wake_vendor = { pryon_open, pryon_feed, NULL, pryon_property, pryon_close, pryon_afe_times };

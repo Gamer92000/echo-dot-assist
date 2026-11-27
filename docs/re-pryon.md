@@ -23,6 +23,7 @@ Disassembly (git-ignored, in `firmware/donut/re/`): `re/libpryon_api.asm` (0x600
 5. `PryonDecoder_NewSpotterAudioDecoder(decoderId, modelSetId, "pryon", fmt /* by value */, "{}")` — `wwm::Pryon::createDecoder` `0x5658c`. The wrapper at `0x6033d4` copies 0x90 bytes starting at the `r3` slot and reads the fifth argument at `[r7+0x98]`, which confirms by-value passing and the struct size. Stock code renames the calling thread to `PryonT` around this call, so the decoder thread inherits that name.
 6. Loop: `PryonDecoder_PushAudioEventSamples(decoderId, sampleIndex, samples, sampleCount)` — `wwm::PryonDecoder::pushAudio(unsigned long long, short const*, unsigned int)` `0x50034`. Inner `0x6bb0c4` computes `bytes = sampleCount << 1` (`0x6bb110`), so the count is in samples.
 7. On a gap in audio: `PryonDecoder_SessionEnd(decoderId)` — `wwm::PryonDecoder::endContiguousAudio` `0x50132`.
+   hassmic does not call it (2026-11-23, issue #218): it did at a run's end, where the audio has no gap.
 8. Teardown: `PryonDecoder_Delete(decoderId)` (`0x4ff88`), `PryonModelSet_Delete(modelSetId)`.
 
 `libAmazonKWD.so` (the older AVS-SDK-style detector) uses `PryonDecoder_PushAudioEvent(decoderId, PryonAudioEvent*)` instead. That event is a typed/JSON object (`samples`, `samples_with_annotation`, `wakeword_indices`, `cms_json`, `lookahead_metadata_blob`, `utterance_boundary` — strings at `0x6bc5ba…`). Not needed; `PushAudioEventSamples` is simpler. It also calls `PryonDecoder_BacklogWait(decoderId, -1)` (`0xafaa`).
@@ -43,7 +44,8 @@ word is 1, rejects a null or empty name, reads the int64 at property+8, stores n
 stamps the batch with the decoder's own sample index (`ldrexd` at decoder+0x40), so no index is passed. Verified under qemu
 2026-09-22 with `pryon_test -p AlarmState=1`: return 0, the KWS log line switches from `active_threshold=0.751` to `0.452`.
 hassmic sets `AlarmState` while a timer rings, `AudioPlayerState` while a Sendspin stream runs, `audio_playback` for either or a
-reply being spoken, and pushes them again after every `PryonDecoder_SessionEnd`.
+reply being spoken. It no longer ends the session (step 7) at a run's end (2026-11-23, issue #218): that dropped a wake
+word begun while the reply still played.
 
 ## Result struct
 

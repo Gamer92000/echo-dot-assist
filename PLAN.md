@@ -465,12 +465,28 @@ Run in this order. Each step says what it proves.
       word and reset the engine (= back to `sleep`) when a reply was cut: "stop" was lost, or opened a prompt after an alarm.
       Now: `STOP` never starts a pipeline; it silences an alarm, cuts a reply without listening again, or drops the pipeline
       the wake word opened up to 4 s before (HA's "nothing heard" for it stays quiet); no engine reset for 3 s after the wake
-      word. 4 cases in `tests/fake_ha_esphome.py` (SIGHUP = "stop"). Pushed 2026-09-22, user: "echo stop works".
+      word (Pryon has no reset at all since 2026-11-23, issue #218). 4 cases in `tests/fake_ha_esphome.py` (SIGHUP =
+      "stop"). Pushed 2026-09-22, user: "echo stop works".
       Open: bare "stop" with a changed `op.cfg.json` (loads; synthetic test inconclusive, not tried with a voice); the models
       lower the wake word threshold through client properties `AlarmState` / `AudioPlayerState` / `audio_playback`: set since
       2026-09-22 (`PryonDecoder_PushClientEvents`, reversed in `docs/re-pryon.md`; verified under qemu: ECHO threshold 0.751 → 0.452
       with `AlarmState`; `pryon_test -p name=value`). hassmic: alarm ringing, Sendspin stream, reply playing. Pushed 2026-09-22, user: works nicely
       The `pryon WARN ... Invalid bitmask frame indices` line in `boot.log` is one per wake word in every version since 0.0.2: harmless
+- [~] A wake word begun while a reply ends was lost (issue #218, 2026-11-23). `core_pipeline_finish()` resets the
+      engines (`wake_reset()`) unless the wake word came in the last 3 s; on Pryon that was `PryonDecoder_SessionEnd`,
+      which drops the audio heard so far, while the capture thread feeds the engine through the reply. Echo Dot 2, log
+      of 16 days: 326 wake words while idle, none within 0.8 s of a run's end (a whole "Alexa" had to fit after it), 1
+      at 0.81 s, 16 at 1–2 s. Pryon has no reset any more (`wake_pryon.c`), so no path through `core_pipeline_finish()`
+      (replies, errors, cancels, a lost link, privacy) ends its session; stock ends one only on a gap in the audio
+      (`docs/re-pryon.md`). That the session end drops the audio is not from the disassembly but from that Dot 2, with a
+      first version (no `wake_reset()` in `core_pipeline_finish()` at all: the same for Pryon): 4 requests, one 0.22 s
+      after the reply (its wake word began ~0.4 s before the reply ended), no false wake; no `STOP` outside the awake
+      state without the session end (one came, 0.6 s after the wake word, while listening). This version runs there
+      since 2026-11-23, not measured yet. No PC test: the PC build has no Pryon (`wake_none.c`). microWakeWord keeps its
+      reset (the window emptied, ~1 s without detections): the same second after a run, not measured, left alone.
+      Open: a day's log for false wakes on a reply's tail (`audio_playback` lowers the threshold while it plays); other
+      models (radar's older engine); a session through many replies (before, most runs ended one); a reset where the
+      capture loses audio (`cap_read`).
 - [x] Latency wake → STT start; TTS playback glitch-free — replies start before TTS_START with streaming TTS; user verdict fine
 - [x] Nothing lost between the wake word's end and the stream (2026-10-12). Pryon accepts 116-128 ms after the keyword's
       end (`endSampleIndex` against samples fed at the callback: 6 accepts 116-128 ms, 11 type-2 results 116-144 ms, from

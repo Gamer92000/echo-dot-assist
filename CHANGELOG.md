@@ -198,6 +198,15 @@ What changed for people using the Echo, newest first. Details and measurements a
   update on the way (no Alexa app, no Wi-Fi until the install puts it there). Whether a version still unlocks is the
   unlock's XDA thread's to say.
 
+## 2026-11-23 — The wake word right after a reply
+
+- **"Alexa" said as a reply ends is heard (Amazon's wake words, every Echo; tried on an Echo Dot 2).** After most
+  requests the Echo ended the session of Amazon's wake word engine, which threw away what the engine had heard so far:
+  a wake word begun while the reply's last word still played was lost, and you had to wait a moment before the next
+  request (issue #218). The session now runs on. On the Echo Dot 2 the next request started 0.22 s after a reply;
+  before, none of 326 wake words in 16 days had come within 0.8 s of one. Wake words by microWakeWord are as they
+  were.
+
 ## 2026-11-23 — Plugins: an update that may do more asks first; room for any number of plugin features
 
 Plugins are experimental; nothing of the plugin system is released yet.
