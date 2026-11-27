@@ -51,6 +51,8 @@
  *
  * The page may come from another Echo: answers allow any origin (CORS), as the signature, not a cookie, is what counts.
  */
+#include "a2dp.h"
+#include "ble.h"
 #include "web.h"
 #include "core.h"
 #include "clock.h"
@@ -1500,6 +1502,10 @@ static void state_json(int fd, const struct req *r, const uint8_t me[32])
       jesc(zj, sizeof zj, z);            /* the countries: two capitals each or "" (clock.c cc_take) */
       n = app(o, n, cap, "},\"zone\":{\"zone\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"home\":\"%s\",\"wifi\":\"%s\",\"language\":\"%s\"",
               zj, how, cc[0], cc[1], cc[2], l); }
+    /* the Echo Wall Clock (a2dp.c): set up from this page, Home Assistant not needed */
+    { char st[120], sj[260]; a2dp_clock_status(st, sizeof st); jesc(sj, sizeof sj, st);
+      n = app(o, n, cap, "},\"wall_clock\":{\"present\":%s,\"status\":\"%s\",\"searching\":%s,\"paired\":%s",
+              ble_present() ? "true" : "false", sj, a2dp_clock_searching() ? "true" : "false", a2dp_clock_paired() ? "true" : "false"); }
     /* the timer sounds this Echo has (the stock ones where its firmware keeps them), and the length of its own */
     { static const enum sound snd[] = { SND_TIMER, SND_ALARM, SND_CUSTOM }; static const char *const nm[] = { "timer", "alarm", "custom" };
       n = app(o, n, cap, "},\"timer_sound\":{\"custom_ms\":%u,\"present\":[\"beep\"", sound_own_ms(SND_CUSTOM));
@@ -4010,6 +4016,15 @@ static void handle(int fd)
         if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
         core_identify();
         respond_sjson(fd, &r, 200, "{\"identify\":true}");
+    }
+    else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/wallclock")) {    /* body: search, stop or forget */
+        const char *b = r.body ? r.body : "";
+        if (!signed_ok(&r, 1)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); free(r.body); return; }
+        if (!ble_present()) respond_sjson(fd, &r, 409, "{\"error\":\"no Bluetooth\"}");
+        else if (!settings_on("wall_clock")) respond_sjson(fd, &r, 409, "{\"error\":\"Echo Wall Clock is off\"}");
+        else if (!strcmp(b, "search") || !strcmp(b, "stop")) { a2dp_clock_search(b[1] == 'e'); respond_sjson(fd, &r, 200, "{\"ok\":true}"); }
+        else if (!strcmp(b, "forget")) { a2dp_clock_forget(); respond_sjson(fd, &r, 200, "{\"ok\":true}"); }
+        else respond_sjson(fd, &r, 400, "{\"error\":\"search, stop or forget\"}");
     }
     else if (!strcmp(r.method, "POST") && !strcmp(r.path, "/api/note")) {         /* body: the note, empty clears it */
         char o[NOTE_MAX * 2 + 24], nt[NOTE_MAX * 2 + 8];

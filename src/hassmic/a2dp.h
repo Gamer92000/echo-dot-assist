@@ -36,4 +36,13 @@ int  a2dp_out_stay(int set);               /* off keeps the link and only plays 
                                               is paged for once the switch is on again */
 int  a2dp_out_delay(int set);              /* the speaker's latency for Sendspin in ms, -1 reads */
 void a2dp_out_status(char *buf, unsigned n);   /* "None", "Searching...", "<name>: playing" and so on */
+
+/* The Echo Wall Clock (wallclock.c draws on it): one paired with this Echo, held connected while the feature is on.
+ * Any thread. */
+void a2dp_clock_search(int on);            /* look for a clock in pairing mode (amber) for up to a minute and pair it */
+int  a2dp_clock_searching(void);
+void a2dp_clock_enable(int on);            /* the feature: connect and keep connected, or drop the link (the pairing stays) */
+void a2dp_clock_status(char *buf, unsigned n); /* "None", "Searching...", "<name>: Connected" and so on */
+int  a2dp_clock_paired(void);              /* a clock is paired here (connected or not) */
+void a2dp_clock_forget(void);              /* unpair the clock here (it keeps calling until paired elsewhere) */
 #endif

@@ -50,6 +50,7 @@ TESTS = [
     ("sounds", [PY, "tests/fake_web_sounds.py"]),
     ("improv", [PY, "tests/fake_improv.py"]),
     ("bt-proxy", [PY, "tests/fake_ha_bt_proxy.py"]),
+    ("wall-clock", [PY, "tests/fake_wall_clock.py"]),
     ("dropin", [PY, "tests/fake_ha_dropin.py"]),
     ("hfp", [PY, "tests/fake_hfp.py"]),
     ("unit", ["make", "-s", "-j4", "unit"]),

@@ -80,6 +80,7 @@
 #include <arpa/inet.h>
 #include "a2dp.h"
 #include "logread.h"
+#include "wallclock.h"
 #include "adbwifi.h"
 #include "arb.h"
 #include "dropin.h"
@@ -170,7 +171,9 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_PLUGIN = KEY_LIVE_LED + RING_LEDS_MAX, KEY_MWW_DEPRECATED,
        /* a phone's calls over Bluetooth (hfp.h) */
        KEY_PHONE_STATE, KEY_PHONE_CALLER, KEY_PHONE_DEVICE, KEY_PHONE_ANSWER, KEY_PHONE_END, KEY_PHONE_HERE, KEY_PHONE_SERVICE,
-       KEY_PHONE_WAITING, KEY_PHONE_SWITCH };
+       KEY_PHONE_WAITING, KEY_PHONE_SWITCH,
+       /* the Echo Wall Clock (a2dp.c, wallclock.c) */
+       KEY_CLOCK_SEARCH, KEY_CLOCK_STATUS };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_PAUSED = 3, MP_CMD_PLAY = 0, MP_CMD_PAUSE = 1, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 /* A music plugin is listed (plugin.h plugin_has_music, docs/plugins.md 4.7): the media player offers pause and play
  * besides, for what the plugin plays; without one the features stay what they were */
@@ -496,6 +499,10 @@ static void send_setting(int key)       /* lock held */
     case KEY_BT_OUT_STATUS:
         if (ble_present()) { PB(t, 160); char st[120]; a2dp_out_status(st, sizeof st); pb_fixed32(&t, 1, key); pb_str(&t, 2, st); send_state(TEXT_SENSOR_STATE, &t); }
         break;
+    case KEY_CLOCK_SEARCH: if (ble_present()) { pb_uint(&b, 2, a2dp_clock_searching()); send_state(SWITCH_STATE, &b); } break;
+    case KEY_CLOCK_STATUS:
+        if (ble_present()) { PB(t, 160); char st[120]; a2dp_clock_status(st, sizeof st); pb_fixed32(&t, 1, key); pb_str(&t, 2, st); send_state(TEXT_SENSOR_STATE, &t); }
+        break;
     case KEY_UPDATE: {
         PB(u, 768); struct update_state us; update_get(&us);
         pb_fixed32(&u, 1, key); pb_uint(&u, 3, us.in_progress); pb_uint(&u, 4, us.in_progress); pb_float(&u, 5, us.progress);
@@ -695,6 +702,7 @@ static int listed(int key)
     case KEY_LAST_HEARD: case KEY_LAST_REPLY: return settings_on("request_text");
     case KEY_BT_PAIRING: return ble_present() && settings_on("bluetooth_audio");
     case KEY_BT_OUT_SEARCH: case KEY_BT_OUT: case KEY_BT_OUT_STATUS: case KEY_BT_OUT_DELAY: return ble_present() && settings_on("bluetooth_speaker");
+    case KEY_CLOCK_SEARCH: case KEY_CLOCK_STATUS: return ble_present() && settings_on("wall_clock");
     case KEY_ARB_PEERS: return arb_running() && settings_on("arbitration");
     case KEY_ARB_SERVICE: return arb_running();     /* the network, which runs either way */
     case KEY_WHISPERED: return core_whisper_model() && settings_on("whisper_detection");
@@ -856,6 +864,13 @@ static void send_setting_entities(void)
         { PB(b, 192); pb_str(&b, 1, "bluetooth_speaker_delay"); pb_fixed32(&b, 2, KEY_BT_OUT_DELAY); pb_str(&b, 3, "Bluetooth speaker delay");
           pb_str(&b, 5, "mdi:timer-sand"); pb_float(&b, 6, 0); pb_float(&b, 7, 1000); pb_float(&b, 8, 10); pb_uint(&b, 10, 1);
           pb_str(&b, 11, "ms"); pb_uint(&b, 12, 2); send_msg(LIST_NUMBER, &b); }
+    }
+    /* the Echo Wall Clock: the search pairs the nearest one in pairing mode (its light pulsing orange) */
+    if (listed(KEY_CLOCK_SEARCH)) {
+        { PB(b, 160); pb_str(&b, 1, "wall_clock_search"); pb_fixed32(&b, 2, KEY_CLOCK_SEARCH); pb_str(&b, 3, "Wall clock search");
+          pb_str(&b, 5, "mdi:clock-plus-outline"); send_msg(LIST_SWITCH, &b); }
+        { PB(b, 160); pb_str(&b, 1, "wall_clock"); pb_fixed32(&b, 2, KEY_CLOCK_STATUS); pb_str(&b, 3, "Wall clock");
+          pb_str(&b, 5, "mdi:clock-outline"); send_msg(LIST_TEXT_SENSOR, &b); }
     }
     if (listed(KEY_ARB_SERVICE)) {
         /* the action other Echos hand their network key through: Home Assistant registers it as
@@ -1023,6 +1038,7 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     else if (type == SWITCH_COMMAND && key == KEY_BT_PAIRING) { a2dp_pair(on); return; }     /* its state follows through bt_changed */
     else if (type == SWITCH_COMMAND && key == KEY_BT_OUT_SEARCH && ble_present()) { a2dp_out_search(on); return; }   /* a2dp.c keeps them */
     else if (type == SWITCH_COMMAND && key == KEY_BT_OUT && ble_present()) { a2dp_out_enable(on); send_setting(key); return; }
+    else if (type == SWITCH_COMMAND && key == KEY_CLOCK_SEARCH && listed(key)) { a2dp_clock_search(on); return; }
     else if (type == NUMBER_COMMAND && key == KEY_BT_OUT_DELAY && ble_present()) { a2dp_out_delay(num < 0 ? 0 : (int)lroundf(num)); send_setting(key); return; }
     else if (type == SWITCH_COMMAND && key == KEY_ARB_JOIN && arb_running()) { arb_arbitrate(on); send_setting(key); return; }   /* arb.c keeps it */
     else if (type == SWITCH_COMMAND && key == KEY_SS_UNPAIRED && core_sendspin_port) { sendspin_unpaired(on); send_setting(key); return; }  /* sendspin.c keeps it */
@@ -1505,6 +1521,7 @@ static void bt_changed(void)
 {
     pthread_mutex_lock(&core_lock);
     send_setting(KEY_BT_PAIRING); send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS);
+    send_setting(KEY_CLOCK_SEARCH); send_setting(KEY_CLOCK_STATUS);
     pthread_mutex_unlock(&core_lock);
 }
 static void adb_changed(void) { pthread_mutex_lock(&core_lock); send_setting(KEY_ADB_WIFI); pthread_mutex_unlock(&core_lock); }
@@ -1913,6 +1930,7 @@ static void send_all_settings(void)
         for (int k = KEY_ARB_JOIN; k <= KEY_ARB_PEERS; k++) send_setting(k);
         send_setting(KEY_SS_UNPAIRED); send_setting(KEY_ADB_WIFI);
         send_setting(KEY_BT_OUT_SEARCH); send_setting(KEY_BT_OUT); send_setting(KEY_BT_OUT_STATUS); send_setting(KEY_BT_OUT_DELAY);
+        send_setting(KEY_CLOCK_SEARCH); send_setting(KEY_CLOCK_STATUS);
         for (int k = KEY_WIFI_MOTION_ON; k <= KEY_WIFI_MOTION_SENS; k++) send_setting(k);
         send_setting(KEY_UPDATE); send_setting(KEY_WHISPERED); send_setting(KEY_WAKE_ENGINE); send_setting(KEY_MWW_DEPRECATED);
         send_setting(KEY_TIMER_NAMES); send_setting(KEY_TIMER_RINGING);
@@ -1989,7 +2007,7 @@ static int handle(unsigned type, const unsigned char *p, size_t len)
         }
         if (c >= 0 && clients[c].keyed && epoch) { clock_from_ha(epoch); clock_zone_from_ha(tz); }
         if (c >= 0 && epoch && ha_time(epoch) && core_timer_next(NULL, 0, NULL, NULL)) send_setting(KEY_NEXT_TIMER);
-        if (c >= 0 && clients[c].keyed && tz[0]) screen_tz(tz);
+        if (c >= 0 && clients[c].keyed && tz[0]) { screen_tz(tz); wallclock_tz(tz); }
     } break;
     case SELECT_COMMAND: case NUMBER_COMMAND: case SWITCH_COMMAND: if (!plugin_command(type, p, end, c)) on_setting(type, p, end); break;
     case LIGHT_COMMAND: on_light(p, end); break;

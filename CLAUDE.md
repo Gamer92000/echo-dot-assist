@@ -259,6 +259,9 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # (HASSMIC_BT_DEV), root's wifi.sh, adoption, factory reset (HA, button hold);
                                              # set up: one press one switch, within its time, nothing served while
                                              # nothing is advertised, a phone that reconnects as its link ends
+.venv/bin/python tests/fake_wall_clock.py     # the Echo Wall Clock on a BR/EDR controller and clock played on a pty:
+                                             # pairing, SDP, RFCOMM, the gadget messages, sniff, a timer's life, its
+                                             # call, the feature off, a clock paired elsewhere forgotten
 tests/ota_push_test.sh                        # signed push-update path end to end
 tests/otatool_test.sh                         # scripts/otatool.py against the C otatool: same keys, signatures, bundles
 ```
@@ -653,6 +656,16 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   10-30 % of Wi-Fi broadcasts (unicast is retried), i.e. the other Echos' claims.  After every reset the controller's
   address is checked against the idme's (`board.bt_mac`) and set with MediaTek's 0xfc1a where it differs: cannoli's
   MT7663 is left at 00:0c:43:29:50:01 by its driver, the same on every Echo Dot 5.
+  The Echo Wall Clock (feature `wall_clock`; set up on the page, HA not needed: `POST /api/wallclock` search / stop /
+  forget, `wall_clock` in `/api/state`, `web/app.js` `wallClockBox`; HA "Wall clock search" and "Wall clock" beside
+  it): `a2dp.c`'s section "the Echo
+  Wall Clock" keeps its link (search by its EIR, SSP, held link paged and accepted, SDP of the clock, link supervision
+  8 s, sniff after 5 s quiet; pairing in `state/bt_clock` beside `state/bt_keys`), `rfcomm.c` one RFCOMM session and
+  our channel to its channel 4 (credit flow control; we serve none), `wallclock.c` the Alexa Gadgets frames and
+  protobufs, local time from HA's POSIX TZ rule (`wallclock_tz`), and the core's timers (`main.c` `timers_tell`)
+  mirrored as alerts.  All of it as an Echo Show with Alexa does it (its HCI log, PLAN.md "Echo Wall Clock"); messages
+  byte for byte as an Echo Dot's (`tests/unit/wallclock_test.c`).  `state/bt-trace` present: the clock's L2CAP packets
+  and link events in the log.  A clock blinking red has low batteries and ignores the Echo.
 - **State files** (`statefile.c`, issue #46): every file hassmic keeps or hands to root is written through
   `statefile_open`/`_commit` or `statefile_write` (temp file, fsync, rename, fsync of the folder): `/data` is ext4,
   a rename without them can reach the flash before the data, and a hard reset left empty files (#36). New writers too.
