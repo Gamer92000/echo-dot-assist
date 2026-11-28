@@ -15,7 +15,7 @@ counter kept: a replay goes nowhere), an address conflict (a frame of R's addres
 announces itself), a new network key from the coordinator (R and the sleepy E switch, zigpy still reads both), the
 deCONZ watchdog left to run out (the host's connection ends), and a PAN ID conflict (beacons of another network on our
 PAN ID: the coordinator moves, R follows).  The air's pcap goes into build/test-logs."""
-import asyncio, json, os, shutil, signal, socket, struct, subprocess, sys, tempfile, time
+import asyncio, glob, json, logging, os, shutil, signal, socket, struct, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zbair import Air
 
@@ -39,6 +39,14 @@ async def until(cond, secs):
         if r: return True
         await asyncio.sleep(0.1)
     return False
+
+
+def interviewed(d):
+    """zigpy's interview over: its is_initialized is true from the endpoints on, before the interview reads Basic's
+    model and manufacturer; ENDPOINTS_INIT comes after that read.  Under the whole suite at once (CI: 69 tests on 4
+    cores) the read was still under way when is_initialized flipped, and the model read "None None" (2026-11-28)"""
+    import zigpy.device
+    return d.status == zigpy.device.Status.ENDPOINTS_INIT
 
 
 class Zigbeed:
@@ -137,6 +145,14 @@ def deconz_frame(seq, cmd, payload):
 async def main():
     tmp = tempfile.mkdtemp(prefix="zb")
     logs = os.path.join(ROOT, "build", "test-logs"); os.makedirs(logs, exist_ok=True)
+    # zigpy's own word on every request (what it sent, its retries, what it gave up on), beside the air's pcap: a
+    # failure under load is decided by these two, and a passing rerun (tests/run.py) writes both anew, so a failed run's
+    # are kept as zigbee-failed.* (removed at the next start)
+    for f in glob.glob(os.path.join(logs, "zigbee-failed*")): os.remove(f)
+    zlog = logging.FileHandler(os.path.join(logs, "zigbee-zigpy.log"), "w")
+    zlog.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    for n in ("zigpy", "zigpy_deconz"):
+        logging.getLogger(n).addHandler(zlog); logging.getLogger(n).setLevel(logging.DEBUG)
     air = Air(os.path.join(logs, "zigbee.pcap"))
     C = Zigbeed(tmp, "C", "coordinator"); R = Zigbeed(tmp, "R", "router"); E = Zigbeed(tmp, "E", "enddevice")
     air.node("C", 0x00155F0000000001, sock=C.sock); air.node("R", 0x00155F0000000002, sock=R.sock); air.node("E", 0x00155F0000000003, sock=E.sock)
@@ -163,7 +179,7 @@ async def main():
 
         await app.permit(120)
         R.start()
-        ok = await until(lambda: any(d.nwk != 0 and d.is_initialized for d in app.devices.values()), 40)
+        ok = await until(lambda: any(d.nwk != 0 and interviewed(d) for d in app.devices.values()), 40)
         r = next((d for d in app.devices.values() if d.nwk != 0), None)
         check(ok and r is not None, "the router joined and zigpy interviewed it")
         if r:
@@ -196,7 +212,7 @@ async def main():
 
         await app.permit(120)               # the router takes joiners too now (ZHA's "add device" again)
         E.start()
-        ok = await until(lambda: any(str(d.ieee) == "00:15:5f:00:00:00:00:03" and d.is_initialized for d in app.devices.values()), 60)
+        ok = await until(lambda: any(str(d.ieee) == "00:15:5f:00:00:00:00:03" and interviewed(d) for d in app.devices.values()), 60)
         e = next((d for d in app.devices.values() if str(d.ieee) == "00:15:5f:00:00:00:00:03"), None)
         check(ok, "the end device joined through the router (the key tunnelled) and zigpy interviewed it through two hops")
         ct = C.text()
@@ -319,8 +335,15 @@ async def main():
         if e:
             e2 = app.get_device(ieee=e.ieee)
             await asyncio.wait_for(app.remove(e2.ieee), 30)
-            await until(lambda: "asked to leave" in E.text(), 20)
-            check("asked to leave" in E.text(), "zigpy removed the end device: it left the network")
+            # zigpy sends the leave in a task of its own, without an APS ack (again only on a failed confirm), waits
+            # up to 30 s for E's answer (_remove_device, for an end device) and then drops the device whatever came of
+            # it: waited for as long, and a little more (CI's failures of 2026-11-28 gave up after 20 s); which
+            # of the two ended it is said, and zigbee-failed-zigpy.log and zigbee-failed.pcap say what was sent
+            await until(lambda: "asked to leave" in E.text() or e2.ieee not in app.devices, 35)
+            await until(lambda: "asked to leave" in E.text(), 1)
+            check("asked to leave" in E.text(), "zigpy removed the end device: it left the network" +
+                  ("" if "asked to leave" in E.text() else
+                   f" (zigpy {'gave up on it' if e2.ieee not in app.devices else 'still trying after 35 s'})"))
 
         # the deCONZ watchdog: a host that sets 1 s and never feeds it loses its connection (a ConBee would reset)
         pan = app.state.network_info.pan_id; epan = app.state.network_info.extended_pan_id
@@ -349,9 +372,12 @@ async def main():
         if app: await app.shutdown()
         for z in (C, R, E): z.stop()
         srv.close(); await air.stop()
+        zlog.flush()
         for z in (C, R, E):
             shutil.copy(z.log.name, os.path.join(logs, f"zigbee-{z.name}.log"))
         if fails:
+            for f in ["zigbee.pcap", "zigbee-zigpy.log"] + [f"zigbee-{z.name}.log" for z in (C, R, E)]:
+                shutil.copy(os.path.join(logs, f), os.path.join(logs, f.replace("zigbee", "zigbee-failed", 1)))
             for z in (C, R, E): print(f"--- {z.name}:\n" + "".join(z.text().splitlines(True)[-40:]))
     print("FAILED" if fails else "all good")
     sys.exit(1 if fails else 0)
