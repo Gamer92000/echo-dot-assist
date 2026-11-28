@@ -1,0 +1,35 @@
+# Laser NS6575 / 8349, Firebreak's laser route.  The policy is patched in the ext4 image by laser-os-builder, after
+# its own root rules (permissive su and what the root services need); the domain rules of
+# scripts/system/sepolicy-hassmic.rules and sepolicy-mirror.sh's follow this file (install-boot.sh shows the chain).
+# Run after the imported stock USB actions: mt851x otherwise enables TCP 5555.
+# Keep the root transport on USB and override a saved stock 'none' setting.
+on boot
+    setprop service.adb.tcp.port -1
+    setprop persist.sys.usb.config adb
+    setprop sys.usb.config adb
+
+on post-fs-data
+    exec u:r:su:s0 root root -- /system/bin/sh /system/hassmic/prepare.sh
+
+service hassmic_fw /system/bin/sh /system/hassmic/boot.sh firewall
+    class main
+    user root
+    seclabel u:r:su:s0
+    disabled
+    oneshot
+
+service hassmic /system/bin/sh /system/hassmic/boot.sh satellite
+    class main
+    user root
+    seclabel u:r:su:s0
+    disabled
+    oneshot
+
+on property:hassmic.storage.ready=1
+    start hassmic_fw
+
+# prepare.sh and the firewall service clear PUFFIN_START to suppress Alexa.
+# Waiting for that flag can miss the LED controller's one-time startup event.
+# The satellite needs the mounted overlay and mixer, not Alexa's launch flag.
+on property:hassmic.storage.ready=1 && property:audio_mixer.init=true
+    start hassmic

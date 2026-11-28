@@ -4,6 +4,7 @@ the firmware's boot image: what Wi-Fi motion's module (src/kmod/) needs to load 
 modpost writes them into the module's __versions, and the kernel refuses a module whose CRC differs from its own).
 
     tools/kcrc.py [--check <stock .ko>...] <boot.img | zImage | Image> <symbol>...
+    tools/kcrc.py --modules <stock .ko>... -- <symbol>...
 
 The kernel: a FIT (cannoli's boot.img: its first "kernel" image), an Android boot image (athena's) or a bare kernel,
 each with or without the zImage around it (the first gzip stream in it is the Image).  The kernel is not linked at
@@ -13,6 +14,12 @@ at a C identifier in __ksymtab_strings; the link address is the one that makes m
 run's __kcrctab is the array of words in which the CRCs stock modules carry for that run's symbols (their __versions,
 --check, at least one module, at least 3 of a run's symbols) all sit at their symbol's index.  Every symbol asked
 for must be found, else nothing is printed.
+
+--modules, for a kernel whose image this does not read (laser's: its zImage's payload is no gzip stream): the CRCs the
+stock modules' __versions carry, which are the kernel's own (it refused them otherwise), for the symbols asked; one
+that no module imports is not there, and two modules that disagree on one stop it.  The export's kind is not in a
+module: EXPORT_SYMBOL is written, which modpost only reads to keep a GPL-only symbol from a module of another licence
+(hassmic's are GPL).
 """
 import gzip, re, struct, sys, zlib
 
@@ -102,8 +109,22 @@ def runs(img, base, stride):
         tables.append((st + stride * first, names[first:]))
     return tables
 
+def from_modules(a):
+    if '--' not in a: sys.exit(__doc__)
+    kos, want = a[:a.index('--')], a[a.index('--') + 1:]
+    if not kos or not want: sys.exit(__doc__)
+    crcs = {}
+    for ko in kos:
+        for n, c in versions(ko).items():
+            if crcs.setdefault(n, c) != c: sys.exit(f'{n}: {crcs[n]:#010x} in one stock module, {c:#010x} in {ko}')
+    miss = [w for w in want if w not in crcs]
+    if miss: sys.exit('no stock module imports: ' + ' '.join(miss))
+    print(f'# {len(want)} symbols from the __versions of {len(kos)} stock modules', file=sys.stderr)
+    for w in want: print(f'{crcs[w]:#010x}\t{w}\tvmlinux\tEXPORT_SYMBOL')
+
 def main():
     a = sys.argv[1:]; known = {}
+    if a and a[0] == '--modules': return from_modules(a[1:])
     while a and a[0] == '--check':
         known.update(versions(a[1])); a = a[2:]
     if len(a) < 2 or not known: sys.exit(__doc__)

@@ -14,6 +14,10 @@ int  wifimotion_present(void);                      /* module or RX_STAT; probed
 void wifimotion_start(void (*changed)(void));       /* poller thread, once; each call adds its changed() (4 at most):
                                                      * wifimotion_motion() changed, called with no locks held */
 int  wifimotion_enable(int set);                    /* -1: query */
+/* A person switched it on (the page, an import, Home Assistant; never the start's load of state/config): state/
+ * wifi-motion-on is written, which root's main.sh kmod() takes as the word to try the module again after a load the
+ * kernel fell in (its mark, KMOD_TRY, older than this).  An off and on within a second is seen so */
+void wifimotion_switched_on(void);
 int  wifimotion_sensitivity(int set);               /* WIFIMOTION_SENS_MIN..MAX, clamped; -1: query */
 int  wifimotion_motion(void);                       /* 1 moving, 0 still, -1 off (state unknown) */
 

@@ -97,6 +97,7 @@
 #include "noise.h"
 #include "pb.h"
 #include "sendspin.h"
+#include "radio.h"
 #include "clock.h"
 #include "update.h"
 #include "wifimotion.h"
@@ -311,13 +312,17 @@ static void print_mdns_to(FILE *f)
             "    <txt-record>mac=%s</txt-record><txt-record>friendly_name=%s</txt-record><txt-record>version=2025.5.0</txt-record>\n"
             "    <txt-record>platform=hassmic</txt-record><txt-record>network=wifi</txt-record>\n"
             /* with a key Home Assistant asks for it when the device is added; without, it adds the device and sets one */
-            "    <txt-record>%s=" NOISE_NAME "</txt-record>\n  </service>\n%s</service-group>\n",
-            node_name(), core_port, mac_plain(), core_name, have_key ? "api_encryption" : "api_encryption_supported", ss);
+            "    <txt-record>%s=" NOISE_NAME "</txt-record>\n  </service>\n%s%s</service-group>\n",
+            node_name(), core_port, mac_plain(), core_name, have_key ? "api_encryption" : "api_encryption_supported", ss,
+            radio_mdns_service());     /* the Zigbee coordinator, where it runs: ZHA discovers it (radio.c) */
 }
 
 static void print_mdns(void) { key_load(); print_mdns_to(stdout); }
 
-/* The service file main.sh wrote at boot names the encryption state: rewrite it when that changes (avahi notices). */
+/* The service file main.sh wrote at boot names the encryption state and the Zigbee coordinator: rewrite it when either
+ * changes (avahi notices). */
+static void mdns_refresh(void);
+void esphome_mdns_refresh(void) { mdns_refresh(); }
 static void mdns_refresh(void)
 {
     const char *path = getenv("HASSMIC_MDNS_FILE"); struct statefile s;
@@ -1036,7 +1041,9 @@ static void on_setting(unsigned type, const unsigned char *p, const unsigned cha
     }
     else if (type == SWITCH_COMMAND && key == KEY_SOUND_DETECTION) { core_sound(on); settings_save(); send_setting(key); return; }
     else if (type == SWITCH_COMMAND && key == KEY_WIFI_MOTION_ON && wifimotion_present()) {
-        wifimotion_enable(on); settings_save(); send_setting(key); return;       /* the sensor follows through wifi_changed */
+        int was = wifimotion_enable(-1);
+        wifimotion_enable(on); if (on && !was) wifimotion_switched_on();
+        settings_save(); send_setting(key); return;       /* the sensor follows through wifi_changed */
     }
     else if (type == NUMBER_COMMAND && key == KEY_WIFI_MOTION_SENS && wifimotion_present()) {
         wifimotion_sensitivity((int)lroundf(num)); settings_save(); send_setting(key); return;
@@ -2381,7 +2388,25 @@ static void dropin_result(const char *result)   /* lock held */
 static void phone_changed(void) { send_setting(KEY_PHONE_DEVICE); send_setting(KEY_PHONE_CALLER); send_setting(KEY_PHONE_STATE); send_setting(KEY_PHONE_WAITING); }
 
 static int keyed(void) { return have_key; }            /* lock held */
+
+/* lock held: Home Assistant's own addresses, for the radio's ports (radio.c).  With a device key set only the links
+ * that hold it (a stranger on the LAN may connect to the API port, but not with the key); before that every link that
+ * subscribed to states, which is what Home Assistant's integration does first */
+static int peers(uint32_t *addr, int max)
+{
+    int n = 0;
+    for (int c = 0; c < MAX_CLIENTS && n < max; c++) {
+        struct sockaddr_in a; socklen_t l = sizeof a;
+        if (clients[c].fd < 0 || (have_key ? !clients[c].keyed : !clients[c].states)) continue;
+        if (getpeername(clients[c].fd, (struct sockaddr *)&a, &l) || a.sin_family != AF_INET) continue;
+        int dup = 0;
+        for (int i = 0; i < n; i++) dup |= addr[i] == a.sin_addr.s_addr;
+        if (!dup) addr[n++] = a.sin_addr.s_addr;
+    }
+    return n;
+}
+
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
                                      timers_changed, dropin_changed, dropin_result, button, wake_event, end_audio, reply_cut, plugin_event,
-                                     plugin_entity, music_changed, phone_changed, keyed };
+                                     plugin_entity, music_changed, phone_changed, keyed, peers };

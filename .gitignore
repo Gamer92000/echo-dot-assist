@@ -22,3 +22,5 @@ xda_post.md
 __pycache__/
 *.pyc
 /kiosk-satellite-*.apk
+tests/zigbee-js/node_modules/
+tools/gp712/seq_hooks.txt

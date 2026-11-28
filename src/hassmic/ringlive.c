@@ -16,6 +16,15 @@
  * So hassmic writes colours as seen through the same gamma ring.c maps designs with and the same pwm ledcontroller uses:
  * a design played live looks as installed, and nothing is brighter than ledcontroller would make it at that level (at
  * level 100 FD, its own most).  Whatever comes from Home Assistant goes through that, and a pixel never above 255 x pwm.
+ * The Echo 4 (laser, board.ring_led_color) has no frame file either: two TI LP5036, a LED class device a LED
+ * (lp5036:ledmod_0..23), read out of libacehal_led.so (2026-11-27, not run yet): its writer takes the frame,
+ * multiplies each channel by its thermal table's factor (1 unless hot) and writes "%d %d %d" to LED i's "color" file,
+ * LED 0 first in the animations' order, through descriptors it keeps open; then, when the ring goes from dark to lit or
+ * back, "1" or "0" into both chips' ledhven (i2c 0-0030, 0-0031: their supply).  The level is not in the colours: each
+ * of the brightness table's entries is {pwm 1, current N}, the current written into global_current at a level change
+ * and left there (43 at level 0 on the dimmest table: never off).  So hassmic writes the gamma'd colour as is (pwm 1:
+ * ringlive_table gives 1), only the LEDs that changed, and the supply as the HAL does: dark, ledcontroller had it off.
+ * The colour files are write-only for ledcontroller; where they read back, the fight detection works as on the Dots.
  * The Echo Dot 5 (binary animations, ring.h ring_live_acs) has no frame file: its LEDs are the LED manager's on the SCP.
  * There each frame goes into a slot of ours that ledcontroller replaces in place (ring_live_put, through libhmled.so; ring_live_show sets it),
  * at full duty: ledcontroller gives the LED manager its brightness tables, which scale every animation, ours too.  The
@@ -147,8 +156,72 @@ int ringlive_table(const char *s, size_t n, int capcolor, float out[101])
  * the device.  -1 (errno set) or the bytes written */
 static int frame_fake;                  /* frame_path is the stand-in (written by rename) */
 static char frame_tmp[272];
+
+/* A file per LED (board.ring_led_color, the Echo 4).  The frame stays the Dots' text inside (the writer compares it);
+ * here it goes out LED by LED, through descriptors open from the start as the HAL keeps its own.  Async-signal-safe
+ * (on_term: force, every LED and the supply whatever was written before): no stdio, no locks */
+static int per_led, leds_fake;          /* leds_fake: plain files on the PC, cut to what was written */
+static int led_fd[MAX_LEDS], pwr_fd[4], npwr;
+static unsigned char led_px[MAX_LEDS][3];
+static int led_have, pwr_lit = -1;
+static int hexv(char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; }
+static int put_at0(int fd, const char *b, size_t n)
+{
+    ssize_t k = pwrite(fd, b, n, 0);
+    if (k >= 0 && k != (ssize_t)n) { errno = EIO; return -1; }
+    if (k < 0) return -1;
+    if (leds_fake && ftruncate(fd, (off_t)n)) return -1;
+    return 0;
+}
+static ssize_t leds_put(const char *t, size_t n, int force)
+{
+    if (n < (size_t)leds * 6) { errno = EINVAL; return -1; }
+    int lit = 0;
+    for (int i = 0; i < leds; i++) {
+        unsigned char px[3]; char b[16]; size_t k = 0;
+        for (int c = 0; c < 3; c++) {
+            int hi = hexv(t[i * 6 + c * 2]), lo = hexv(t[i * 6 + c * 2 + 1]);
+            if (hi < 0 || lo < 0) { errno = EINVAL; return -1; }
+            px[c] = (unsigned char)(hi * 16 + lo);
+            lit |= px[c];
+        }
+        if (!force && led_have && !memcmp(px, led_px[i], 3)) continue;
+        for (int c = 0; c < 3; c++) {          /* "%d %d %d", the HAL's */
+            unsigned v = px[c];
+            if (v >= 100) b[k++] = (char)('0' + v / 100);
+            if (v >= 10) b[k++] = (char)('0' + v / 10 % 10);
+            b[k++] = (char)('0' + v % 10);
+            if (c < 2) b[k++] = ' ';
+        }
+        if (put_at0(led_fd[i], b, k)) { led_have = 0; return -1; }
+        memcpy(led_px[i], px, 3);
+    }
+    led_have = 1;
+    lit = lit != 0;
+    if (force || lit != pwr_lit) {             /* after the colours, both ways, as the HAL orders it */
+        for (int p = 0; p < npwr; p++) if (put_at0(pwr_fd[p], lit ? "1" : "0", 1)) { pwr_lit = -1; return -1; }
+        pwr_lit = lit;
+    }
+    return (ssize_t)n;
+}
+/* What ledcontroller may have written since (its pattern, a fight, ours not on the ring): every LED and the supply
+ * written again at the next frame, not only what changed */
+static void leds_forget(void) { led_have = 0; pwr_lit = -1; }
+static int leds_read(char *out, size_t cap)
+{
+    size_t o = 0;
+    for (int i = 0; i < leds; i++) {
+        char b[24]; ssize_t k = pread(led_fd[i], b, sizeof b - 1, 0);
+        if (k < 0 || o + (size_t)k + 2 > cap) return -1;
+        memcpy(out + o, b, (size_t)k); o += (size_t)k; out[o++] = '|';
+    }
+    out[o] = 0;
+    return 0;
+}
+
 static ssize_t frame_put(const char *t, size_t n)
 {
+    if (per_led) return leds_put(t, n, 0);
     int fd = frame_fake ? open(frame_tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644)
                         : open(frame_path, O_WRONLY | O_TRUNC | O_CLOEXEC);
     if (fd < 0) return -1;
@@ -189,6 +262,7 @@ static int frame_write_guarded(const char *t, int lit, int gen, int *err)
 static int frame_read(char *out, size_t cap)
 {
     if (acs) return -1;                                 /* the LED manager's: nothing to read back */
+    if (per_led) return leds_read(out, cap);            /* -1 where the colour files are write-only */
     int fd = open(frame_path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return -1;
     ssize_t k = read(fd, out, cap - 1);
@@ -533,7 +607,7 @@ static void *writer(void *arg)
 {
     (void)arg;
     char text[TEXT_MAX] = "", seen_back[TEXT_MAX] = "", now_back[TEXT_MAX];
-    long long last_write = 0, last_check = 0, resume_at = 0, backoff_until = 0, fight_t0 = 0;
+    long long last_write = 0, last_check = 0, resume_at = 0, backoff_until = 0, fight_t0 = 0, whole_at = 0;
     int owned = 0, held = 0, fights = 0, failed = 0, marked = 0;
     for (;;) {
         if (atomic_load(&leftover) == 2) {      /* what the last run of this boot left lit (the marker) */
@@ -571,7 +645,7 @@ static void *writer(void *arg)
                 owned_now = 0;                  /* the ring is ledcontroller's meanwhile: SIGTERM leaves it alone */
             }
             else if (held) {                    /* ledcontroller wrote last: ours again, not counted as a fight */
-                held = 0; resume_at = now + RESUME_MS; next = RESUME_MS; text[0] = 0; fights = 0;
+                held = 0; resume_at = now + RESUME_MS; next = RESUME_MS; text[0] = 0; fights = 0; leds_forget();
             }
             else if (now < resume_at && !quit) next = (int)(resume_at - now);
             else if (now < backoff_until && !quit) next = (int)(backoff_until - now);
@@ -589,13 +663,18 @@ static void *writer(void *arg)
                 if (!need && now - last_check >= CHECK_MS) {        /* ledcontroller wrote over it? */
                     last_check = now;
                     if (!frame_read(now_back, sizeof now_back) && strcmp(now_back, seen_back)) {
-                        need = 1;
+                        need = 1; leds_forget();
                         if (now - fight_t0 > FIGHT_MS) { fight_t0 = now; fights = 0; }
                         if (++fights >= FIGHT_N) {
                             fprintf(stderr, "light ring live: something else keeps writing the ring (a pattern hassmic did not set?), live waits %d s\n", BACKOFF_MS / 1000);
                             backoff_until = now + BACKOFF_MS; fights = 0; need = 0; next = BACKOFF_MS;
                         }
                     }
+                }
+                /* a file per LED that does not read back (the Echo 4's are ledcontroller's write-only): what someone
+                 * else wrote is never seen, so every LED and the supply again once a second while ours shows */
+                if (per_led && content && owned && !need && now - whole_at >= 1000 && frame_read(now_back, sizeof now_back)) {
+                    need = 1; leds_forget(); whole_at = now;
                 }
                 if (need && !quit && now - last_write < 1000 / RINGLIVE_FPS) { next = (int)(1000 / RINGLIVE_FPS - (now - last_write)); need = 0; }
                 /* The last look, then the write under write_lock, which ringlive_yield waits for: a yield begun after
@@ -609,6 +688,7 @@ static void *writer(void *arg)
                  * (CI 2026-11-24: the frame there, the marker not yet).  A marker whose frame never landed only has the
                  * next start write dark over a ring that is dark anyway (the Echo's own patterns are hold_fn's) */
                 if (need && content && !marked) { marker_write(); marked = 1; }     /* once a run (see marker_write) */
+                if (need && !owned) leds_forget();      /* ledcontroller's since our last frame */
                 if (need && (wrc = frame_write_guarded(want, content, yg2, &werr)) == -2) { need = 0; next = 5; }
                 if (need && !wrc) atomic_store(&owned_gen, yg2);
                 if (need) {
@@ -683,7 +763,8 @@ static void on_term(int sig)
     /* Not under write_lock (an async handler may not wait): a writer's write already past its guard can still land
      * after this one, and leave ours lit with the marker gone; one write's window, ~15 ms */
     if (!acs && owned_now && !atomic_load(&yielding) && atomic_load(&yield_gen) == atomic_load(&owned_gen) && getpid() == our_pid) {
-        if (frame_put(dark_text, strlen(dark_text)) == (ssize_t)strlen(dark_text)) unlink(marker_path);
+        size_t dn = strlen(dark_text);
+        if ((per_led ? leds_put(dark_text, dn, 1) : frame_put(dark_text, dn)) == (ssize_t)dn) unlink(marker_path);
     }
     signal(sig, SIG_DFL);
     raise(sig);
@@ -716,19 +797,50 @@ int ringlive_start(int (*hold)(void), int (*level)(void), void (*changed)(void))
         fprintf(stderr, "light ring live: frames into the LED manager's slot through ledcontroller, %d LEDs\n", leds);
         goto run;
     }
-    if (!p || !*p) return -1;                                       /* not on this model (yet): nothing to say */
-    snprintf(frame_path, sizeof frame_path, "%s", p);
-    frame_fake = fake != NULL; snprintf(frame_tmp, sizeof frame_tmp, "%s.new", frame_path);
-    if (leds < 2 || leds > MAX_LEDS) why = "not a ring of LEDs";
-    else if (access(frame_path, W_OK)) why = "hassmic may not write the ring's frame (root's main.sh gives it at the satellite's start; an older one does not)";
-    else if (frame_read(t, sizeof t) || strlen(t) != (size_t)leds * 6 + 1 || strspn(t, "0123456789abcdefABCDEF") != (size_t)leds * 6)
-        why = "the ring's frame is not 12 x RRGGBB as measured";
-    else if (!((js = slurp(table, 1 << 16, &n)) || (js = slurp(copy, 1 << 16, &n))) || ringlive_table(js, n, capcolor(), pwm))
+    /* a file per LED (the Echo 4); HASSMIC_FAKE_RING_LEDS=<dir>: <dir>/0 .. <dir>/<n-1> and <dir>/power0, power1 */
+    const char *lfake = fake ? NULL : getenv("HASSMIC_FAKE_RING_LEDS");
+    if (!fake && (lfake || (board.ring_led_color && *board.ring_led_color))) {
+        char pat[256], f[300];
+        if (lfake) snprintf(pat, sizeof pat, "%s/%%d", lfake); else snprintf(pat, sizeof pat, "%s", board.ring_led_color);
+        if (per_led && avail) return 0;                             /* live: the writer and on_term use these */
+        if (per_led) {                                              /* called again before it went live: opened anew */
+            for (int i = 0; i < MAX_LEDS; i++) if (led_fd[i] >= 0) close(led_fd[i]);
+            for (int i = 0; i < npwr; i++) close(pwr_fd[i]);
+        }
+        memset(led_fd, 0xff, sizeof led_fd); npwr = 0; led_have = 0; pwr_lit = -1;
+        per_led = 1; leds_fake = lfake != NULL;
+        snprintf(frame_path, sizeof frame_path, "%s", pat);
+        if (leds < 2 || leds > MAX_LEDS) why = "not a ring of LEDs";
+        for (int i = 0; i < leds && !why; i++) {
+            snprintf(f, sizeof f, pat, i);
+            if ((led_fd[i] = open(f, O_RDWR | O_CLOEXEC)) < 0 && (led_fd[i] = open(f, O_WRONLY | O_CLOEXEC)) < 0)
+                why = "hassmic may not write each LED's colour file (root's main.sh gives them at the satellite's start; an older one does not)";
+        }
+        for (int i = 0; !why && i < 4; i++) {
+            if (lfake) snprintf(f, sizeof f, "%s/power%d", lfake, i);
+            else if (board.ring_led_power && board.ring_led_power[i]) snprintf(f, sizeof f, "%s", board.ring_led_power[i]);
+            else break;
+            if (lfake && access(f, F_OK)) break;
+            if ((pwr_fd[npwr] = open(f, O_WRONLY | O_CLOEXEC)) < 0) why = "hassmic may not write the LEDs' supply (ledhven; root's main.sh gives it)";
+            else npwr++;
+        }
+    }
+    else {
+        if (!p || !*p) return -1;                                   /* not on this model (yet): nothing to say */
+        snprintf(frame_path, sizeof frame_path, "%s", p);
+        frame_fake = fake != NULL; snprintf(frame_tmp, sizeof frame_tmp, "%s.new", frame_path);
+        if (leds < 2 || leds > MAX_LEDS) why = "not a ring of LEDs";
+        else if (access(frame_path, W_OK)) why = "hassmic may not write the ring's frame (root's main.sh gives it at the satellite's start; an older one does not)";
+        else if (frame_read(t, sizeof t) || strlen(t) != (size_t)leds * 6 + 1 || strspn(t, "0123456789abcdefABCDEF") != (size_t)leds * 6)
+            why = "the ring's frame is not 12 x RRGGBB as measured";
+    }
+    if (!why && (!((js = slurp(table, 1 << 16, &n)) || (js = slurp(copy, 1 << 16, &n))) || ringlive_table(js, n, capcolor(), pwm)))
         why = "no brightness table (led_mute_ring_config.json, or root's copy of it)";
     free(js);
     if (why) { fprintf(stderr, "light ring live: not here: %s\n", why); return -1; }
     int cc = capcolor();
-    fprintf(stderr, "light ring live: %s, %d LEDs, at most %02X at level 100 (cap colour %d)\n", frame_path, leds, (int)(255 * pwm[100]), cc);
+    fprintf(stderr, "light ring live: %s, %d LEDs%s, at most %02X at level 100 (cap colour %d)\n", frame_path, leds,
+            per_led ? (npwr ? " a file each, their supply switched" : " a file each") : "", (int)(255 * pwm[100]), cc);
     {   /* the marker of the last run: lit in this boot, darkened once ringlive_begin came (the writer) */
         const char *d = getenv("HASSMIC_STATE"); char id[48], m[64] = ""; FILE *f;
         snprintf(marker_path, sizeof marker_path, "%s/ring-live", d ? d : "/data/local/hassmic/state");

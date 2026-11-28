@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Stable local build identity, including uncommitted changes and archive builds.
 
-This is a source identity for the pinned Cannoli toolchain/firmware, not a binary
-checksum or an upstream release version. Private signing keys are never read.
+For the models whose bundle is baked into a firmware image (cannoli, laser: the Makefile's SOURCE_ID): their factory
+promotion compares the bundle's VERSION, so two builds of one dirty tree must differ.  This is a source identity for
+the model's pinned toolchain/firmware, not a binary checksum or an upstream release version. Private signing keys
+are never read.
+
+  tools/source-id.py <codename>
 """
 import hashlib
 from pathlib import Path
 import re
+import sys
 
 
-def identity(root):
-    paths = {root / 'Makefile', root / 'tools/embed.py'}
-    for directory in ['src', 'web', 'wakealign', 'scripts/system', 'scripts/device', 'devices/cannoli']:
+def identity(root, device):
+    paths = {root / 'Makefile', root / 'tools/embed.py', root / 'tools/source-id.py'}
+    for directory in ['src', 'web', 'wakealign', 'scripts/system', 'scripts/device', 'devices/' + device]:
         # .md is prose; stubs/*.syms are generated (tools/mkstubs.sh) and must not
         # change the identity between the firmware and stub link of one check.
         paths.update(p for p in (root / directory).rglob('*')
@@ -37,8 +42,13 @@ def identity(root):
         data = path.read_bytes()
         digest.update(str(path.relative_to(root)).encode() + b'\0')
         digest.update(len(data).to_bytes(8, 'big') + data)
-    return 'cannoli8349-' + digest.hexdigest()[:24]
+    return device + '8349-' + digest.hexdigest()[:24]
 
 
 if __name__ == '__main__':
-    print(identity(Path(__file__).resolve().parents[2]))
+    if len(sys.argv) != 2 or not re.fullmatch(r'[a-z0-9]+', sys.argv[1]):
+        sys.exit('usage: tools/source-id.py <codename>')
+    root = Path(__file__).resolve().parents[1]
+    if not (root / 'devices' / sys.argv[1] / 'device.conf').is_file():
+        sys.exit('tools/source-id.py: no model ' + sys.argv[1])
+    print(identity(root, sys.argv[1]))

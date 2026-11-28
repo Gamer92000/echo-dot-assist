@@ -30,6 +30,7 @@ as an ESPHome device, with no YAML and no add-on.
 | ✅ | Echo Show 8 2nd gen (2021)   | A8H3N2 | [`athena`](devices/athena/README.md)     | micro-USB, no soldering (a serial-port unlock); the ring as a band on screen |
 | ✅ | Echo Input (2018)            | C1125P | [`cupcake`](devices/cupcake/README.md)   | micro-USB, no soldering; no speaker (jack or Bluetooth), one LED |
 | 🚧 | Echo Dot 5th gen (2022)      | C2N6L4 | [`cannoli`](devices/cannoli/README.md)   | open the case, solder USB to test pads; manual install only, no guided setup yet |
+| 🚧 | Echo 4th gen (2020)          | L4S3RE | [`laser`](devices/laser/README.md)       | open the case, solder USB to test pads; manual install only, no guided setup yet; Thread and Zigbee radio |
 
 Each model needs exactly the firmware its page names (`donut`: Fire OS 6574.1 only). A Dot 3 from 2019–2020 (C78MP8) or
 with a clock (36EBT3) is another model, and not supported. Every other Echo, and which are being worked on:
@@ -112,7 +113,8 @@ by side to copy settings and wake words between them, the log. A press of the ac
   USB stick works), with `adb`, `fastboot`, `python3`, `make`, `unzip`, `debugfs` (e2fsprogs), and free disk:
   about 7 GB for an Echo Show (a 16 GB stick), under 1 GB for the others, 5 GB more to build here instead of taking
   GitHub's build (8 for an Echo Input) — and about 35 GB for an Echo Dot 5, whose manual install builds the recovery
-  from a 26 GB source tree ([its page](devices/cannoli/README.md#what-you-need) breaks it down). On a live USB stick
+  from a 26 GB source tree ([its page](devices/cannoli/README.md#what-you-need) breaks it down); an Echo 4 builds no
+  recovery, and needs about 4 GB for laser-os-builder's inputs and image ([its page](devices/laser/README.md#what-you-need)). On a live USB stick
   the session's own disk is RAM: keep the repository on a drive.
   The setup offers to install what is missing. An Echo that is **unlocked already** (by hand, as its XDA thread
   says) can also be set up from **Windows**: Git Bash (Git for Windows, with its `unzip` and `curl`), `adb`
@@ -240,9 +242,24 @@ install only with a valid signature. The whole model, including what it does not
 
 [MIT](LICENSE), for everything written here. `src/third_party/` keeps its own licences, stated in each file: monocypher
 (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0), `rnnoise/` (BSD-3-Clause,
-`COPYING` beside it), `freeaptx.c`/`.h` (LGPL-2.1-or-later; linked statically, and everything needed to rebuild and
+`COPYING` beside it), `freeaptx.c`/`.h` (LGPL-2.1-or-later, `COPYING.LGPL-2.1`; linked statically, and everything needed to rebuild and
 relink it is in this repository), `mbedtls/` (Apache-2.0 OR GPL-2.0-or-later, `LICENSE` beside it). `wakealign/` is CC BY 4.0 (its README); `geo/` is made from Natural Earth's public
 domain borders.
+
+The Echo 4's radio programs are not all ours ([NOTICE](NOTICE) has each one's notices): `src/gprcp/` is ot-qorvo's
+GP712 platform for OpenThread (BSD-3-Clause, The OpenThread Authors, each file's header kept; ours are `timed.c`,
+`glibc_shim.c` and the edits to `radio.c`, `system.c`, `openthread-core-gp712-config.h` and `CMakeLists.txt`). The
+`gprcp` it builds links OpenThread and mbedTLS, and statically Qorvo's `libQorvoGP712_ftd.a`, which is fetched at
+build time, never in this repository, under [Qorvo's EULA](https://github.com/Qorvo/qpg-openthread/blob/2762d55db1d218be57f251a8c8eafbb1938c36a7/Qorvo_EULA.txt)
+(use only with Qorvo's chips, which the Echo 4's GP712 is): Copyright (c) 2017-2021, Qorvo Inc., a line `gprcp` also
+carries in itself (`gprcp --notice`); Zig links musl and its compiler_rt into it (MIT). `otbr-agent` and `ot-ctl` are
+ot-br-posix with the options and patches of `scripts/otbr-build.sh`: OpenThread (BSD-3-Clause) with its tcplp
+(BSD, much of it FreeBSD's), mbedTLS (Apache-2.0 OR GPL-2.0-or-later), cJSON and cpp-httplib (MIT), and the NDK's
+libc++ (Apache-2.0 with LLVM Exceptions, older parts MIT).
+
+[NOTICE](NOTICE) is what every model's programs contain of others' work, with the notices their licences ask to go
+with the binaries; each update bundle and install carries it as `NOTICE` beside them, cut to its model's parts
+(`scripts/notice.py`).
 
 Nothing of Amazon's is in this repository or covered by this licence: firmware, libraries and wake word models come
 from your own device and stay Amazon's. Not affiliated with or endorsed by Amazon, Home Assistant or Music Assistant;

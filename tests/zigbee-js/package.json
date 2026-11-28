@@ -1,0 +1,9 @@
+{
+  "name": "hassmic-zigbee-tests",
+  "private": true,
+  "description": "Zigbee2MQTT's library for tests/fake_zigbee_z2m.py: its deconz adapter against zigbeed's coordinator, its own stack (zigbee-on-host, the zoh adapter) as the trust center zigbeed's router joins",
+  "type": "module",
+  "dependencies": {
+    "zigbee-herdsman": "11.2.5"
+  }
+}

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <time.h>
 #include "board.h"
 #include "logread.h"
@@ -120,4 +121,14 @@ static void print_mdns(void)
            "  <service><type>_wyoming._tcp</type><port>%d</port></service>\n</service-group>\n", core_name, core_port);
 }
 
-const struct proto proto_wyoming = { "wyoming", 16700, 0, serve, start, audio, NULL, NULL, played, NULL, NULL, print_mdns, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+/* lock held: the one client's address (radio.c): Wyoming has no key, whoever is connected is Home Assistant */
+static int peers(uint32_t *addr, int max)
+{
+    struct sockaddr_in a; socklen_t l = sizeof a;
+    if (client < 0 || max < 1 || getpeername(client, (struct sockaddr *)&a, &l) || a.sin_family != AF_INET) return 0;
+    addr[0] = a.sin_addr.s_addr;
+    return 1;
+}
+
+const struct proto proto_wyoming = { "wyoming", 16700, 0, serve, start, audio, NULL, NULL, played, NULL, NULL, print_mdns, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                     .peers = peers };

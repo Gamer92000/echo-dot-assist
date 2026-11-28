@@ -3681,9 +3681,14 @@ Run in this order. Each step says what it proves.
 - [ ] A volume curve of its own for every model (2026-11-06; even volume steps lean on it as separate volumes do).
       `board.volume_curve` is required now: each board.c names one, `board_vol_dot2` (volcurve.c, measured on the Dot 2)
       standing in where none is measured, and `make unit-volcurve` prints a `todo` line per such model;
-      devices/README.md "Volume curve" makes it part of porting.  Measured: biscuit (2026-10-17), checkers (2026-10-27).
-      Still the stand-in: donut, radar (mixer: a tone in micRaw per volume), crown, cronos, athena, cupcake
-      (tools/vol-curve.py; cupcake through a speaker on its line out).
+      devices/README.md "Volume curve" makes it part of porting.  Measured: biscuit (2026-10-17), checkers (2026-10-27),
+      laser (2026-11-28).  Still the stand-in: donut, radar (mixer: a tone in micRaw per volume), crown, cronos, athena,
+      cupcake (tools/vol-curve.py; cupcake through a speaker on its line out), cannoli.
+      Laser needed a path of its own: its own micRaw is not free to mixcap and a bare mixplay never drives its speaker
+      (the mixer only runs the output while hassmic itself plays), so a dev-build tone hook played a multitone on
+      hassmic's TTS/Music stream and an Echo Dot 2 ~10 cm away recorded it (micRaw), volume stepped with the keypad.
+      Its output plateaus from ~80 up (within ~3 dB, peaking near 90 with libasp's top-end boost), flattened to
+      monotonic in board_vol_laser.
 - [x] Volumes per kind of audio (GitHub issue #32: several Dot 3 and a Dot 2; one volume for media and one for the
       assistant, the wake sound on a slider of its own).  Built 2026-10-17, after two tries the owner rejected.
       First: categories linked to the main volume with offsets (replies in volume points, sounds in dB under it,
@@ -6279,4 +6284,493 @@ Open, in this order:
       test renames the folder to stand in for that hassmic); the main thread's work on a plugin's words at start
       is not marked (a fault there names nobody)
 - [ ] the cut (5.9)
+
+
+## Laser port — 2026-11-26
+
+See `devices/laser/README.md`.  Started in a worktree of its own (branch `laser-port`, from 120b3f3).
+
+What one unit showed (stock 8349, rooted by Firebreak's laser route): laser's software is cannoli's
+build.  `libmixerAPI.so` and `libpryon.so` are byte-identical to cannoli's (`devices/laser/probe.md5`);
+the Alexa client is `puffin`, with aipc davs dbus inet ace_kvstore ace_group drmrpc system audio
+keystore cache shell ace_maplite, so `DAEMON_GROUPS` is cannoli's; `/dev/stpbt`, `btmanagerd`, the wake
+word manifest and the earcons sit at cannoli's paths; every service cannoli's device.conf names exists,
+and `PUFFIN_START=1 && audio_mixer.init=true` starts the Alexa client here too; the Wi-Fi driver is
+`wlan_mt76x3_sdio` and answers gen4m's `iwpriv wlan0 driver get_power_mode`.  Different: text LED
+animations (144 in `/system/etc/led-resources`, 30 volume steps), the SoC zone `mtktscpu`, a TSL2572
+light sensor (IIO `iio:device1` of 2-0039, `calibrated_lux`), a TI TAS5805M amplifier with a digital
+volume per channel ("Master TAS5805m Playback Volume A" and "B", 110 as vendor mixer_paths.xml sets
+them), and no Wi-Fi motion.
+
+- [x] **Builds.**  `make DEVICE=laser all` at the first try; with `STUBS=1` every binary byte-identical
+      (`devices/laser/stubs`, tools/mkstubs.sh).  `scripts/probe.sh` on the Echo: identical.
+- [x] **Trial run on the unit (2026-11-26).**  The live policy patched on the Echo with
+      devices/laser/sepolicy.rules, sepolicy-hassmic.rules and the mirror rules (magiskpolicy, the
+      installer's chain; no type missing), then `scripts/deploy.sh` and `run.sh`: hassmic as puffin in
+      u:r:hassmic:s0, "Echo 4 26e3f5"; the stock wake word engine loaded ("alexa "Alexa" (en), active");
+      `pryon_test` ran the stock model on testdata/alexa_espeak.raw; micAsr and micRaw 5 s each at
+      16 kHz, a room floor of -59 and -61 dBFS; `capture-test.sh -p` played that sample and the
+      microphones heard it; the daemon's own capture dump (SIGTTIN) held 6.0 s in 6 s; the Bluetooth
+      controller came up with the idme's address.  Two things seen there: the mixer's MixerGetRate,
+      MixerGetNumCh and MixerGetSampleSizeBits answered -1 (at a boot's start they answer 16000, 1,
+      16: the first boot from the install says so), and a Sendspin server on the LAN was connected,
+      unpaired.
+- [x] **The install (2026-11-26).**  laser-os-builder `--port` baked `build/laser/hassmic.bundle` into
+      the image; Firebreak's route ran end to end on the unit: its check (the window, the loader's
+      identity, the rescue rehearsal: the loader's `reboot` hung, the watchdog reset the Echo, the
+      next window was caught), then `boot_b`, `uboot_b`, `system_b` as ten pieces and `misc`, and its
+      checks of the booted Echo.  The route had a bug on its first run that day: `fastboot devices`
+      lists the loader in RAM as "SERIAL  Android Fastboot", and it looked for "fastboot"; fixed.
+      First boot: the overlay mounted, the lockdown applied, the ring's set installed (4221 files in
+      228 s through the overlay, boot+37 to boot+265: `sysinstall.sh leds` runs a chmod and a chcon a
+      file; the stock boot swirl ran until then), Alexa off at boot+270, hassmic up at boot+272 with
+      "improv: not set up and no network: advertising, open to any phone".
+- [x] **Setup from a phone (2026-11-27).**  Improv over BLE on the installed unit: the phone found it, sent the
+      Wi-Fi, the Echo joined; it worked as on the other Dots (the owner).
+- [x] **Without the unit (2026-11-27).**  `tools/sepolicy-check.sh laser` passes: laser's sepolicy.rules now
+      repeats laser-os-builder's root rules word for word (cannoli's repeats cannoli-os-builder's), so the check,
+      which starts from the stock policy, sees what the Echo runs (before: "no init -> su").  The build identity
+      of the models whose bundle is baked into an image (`tools/source-id.py <codename>`, was
+      devices/cannoli/version.py; Makefile `SOURCE_ID`): laser's too, so two builds of one dirty tree differ in
+      VERSION as factory promotion needs.  Calls from the firmware, not run: `call_mic` 1 (stock's calls record
+      micHfp, libpjmedia-audiodev.so byte for byte cannoli's, AFE.cfg's "Voice" path), `sco` cannoli's PCM path
+      (DL6/UL5, O00..O03; laser's own mixer_paths.xml sets those switches for bt-sco, the same MT7663 and
+      btmtksdio), `sco_msbc_chip` 1 (cannoli's chip); docs/re-hfp.md.  Found: the ring has 24 LEDs (24 lp5036
+      LED nodes in init.ledcontroller.rc, 24 pixels a frame in stock's animations), which ring.c, the designs and
+      the page take from the set; and no frame file (two LP5036 at 0-0030/0-0031, a `ledmod_N` class device a LED
+      with color/red/green/blue/brightness), so the ring live needs a writer of its own in ringlive.c.  The
+      kernel (the FIT's `kernel-1`, a zImage of 6.5 MB, its decompressor's strings gzip's) has no gzip, xz, lz4,
+      lzo or lzma header in its payload: its AFE routes and DAPM table are not read yet.
+- [x] **Home Assistant, the voice pipeline, the buttons, Amazon's downloads (2026-11-27, the owner, on the
+      installed unit).**  Adopted by Home Assistant; requests through the voice pipeline answered; every button
+      works; "Download from Amazon": the login and every model downloaded.
+- [x] **Push updates (2026-11-27).**  `scripts/ota-push.sh` to the installed unit twice: taken, run, self test
+      passed, promoted to the factory copy (`sysinstall factory`: 73 files, the copy before kept to roll back to).
+      The first push ran the trial build `scripts/deploy.sh` had left in /data/local/hassmic (main.sh: a binary
+      there wins), whose self test main.sh rightly did not take for the update's; moved aside, the update ran.
+- [x] **Volume curve (2026-11-28).**  `board_vol_laser` (volcurve.c), measured on the unit, `make unit-volcurve`
+      passes.  How, and why laser needed its own method, in the "Volume curve" note above.
+- [ ] The rollback, as on cannoli.  The ring set's install on a first boot (228 s of 4.5 minutes:
+      `sysinstall.sh leds` ran a chmod and a chcon a file, ~8400 processes through the overlay): now in batches by
+      toybox's xargs (2026-11-27), to be timed on the next install.
+- [x] **The beam on 24 LEDs (2026-11-27).**  The front end runs on the DSP; libasp passes its beam index on unchanged
+      (`lasp_onEvent`, `beam_index` over LIPC), and so does ledcontroller: LipcMonitor (0x1cd38) drops negatives and
+      calls 0x19260, which runs the store's beam task, `LaserAnimationStore::getBeamIndexTask` in libled_resources.so
+      (`onBeamIndex(v)` on `active-start` and `active-end`: v into each frame's +0x1c), then the setter (0x19350);
+      `LedDevice` (0x1eb40) writes LED i from pixel (i + n - turn) mod n with n the frame's 24.  The Echo reported
+      `BeamDirection` 18 at a start: the index is in LEDs of the 24, as on the Dots' 12, and ring.c's turn is right
+      as it was.  A first reading took AFE.cfg's `BeamInfos` (12 beams, indexes 0..11) for the device's and turned
+      ours by twice the index for a day (`ring_beam_step`, never released: the push of 2026-11-27 logged "beam is at
+      LED 36"); that table is the simulator's ("used in simulator only, when passing a position file").
+- [x] **The ring live, built from the firmware (2026-11-27).**  No frame file: two TI LP5036, a LED class device a
+      LED.  libacehal_led.so (read out of it): `aceLedHal_setMultiState` takes 24 x {on, brightness, R, G, B}, sets
+      the level from the first, hands a 72-byte frame to `setLedFrame`, whose writer writes "%d %d %d" (each
+      channel x its thermal table's factor) to `/sys/class/leds/lp5036:ledmod_<i>/color` through descriptors it
+      keeps (`initLedClassLed`: LED i = ledmod_i), then "1"/"0" into both chips' `ledhven` (i2c 0-0030, 0-0031)
+      as the ring goes lit or dark.  The level: each rgbTable entry is {pwm 1, current N}, N into `global_current`
+      at a level change and left there (43..255: never 0).  ringlive.c: `board.ring_led_color` (a %d pattern) and
+      `ring_led_power`, the frame written LED by LED (only what changed; all of it again after the Echo's own
+      pattern, a fight or a first frame: `leds_forget`), the supply as the HAL; read-back where the files read
+      (ledcontroller opens them write-only).  Root: `LED_FRAME` is a list with globs (main.sh `led_frame`).
+      `tests/unit/ringlive_leds_test.c` (stand-in files, HASSMIC_FAKE_RING_LEDS), `ringlive_conf.py` both ways.
+- [x] **Wi-Fi motion, built from the firmware (2026-11-27).**  The driver is cannoli's `wlan_mt76x3_sdio` (MT7663):
+      `nicRxProcessDataPacket` calls `nicRxFillRFB` once (+0x6c), ucGroupVLD at +16, group 3 at +32, RCPI in word 3
+      (`.part.4` reads it, 255 a chain not receiving): `hassmic_rcpi4m.c`'s 32-bit defaults.  Kernel 4.9.77+ with
+      MODVERSIONS (the stock modules' vermagic), no readable image (the zImage's payload has no gzip, xz, lz4, lzo
+      or lzma header), so no IKCONFIG and no `__kcrctab`: checkers' config (Amazon's 4.9.77 MediaTek tree) with
+      MODVERSIONS and LOCALVERSION "+"; struct module as laser's stock modules have it (0x200 bytes, init 0xdc, exit
+      0x1e4).  CRCs: genksyms on kernel.org's 4.9.77 gives laser's stock CRCs exactly for simple prototypes (40 of
+      69) and wrongly for everything reaching task_struct (29: mutex_*, seq_*, proc_*, module_layout, param_ops_*):
+      Amazon's/MediaTek's structs.  So `HM_KALLSYMS`: the module imports only what stock modules import (21 symbols,
+      `devices/laser/Module.symvers` by `tools/kcrc.py --modules`), finds probe_kernel_read, stop_machine,
+      register_module_notifier, sprint_symbol and v7_coherent_kern_range by `kallsyms_lookup_name` at load, has int
+      parameters (no param_ops_uint), no preempt_disable (no preempt_count_sub) and no struct mutex of its own (an
+      atomic and msleep).  main.sh's `kmod()`: a mark on the flash around insmod (`KMOD_TRY`), so a load the
+      kernel fell in is not tried at every boot after it (no USB on this Echo), every model.
+- [ ] The ring: ours among stock's text animations (ring.c) on 24 LEDs, the turn towards a talker
+      around the Echo (and LED 0's place against beam 0).  The ring live on the unit: tested (2026-11-28, the
+      owner) — `board.ring_led_color`/`ring_led_power`, a colour from Home Assistant, the Echo's own pattern
+      over it and back.
+- [x] **Wi-Fi motion's first load on the unit (2026-11-27): taken, hooked, then a panic.**  insmod took the module
+      (vermagic, every CRC) and `nicRxProcessDataPacket+0x6c (call to nicRxFillRFB) hooked in wlan_mt76x3_sdio`;
+      a second later hassmic's first read of /proc/hassmic_rcpi4m panicked the kernel (pstore console-ramoops:
+      NULL dereference at 0x30 in mutex_lock from seq_read): laser's struct file_operations has one pointer more
+      between read and open (the stock perf_cpu_info.ko: open at 0x34, release at 0x3c, 124 bytes; kernel.org's
+      0x30, 0x38, 120), so no open was called and seq_read found no seq_file.  The Echo rebooted, and main.sh's
+      KMOD_TRY did what it is for: "the last load ... never came back", not loaded again.  HM_FOPS lays the words
+      out as that stock module does.
+- [x] **KMOD_TRY's "off and on" (2026-11-27).**  Switched off and on within a second on the page, between two of
+      root's looks: the mark stayed and nothing was tried.  hassmic now writes state/wifi-motion-on when a person
+      switches it on (the page, an import, Home Assistant; never the start's load), and main.sh's kmod() takes a note
+      newer than the mark as the word to try once more.
+- [x] **Wi-Fi motion on the unit (2026-11-27).**  Switched on again: loaded, hooked, `/proc/hassmic_rcpi4m`
+      "RCPI RX0 = 98, AGE = 20, FRAMES = 206, KIND = 200d, HOOKED = 1" a few minutes on: 98 = -61 dBm, the level
+      netwatch reported for the access point; the owner: it works.
+- [ ] Wi-Fi motion's levels against wifimotion.c's over a longer time (cannoli's chip: RCPI1 where RCPI0 is 255).
+- [ ] The speaker gain (off: a digital volume, one control a channel), phone calls (the path above, set from the
+      firmware: tried with scoprobe and a phone; the echo cap `call_echo_cap_db` once micHfp is measured).  The
+      volume curve was here too: measured (2026-11-28, above).
+- [x] **The root README's table and the CHANGELOG (2026-11-28).**  The install is verified on a unit: the README's
+      table lists the Echo 4 as cannoli, by hand without a guided setup; the CHANGELOG has it under 2026-11-27.  The
+      Licence section and NOTICE name the radio programs' own licences and Qorvo's notice.
+
+## Thread and Zigbee — 2026-11-27
+
+The Echo 4's radio (docs/re-thread.md): a Qorvo GP712 on `/dev/gp`, Amazon's OpenThread RCP for it, stock running
+Thread (its otbr-agent with that RCP on a pty, Thread 1.x of Qorvo's fork) and Zigbee (Qorvo's host stack behind
+`libacehal_zigbee.so`) at once.  The ask: stock killed, the radio Home Assistant's, Thread or Zigbee picked on the page,
+as border router/coordinator and as a plain router extending a network.
+
+- [x] **The RCP alone (2026-11-27).**  ot-rcp takes a socket for its stdin/stdout (toybox `nc -L`, then rcpbridge):
+      Spinel 4.3, RCP API 11, min host 4, radio caps 0x1f (no transmit security, no timed transmit), channels 11-25,
+      Qorvo's OUI.  As root and as `openthread`.
+- [x] **Our border router (2026-11-27).**  ot-br-posix main (7d52ce8, OpenThread 27ded13) built with NDK r21e
+      (`scripts/otbr-build.sh`): 3.2 MB, libc only.  The current host refuses the RCP ("missing required
+      capabilities: tx-security tx-timing"); with `skip-rcp-compatibility-check` it does the MAC security itself
+      (SubMac), CSL transmitter and link metrics subject compiled out.  On the unit: as `openthread` with NET_ADMIN and
+      NET_RAW (runas `-c`: CapEff 0x3000), a client of rcpbridge; leader in 12 s, border routing running, OMR prefix
+      published, SRP server running (auto mode, seconds later), border agent active, `_meshcop._udp` seen from a PC
+      beside the Echo's `_esphomelib._tcp` (OpenThread's mDNS beside avahi on 5353).  python-otbr-api 3.1.0 (what
+      Home Assistant's OTBR integration is) against its REST: API version 0.6.0, coprocessor version, border agent id,
+      extended address, the dataset as TLVs and JSON, ePSKc state; its factory reset, then a new network "home-
+      assistant" on channel 15 and enabled, as the integration's config flow does for a border router without one.
+- [x] **Router role (2026-11-27).**  otbr-agent without `-B`: "Backbone interface is not specified", border routing
+      stopped, SRP server and border agent off.
+- [x] **Zigbee through the remote radio (2026-11-27).**  zigbee-herdsman 11.2.5 (Zigbee2MQTT's library), adapter zoh,
+      `tcp://<echo>:28934` from a PC over the Echo's Wi-Fi: driver started (RCP API 11 taken), network up on channel 25
+      in 441 ms, permit join on and off.
+- [x] **Who gets in (2026-11-27).**  The PC's address on 28933 refused on the unit ("neither Home Assistant nor the
+      address named on the page"); `tests/fake_radio.py` holds the rest.
+- [x] **Home Assistant's OTBR integration on a real Home Assistant (2026-11-27).**  Added with the URL (port 28933)
+      on the owner's Home Assistant (Docker): it found no network and formed its own ("ha-thread-fdde", channel 15);
+      the Echo on gprcp leader within 6 s of it, `_meshcop._udp` with the border agent's port 28937 seen from a PC.
+- [ ] A Thread device on the Echo's network; a Matter device commissioned through it (in Docker: the Matter server's
+      own container, no add-on); a second border router (Home Assistant's, Apple's, Google's) beside it; router mode
+      on another border router's network.
+- [ ] A Zigbee device joined through Zigbee2MQTT with the Echo as its remote radio, and how it holds over Wi-Fi for a day.
+- [x] **A Zigbee coordinator for ZHA and Zigbee2MQTT (2026-11-27).**  zigbeed (src/zigbee/, docs/zigbee.md): a Zigbee
+      PRO stack of our own on the RCP, the deCONZ serial protocol for its host (zigpy-deconz and zigbee-herdsman's
+      deconz adapter both speak it; Qorvo's HAL left alone: it cannot join a network, so the router needed a stack of
+      our own anyway).  PC: zigpy-deconz forms, interviews a router and a sleepy end device two hops away (key
+      tunnelled), reads, Mgmt_Lqi, energy scan, restart, leave (tests/fake_zigbee.py); zigbee-herdsman's deconz
+      adapter the same (tests/fake_zigbee_z2m.py); through hassmic's port and mDNS (tests/fake_radio.py).  Echo 4:
+      zigpy-deconz over Wi-Fi formed a network on the GP712 (channel 25, 0.5 s once resumed), energy scan one
+      channel a request (Amazon's RCP answers status 3, invalid argument, to a mask of sixteen), permit joining, the
+      network back by itself after an update; `_zigbee-coordinator._tcp` with radio_type=deconz seen from a PC.
+- [x] **The Echo as a Zigbee router of a network another coordinator runs (2026-11-27).**  zigbeed -r router:
+      scan, association, the network key, Zigbee 3.0's own link key (request, verify, confirm), device announce,
+      routing (route discovery, many-to-one, route records, source routes), link status, children (update device,
+      the tunnelled key passed on, indirect frames).  Against zigbee-on-host (Zigbee2MQTT's own stack, written by
+      others) as trust center: joined, key confirmed, interviewed; an end device that hears only our router joined
+      through it and was interviewed and read (tests/fake_zigbee_z2m.py).  Echo 4: joined the owner's ZHA network
+      (an EmberZNet coordinator) as a router at once with joining open, its own link key confirmed (2026-11-27;
+      before that every association response was dropped: zigbeed gave the RCP its EUI-64 in air order, Spinel's
+      is big-endian, and tests/zbair.py read it the same wrong way).
+- [ ] **Zigbee devices of other manufacturers on zigbeed** (coordinator and router): a bulb, a sleepy sensor
+      (IAS), a remote that binds, an Aqara device (they are particular about their parent), a Hue bulb's touchlink
+      left aside.  A network moved in by ZHA's backup restore from another coordinator's radio (from zigbeed's own
+      backup: done, below).  A Friends of Hue switch (PTM 215Z) through the router's Green Power proxy.
+- [x] **zigbeed's missing parts (2026-11-27).**  APS fragmentation both ways (1024 bytes, blocks of 64, window 1),
+      broadcasts held for sleeping children, a new network key from the coordinator (page button; unicast by each
+      device's key and broadcast, the switch 20 s later; a frame under the pending key switches; the key's number
+      learnt from the network after a deCONZ restore, which carries none), address conflicts (ours moves; a sleepy
+      child's changed by its parent; network status 0x0D), PAN ID conflicts (network report and update), the
+      router's choice of network (page: the networks heard), a Green Power basic proxy on the router (zigpy's sink:
+      commissioning, pairing, protected notifications), deCONZ MAC poll indications and its watchdog enforced, ZHA's
+      backup restored onto a wiped coordinator, the end device's rejoin when its parent goes.  All in
+      tests/fake_zigbee.py.  A review of the stack (2026-11-27) found and fixed: an unsecured rejoin that gave the
+      network key under the well-known key with joining closed, replay holes (no counter for unknown senders, 0 as
+      "anything", a wrap clause, counters lost at restart), address remaps from unsecured frames, the indirect queue
+      and its expiry starved by association requests, update device and key commands from any member, a blocking
+      energy scan that could hang the daemon, permit 0xFF for good, joiners filling the node table, three stack
+      overflows (source-routed frames, route record relays, a long ZCL read answer), route replies not hop by hop,
+      link status of 27+ entries never sent, multicast's control byte dropped when relayed, a radio source-match
+      entry left behind, a hop table reused while in flight, a late transmit confirm shifting every callback.
+- [ ] **Home Assistant's OTBR add-on with the Echo as its remote radio.**  It refuses Amazon's RCP and takes no skip
+      parameter: with our own radio program, which has both in software ("Thread 1.4" below, Phase 1).  Not on the
+      owner's Home Assistant (Docker, no add-ons): someone else's, or OTBR's own Docker image against port 28934.
+- [ ] NAT64, TREL and the rest of 1.3/1.4: "Thread 1.4" below.
+
+### Thread 1.4: our own radio program, and the rest (plan, 2026-11-27)
+
+The aim: everything Thread 1.4 has, on the Echo 4's own radio.  Thread 1.3 and 1.4 added nothing to the radio:
+their features are the border router's (our otbr-agent is OpenThread of 2026-11-26, a 1.4 stack).  The radio
+gap is 1.2's: transmit security, timed transmit, enhanced acks (secured), link metrics probing, CSL (a parent for
+synchronized sleepy end devices).
+
+What is known (2026-11-27, from the firmware and Qorvo's public code):
+- Amazon's ot-rcp is Qorvo's GP712 OpenThread platform: its RADIO_CAPS 0x1f are what Qorvo's public library
+  `libQorvoGP712_ftd.a` returns from `qorvoRadioGetCaps` (qpg-openthread, `gp712/lib`; the platform's sources in
+  openthread/ot-qorvo `src/gp712`, a Raspberry Pi with a GP712 board).  Its 1.2 functions are stubs there:
+  `qorvoRadioSetMacKey`/`SetMacFrameCounter` do nothing, `EnableCsl`, `ReceiveAt`, `ConfigureEnhAckProbing` return
+  "not implemented".  Qorvo never wired 1.2 to the GP712's OpenThread platform.
+- The kernel MAC under it (`gp712_mac.ko`, Qorvo's, `/dev/gp`) has what 1.2 needs but CSL's own: timed transmit
+  (`gpMacDispatcher_ScheduleTimedTx`, `gpHalMac_PrepareTimedTxPBM`, absolute events), enhanced acks and enhanced
+  frame pending, the ack's frame counter and key id (acks the chip secures), enhanced-ack probing
+  (`gpMacDispatcher_ConfigureEnhAckProbing`: link metrics), receive and transmit timestamps, MAC security tables.
+  No CSL symbol.  The public library's RPC client (`gpMacDispatcher_wrapper_client`, `gpCom_IoctlUser`, unstripped)
+  lacks ScheduleTimedTx: the driver is newer than it.
+- Upstream OpenThread's radio program does transmit security and timed transmit in software over any radio
+  (`OPENTHREAD_CONFIG_MAC_SOFTWARE_TX_SECURITY_ENABLE`, `OT_CONFIG_MAC_TARGET_TIME_TX_ENABLE`: SubMac's
+  `kSwEnabledCapabilities`), and reports them to the host.  It runs on the Echo's SoC next to the driver, so the
+  timing is Linux's (timerfd, SCHED_FIFO) plus the driver's RPC, not a UART's.
+- Qorvo's EULA: use, and distribution in products, only with Qorvo silicon (the Echo 4 is): fetched at build time,
+  pinned by SHA-256, never in git (as scripts/otbr-build.sh does with its sources); our own RPC client where it
+  does not fit.
+
+Phase 0, investigation (about a day; nothing to buy):
+- [x] **0.1 Qorvo's public library speaks to Amazon's driver (2026-11-27), with one byte changed.**  As it is, the
+      driver refuses it ("non matching API for module: 72": hex, gpMacDispatcher; the library offers API 2.8.0.0,
+      the driver, 2.10.3.2, serves 2.7.0.0 only, matched on all four bytes, as Amazon's ot-rcp announces it).  The
+      byte patched in the library's object (docs/re-gp712.md §0), a probe on it in place of Amazon's ot-rcp (static,
+      musl, hard float: the library is the Raspberry Pi's armhf; zig): init, the EUI-64, a beacon request on each
+      channel sent without error, beacons and traffic of nearby networks heard on 11, 20 and 25 with the driver's
+      timestamps.  Its energy scan answered values that are no dBm (+112, +127): open.  Gate A: passed.
+- [x] **0.2 The driver's RPC mapped (2026-11-27), docs/re-gp712.md** (the .ko has full symbols and DWARF): the ioctls
+      (0x40044703 write, 0x80044704 read, SIGIO a driver reset), the framing, gpVersion's negotiation, every
+      gpMacDispatcher command both sides have (ids and lengths alike in 2.7 and 2.8; 2.8 adds 133, 157
+      GetCurrentTimeUs, 167, which the driver does not serve: the RCP keeps away from them, otPlatTimeGet from
+      CLOCK_MONOTONIC_RAW, the driver's timestamps' own clock).  What it means for Phase 2: **no CSL in the driver**
+      (only an unused CSL IE finder), **enhanced-ack probing a stub** (0x9E always 0xE8: no link metrics), enhanced
+      frame pending real, timed transmit (ScheduleTimedTx 0x8E) timed on the chip's clock, which no command reads.
+      Our own client instead of Qorvo's library: 600 to 800 lines, all of it known now.
+- [ ] 0.3 What a second radio needs to show: an nRF52840 dongle (about 10 EUR) as OpenThread CLI (an SSED with CSL)
+      and as sniffer with timestamps; or a SkyConnect/ZBT-1 the owner has.
+- Gate A: the public library works with Amazon's driver: Phase 1 on it.  Else Phase 1 on our own RPC client
+  (a few days more).
+
+Phase 1, `gprcp`: our radio program (3 to 6 days):
+- [x] **gprcp (2026-11-27).**  scripts/gprcp-build.sh: OpenThread's RCP at otbr-agent's commit (27ded13, RCP API 12)
+      on our copy of ot-qorvo's gp712 platform (src/gprcp/: the chip's caps from Qorvo's library, otPlatTimeGet from
+      CLOCK_MONOTONIC_RAW, no settings, the microsecond alarm, a glibc shim) and Qorvo's library with the byte of 0.1;
+      software transmit security and timed transmit; zig, static musl hard float, 214 kB; the sources by checksum
+      (ot-qorvo, OpenThread, mbedtls, Qorvo's library), CI with a pinned zig.  Root's radio_watch runs it under
+      rcpbridge (setting `radio_program`, ours by default; Amazon's on request, and for the rest of the boot after
+      three zigbeed or otbr-agent starts on ours that did not live 30 s: /data/local/hassmic/radio-program, the page).
+- [x] **zigbeed on it (2026-11-27):** version, EUI-64, beacon requests sent, 4 networks nearby heard.
+- [x] **otbr-agent on it without `skip-rcp-compatibility-check` (2026-11-27):** leader within 20 s, border routing,
+      the border agent; through main.sh as shipped too (rcpbridge's child gprcp, otbr-agent's URL without the flag).
+- [ ] Home Assistant's OTBR add-on with the Echo as its remote radio (TCP 28934), on a real Home Assistant (not the
+      owner's: Docker, no add-ons).
+- [x] **Energy scan (2026-11-27):** the values that were no dBm (+122, +91, -114 beside -88; Amazon's ot-rcp +56,
+      -124) are the driver's 802.15.4 ED levels (0..255, 5.1 a dB from -89 dBm) that Qorvo's library, Amazon's
+      ot-rcp too, reads as int8 dBm (docs/re-gp712.md "Energy scan").  gprcp turns them back: on the unit -53 to
+      -79 dBm over channels 11 to 26.  Left: Amazon's program (the fallback) still reports them raw, and a scan the
+      driver refuses hands on the last value again (needs our own confirm handler).
+- [ ] Measured: timed transmit, scheduled against sent (the second radio's timestamps), its spread; latency.
+- Gate B: the spread, for Phase 2's CSL.
+
+Phase 2, Thread 1.2's radio features (3 to 5 days; the second radio).  After 0.2 mostly closed: the driver has no
+CSL and its enhanced-ack probing always fails; what is left is the RCP's software security and timing (Phase 1), and
+enhanced acks from the chip, to be held to the second radio:
+- [ ] 2.1 Enhanced acks from the chip for 2015 frames, secured (the driver's TxAckAfterRx), held to the second
+      radio's capture.  **Against a second radio (2026-11-27, tools/gp712/twoway.py: the owner's SLZB-06Mg26U on
+      SMLIGHT's Thread RCP firmware, SL-OPENTHREAD 2.7.2.0, for 4 minutes, then its Zigbee coordinator firmware
+      again):** 2006 data frames to the Echo heard 10 of 10, acked (Imm-Ack) 8 of 10; 2015 frames (frame version 2),
+      broadcast or to its short address, heard 0 of 10 and so never acked; promiscuous, the same 2015 frames 10 of
+      10.  The chip hears them and a receive filter of the driver's drops them: what a Thread 1.2 CSL child sends.
+      gpMacDispatcher_SetMacVersion(2) (Qorvo's qorvoRadioReset sets 1, 2006) made the driver reset itself
+      ("Driver reset detected"): not that way.  **Not possible on this chip (2026-11-27, docs/re-gp712.md §5):**
+      the chip's address filter takes 2003 and 2006 frames only (MACFILT 0x6a30, bit 2 never set); bit 2 would let
+      2015 frames in, but the driver has no enhanced ACK at all (every getter of one a stub, enhanced frame pending
+      `bx lr`) and this chip's register has no room for k8e's 2015 and CSL-IE switches: an Imm-Ack at best.
+      **Reopened (the owner's wish: real enhanced acks), 2026-11-27:** the chip runs programs from its own RAM, an
+      8051 (Qorvo's coex program) and a sequence processor (the MAC filter, which likely decides the ack too).  A
+      program of ours ran on the 8051 (src/kmod/hassmic_gp8051.c, docs/re-gp712.md "The chip's own programs"): ~3.5
+      instructions a microsecond, ~670 in the 192 us turnaround (more where the peer's ack wait allows: 864 us is
+      802.15.4's macAckWaitDuration).  What an Enh-Ack from it needs, each still to be found: (a) the filter
+      program taking 2015 frames and not answering them with the hardware's Imm-Ack (its bytecode, not decoded);
+      (b) the 8051 told at once that such a frame came in (int_ctrl's sources: unknown), its header read from the
+      packet buffer; (c) an ack frame built in a buffer and sent at the turnaround (the TX queue 0x480, as the host
+      does: no hardware "send as ack" path is known); (d) the AES engine (ssp) for a secured ack; (e) coex kept
+      (one core: ours merged with it).
+      **Enh-Acks from the chip's own ACK path (2026-11-27):** the filter program decoded (sequencer bytecode,
+      tools/gp712/dseq.py; docs/re-gp712.md "The MAC filter program"): it builds the ACK frame in the hardware's
+      ACK buffer (PBM 7: data 0x6900, options 0x60e0, +9 the length without FCS) and strobes 0x434 = 4, and the
+      hardware sends it at its turnaround.  tools/gp712/mkseq.py extends it in its free RAM (0x34ac-): hooks at
+      0x3020 (phase 1: the template reset) and 0x3420 (the ack): a 2015 frame (0x6a30 bit 2 set) gets an Enh-Ack
+      (FCF 0x2802 to a short source, 0x2c02 to an extended one, seq, the source's PAN and address), every other
+      frame the Imm-Ack as before.  Against the SLZB (tools/gp712/enhack.py, its Thread firmware for 3 minutes):
+      SLZB -> Echo 2015 frames: 9 of 10 answered `02 28 SS 57 7e 01 51`, every one taken as the ack by the
+      EFR32; Echo -> SLZB 2015 frames: 8 of 10 acked (the chip takes an Enh-Ack: 0 of 10 without the patch);
+      2006 frames: Imm-Acks as before (9 and 10 of 10).  OpenThread takes an unsecured Enh-Ack without IEs
+      for a secured frame too (`Mac::ProcessEnhAckSecurity`): a CSL parent's acks need no IEs.  Left: the patch
+      made at every start of the driver (a module of ours; today a test), the 2015 PAN ID compression rules
+      (the filter parses 2015 headers by 2006's: extended/extended frames, Thread's usual 2015 frame, put the
+      source 2 bytes off), secured frames from Thread devices, CSL with a CSL child (a Seeed XIAO nRF52840,
+      ordered 2026-11-27).
+      **The PAN ID compression (same day):** a parser of ours for frame version 2 (tools/gp712/mkseq.py; at
+      0x2c00, chip RAM the sequencer was measured to run code from) by 802.15.4-2015's table 7-2, hooked into
+      both of the filter's parsing places (0x30be header length, 0x3132 fields); 2003/2006 frames take the
+      filter's own code.  No dst PAN: the broadcast PAN; no src PAN: the dst's, else stack 0's (the Enh-Ack's
+      dst PAN).  Live on a Zigbee channel: 2006 traffic as before.  Not yet against a 2015 sender.
+      **Made at every start (same day):** hassmic_gptime hooks gpBaseComps_StackInit's one call to gpHal_Init
+      and patches the filter right after it on the driver's thread (src/kmod/hassmic_gpfilter.h, made by
+      mkseq.py; only where the 1196 bytes are the analysed program by FNV-1a and each hook's place holds its
+      original; `enhack=0` leaves it out; /proc FILTER, FILTER_REFUSED).  On the unit (as a test copy beside the
+      loaded module): applied at gprcp's start, every hook read back, 0x6a30 = 7, frames as before.
+      **In the product, off (2026-11-27):** setting `thread_csl` (experimental): root's main.sh radio_csl loads the
+      module (marked against a load the kernel fell in), and where it hooked all of it runs otbr-agent-csl (the
+      CSL transmitter, its frames to the RCP 4 ms ahead), else says why on the radio page; with CSL off or Zigbee
+      the module's patch is switched off for the driver's next start (it cannot be unloaded).  radio_csl's cases
+      tried in the Echo's mksh against stand-in files; the whole of it with the XIAO.
+      **On the unit, as shipped (same day):** this build pushed (ota-push), the Echo rebooted, radio thread with
+      thread_csl on through state/config: root loaded the module ("radio: CSL on"), the radio as br:gprcp:csl,
+      otbr-agent-csl on gprcp, the patch at gprcp's start (FILTER 1, none refused); thread_csl off: br:gprcp,
+      the plain otbr-agent, enhack 0, no patch at that start.  Found: root's status file outlived the switch off
+      (csl_said began as "", the off state's word): it begins as "-" now.  Then everything as it was.
+      **Enhanced frame pending (same day):** the filter looks the sender up in the data-pending tables for a data
+      request command only; Thread 1.2's sleepy devices also poll with 2015 data frames, answered by an Enh-Ack
+      whose frame pending bit says whether their parent holds something: a fifth hook (0x343e) lets 2015 data
+      frames through to that lookup.  Not tried with a device that polls so (the XIAO).
+      **What the GP712 misses, and the patch (same day, tools/gp712/rxloss.py, rxpatch.py):** promiscuous on a
+      Zigbee channel of the house, each sender's MAC sequence numbers: 16 to 18 % missed in all, nearly all of it
+      from the three weakest senders (-93 to -101 dBm, the edge of sensitivity); the strong ones 1 to 3 % (the
+      coordinator at -73 dBm 9 of ~320, a router at -55 dBm 2 of ~140).  With the Echo's Wi-Fi kept busy (2 MB/s of
+      UDP to it) the same, 17.4 %: its Wi-Fi is on 5 GHz here (5500 MHz), no 2.4 GHz coexistence to see; on a 2.4
+      GHz network untried, and Bluetooth (2.4 GHz too) is left as a cause of the misses against the SLZB.  The
+      whole patch, unpatched/patched/unpatched/patched for 30 s each: 19.0 % against 16.9 % missed (620 and 704
+      numbered frames), no driver reset: no cost to what the chip hears.
+- [-] 2.2 Link metrics: enhanced-ack probing through the driver; `OPENTHREAD_CONFIG_MLE_LINK_METRICS_SUBJECT_ENABLE`.
+      Not possible: no enhanced ACK (2.1).
+- [-] 2.3 CSL transmitter: the driver's timed transmit where the RPC has it, else Phase 1's; an SSED on the nRF
+      dongle attached with CSL, delivery rate against period.  Not possible: a CSL child's frames are 2015 ones,
+      which the chip neither takes nor answers with an Enh-Ack (2.1).
+- **Gate C: CSL off, for good (2026-11-27).**  The timing was good enough (2b.2: a constant +425 us, sd 6 to 8 us);
+  the acks are what the chip lacks.  A CSL child picks another parent; every other Thread 1.4 feature stands.
+
+Phase 2b, the driver extended by a kernel module of ours (the owner's wish, 2026-11-27).  The GP712 has no firmware of
+its own to update: no request_firmware in Amazon's gp712_mac.ko, no image of one in the firmware; the chip is driven
+register by register from the kernel, whose MAC is that module.  So what the chip can do and the driver does not
+offer comes from a module beside it, as Wi-Fi motion's (devices/laser: MODVERSIONS, imports only what stock modules
+import, the rest by kallsyms_lookup_name; main.sh kmod()'s KMOD_TRY guard against a boot loop; off by default):
+- [x] **2b.1 The chip's clock beside the host's (2026-11-27).**  src/kmod/hassmic_gptime.c (device.mk KMOD_RADIO;
+      the Makefile builds every model's modules by one rule now): the driver's two calls to gpHal_GetTime
+      (gpPd_DataIndication+0x10c, gpPd_cbDataConfirm+0x74, one each) made calls to a wrapper that calls it and then
+      gpOsal_TimeGetCurrent as the driver does right after, the pair in /proc/hassmic_gptime.  Nothing called from
+      outside the driver's own context.  On the unit: both hooked, pairs with every frame and confirm, host - chip
+      2383064386 then 2383064408 us 1.8 s later (12 ppm), no oops.  Not loaded by main.sh yet (2b.2 needs it).
+- [x] 2b.2 Timed transmit on it: DataRequest with option 0x10 and ScheduleTimedTx (0x8E) at a chip time from 2b.1;
+      gprcp's timed transmit by it instead of Linux's timers.  Measured against the second radio.
+      **The chip's half works (2026-11-27, tools/gp712/gptimed.c, Qorvo's DataRequest wrapped at link time):** the
+      frame staged (txOptions | 0x10) with CSMA mode 0 around it (with CSMA the driver asserts, gpHal_MAC.c:1799,
+      and its thread starts again), then 0x8E [handle, chip time u32, stack] through gpCom_DataRequestAndWaitForAck
+      (module 0x72, the dispatcher's ack buffer and flag read from gpMacDispatcher_SetPanId's literals).  20 timed
+      frames 30 ms ahead on channel 26, the chip's own TX timestamp (hassmic_gptime's TX) against the target: all
+      +255 or +256 us, every 0x8E acked 0; the immediate frames beside them went 1.0 to 1.3 ms after the call.  So
+      the chip holds its time to 1 us with a constant +255 us (likely its SHR: preamble + SFD = 160 us, plus the
+      turnaround to TX, 192 us at most, less what the timestamp counts); in gprcp that is subtracted.
+      **gprcp on it (same day):** src/gprcp/timed.c reports OT_RADIO_CAPS_TRANSMIT_TIMING where hassmic_gptime is
+      loaded with its three hooks, and stages each frame with a target (mTxDelayBaseTime + mTxDelay: the end of the
+      SFD) at the chip time of the latest pair counted after its own start (the chip's clock begins again whenever
+      the library opens the driver: 0.7 s into a run with the host at 227 s), the drift followed between pairs 10 s
+      apart.  tools/gp712/timedtx.py (Spinel's STREAM_RAW with TxDelay, the RCP's RCP_TIMESTAMP): caps 0x7f, 20
+      frames 30 ms ahead mean +1 us, -9 .. +15 (the pairs' jitter: the driver reads the chip over SPI, then the
+      host clock).  A time already past is sent at once (measured with gptimed at 1 ms ahead: +282 .. +5963).
+      Staging and 0x8E take 0.6 to 1.4 ms together, so OpenThread's OPENTHREAD_CONFIG_MAC_CSL_REQUEST_AHEAD_US
+      (2000) leaves little for Spinel's way from otbr-agent: raise it in otbr-build.sh with 2b.3 (the short leads
+      over adb measured adb, not this).  Left: main.sh loading the module (with 2b.3: nothing sends timed frames
+      before CSL).
+      **The second radio's view (2026-11-27, tools/gp712/twoway.py, the SLZB above):** each radio sends a frame
+      timed 30 ms ahead on its own clock, the other timestamps it.  A = SLZB's arrival - Echo's target, B = Echo's
+      arrival - SLZB's target; the clocks' offset cancels in A + B, the Echo's transmit error plus its receive
+      timestamp's, which is what a CSL parent's schedule stands on.  A + B = +425 us, sd 6 to 8 (17, 14 and 10
+      frames; 17, 37 and 77 byte frames alike: both ends refer to the frame's start, the offset is a constant,
+      to be taken out in timed.c once it is known which end has it); A and B alone spread 30 to 70 us (the pairs'
+      jitter and the clocks' drift between the two halves).  The Echo missed 1 to 5 of every 15 of the SLZB's
+      frames (the Wi-Fi's coexistence: the driver is the FEM_COEX build).  Gate B: the spread passes; the offset is
+      a calibration.
+- [-] 2b.3 CSL transmitter in gprcp on 2b.2 (the chip's enhanced, secured acks and the driver's timestamps as they
+      are); an SSED on the nRF dongle as the child.  [-] Not possible (2.1, Gate C).  A CSL child
+      cannot be an RCP behind OpenThread's posix host (it has no CSL receiver: an SoC, the nRF dongle).  The test
+      build of the border router is ready: OTBR_CSL=1 scripts/otbr-build.sh (CSL transmitter on, frames handed to
+      the RCP 4 ms ahead).
+      **With the XIAO (2026-11-28, a second Echo 4 as the border router, thread_csl on as shipped):** upstream
+      Zephyr's XIAO firmware halted as it first slept, CSL or not: its 802.15.4 driver is built on the open source
+      service layer (no delayed receive, CSMA or timestamps), and OpenThread's software CSMA then asserts in it
+      (nrf_802154_trx_standalone_cca); the XIAO's firmware is now NCS v3.4.2's OpenThread CLI (Nordic's own
+      service layer; tools/gp712/xiao-build.sh), flashed over USB (xiao-flash.sh: a shell command, or devmem into
+      GPREGRET; the double press never brought the bootloader on this unit).  With it: the XIAO a child 1 to 2 s
+      after its start (version 5), the Echo synchronized to its CSL schedule (child table CSL 1), its polls taken
+      and acked (15 of 15).  The Echo's CSL transmissions to it fail: of 45 unicasts 9 acked, 20 indirect retries
+      ran out, 20 pings of 20 lost, then CSL 0 again.  The XIAO took 20 of the 45 (the rest outside its window)
+      and of those 9 as security errors: retransmissions of frames it had taken and acked (their frame counter
+      used), so the Echo missed its Enh-Acks too (a CSL child's are secured and carry a CSL IE: longer than the
+      SLZB's of the Enh-Ack test).
+      **The acks, measured (same day; tools/gp712/timedack.py, cslsweep.py, the XIAO's shell commands ackie and
+      acks):** the XIAO sent its Enh-Acks (counted at its driver's tx_ack_started: every one secured, with the CSL
+      IE, 23 and 31 bytes, e.g. FCF 2a4a, seq, dst 0400, aux 0d + counter + key index 1, CSL IE 040d phase period
+      0c35) and the Echo took none; the filter program saw them all up to its match (counters in it at 0x3530..,
+      mkseq_isa.py; at 0x2e40 a counter broke receiving, and the test module takes 32 bytes a write).  Unsecured
+      Enh-Acks the XIAO made longer (ackie, 16 bytes of IE at most, an address's first entry kept): 7, 13, 17 bytes
+      taken, 21 and 23 not, at once and timed: the chip's ack wait, register 0x408 = 32 x 32 us from gpHal_Init, to
+      the ack's end (docs/re-gp712.md "The ack wait"; an earlier "length is not it" had an IE the driver refused).
+      63 (2 ms, the 6-bit field's top; 64 took no ack at all) takes them: hassmic_gptime writes it with the filter
+      patch.  Tried on the way, wrong: 0x6a33 bit 2 (the filter's hand-up mask by frame type), 0x08a, the buffer's
+      acked_mode bit, an ack in software; the driver's gpHal_GetRxEnhancedAckFromTxPbm and ...FromTxAckAfterRx are
+      stubs on this chip (0, 0xff).  **CSL works (same day):** every CSL frame acked at the first try, pings 10 of 10
+      for timed frames shifted anywhere within +-1.5 ms (the child's window is wide: gprcp reports OpenThread's
+      worst CSL accuracy and uncertainty, so the +425 us of 2b.2 need no calibration); then as shipped (this build
+      pushed, the Echo started anew, thread_csl on, its own otbr-agent-csl): the XIAO a CSL child in 1 s,
+      synchronized, 20 pings of 20, round trip ~290 ms (half the 500 ms period).
+  Found on the way: the GP712 has channels 11 to 25 (otbr-agent: "Failed to
+      set PAN channel to 26", the network on the one it had): csltest.py's default is 20.  Tools: xiaobridge.py
+      (the XIAO's port held open by one process: the upstream firmware's halts first looked like a closed port's),
+      csltest.py on the Echo's own border router.
+- [-] 2b.4 Link metrics (enhanced-ack probing: the chip writing a Link Metrics IE into its acks within 192 us): only
+      if the chip's ack path can carry header IEs (DWARF of gpHal's ack templates); likely not on this older chip.
+      Not possible: no enhanced ACK at all (2.1).
+- 2b's outcome: gprcp times frames on the chip where hassmic_gptime is loaded, and nothing in Thread needs that
+  without CSL, so main.sh does not load the module; both stay for a radio that may need them.
+
+Phase 3, Thread 1.3 and 1.4's border router features (independent of 1 and 2; a day or two each):
+- [x] **3.1 NAT64 (2026-11-27).**  otbr's translator (OTBR_NAT64), setting `thread_nat64` (off by default): root's
+      radio_nat64, one MASQUERADE for 192.168.255.0/24 on the Wi-Fi and IPv4 forwarding while it is on (FORWARD's
+      policy drops all but ot0's, lockdown.sh keeps those two), ot-ctl `nat64 enable|disable` told to every
+      otbr-agent; cleared at every radio_watch start.  On the unit: from the Thread side 192.168.100.1 and 8.8.8.8
+      answered through it (`ot-ctl ping 8.8.8.8`: the synthesized fde3:…:2::808:808, translator counters, mapping).
+- [~] **3.2 Upstream DNS (2026-11-27).**  OTBR_DNS_UPSTREAM_QUERY; the resolver's file patched to
+      /data/local/hassmic/thread-resolv.conf (root's folder), written by radio_dns from the Wi-Fi's DNS servers on
+      the home network (the radio's user reaches only local addresses), before otbr-agent starts, read again by it.
+      Not shown to work: the Echo's own queries never reach OpenThread's DNS server (the CLI to itself, the host's
+      ot0 to an address of its own: both stay local); a Thread device's query is the test.
+- [x] **3.3 TREL (2026-11-27).**  OTBR_TREL, `trel://wlan0` beside the RCP for a border router, its port fixed at
+      28936 (lockdown.sh: IPv6 INPUT; IPv4's range has it), OpenThread's own mDNS.  On the unit: enabled, port 28936.
+      Another TREL border router on the LAN (an Apple TV, Home Assistant's add-on): not tried.
+- [x] **3.4 DHCPv6 prefix delegation (2026-11-27).**  OTBR_DHCP6_PD (OpenThread's own client), setting `thread_pd`
+      (off by default: a delegated prefix is routable as far as the home router routes), ot-ctl `br pd`.  A router
+      that delegates: not tried.
+- [x] **3.5 The backbone router (2026-11-27).**  Laser's kernel has IPV6_MROUTE (and IP NAT, MASQUERADE): OTBR on,
+      multicast across the home network (Matter groups).  On the unit: Primary.
+- [x] **3.6 The ephemeral key (2026-11-27).**  OTBR_EPSKC; REST `POST /node/ba-epskc/key` (lifetime 2 min, port
+      28938), radio.c `radio_share`, the code to the page sealed (seal2, "hassmic seal back 3", the answer's nonce),
+      the status only its time left; page "Share the network…".  The border agent's own port fixed at 28937
+      (OpenThread's default was ephemeral, above 32767, which the Echo's INPUT drops: no phone app reached it
+      before).  On the unit: the border agent active on 28937.  tests/fake_radio.py: the request, the seal, the
+      status, the end.  A phone's app taking the network: not tried.
+- [ ] 3.7 TCAT (commissioning over Bluetooth): OpenThread's TCAT on hassmic's BLE (ble.c's GATT server, as Improv).
+      The largest; last.
+- [x] **3.8 What Home Assistant reads (2026-11-27).**  Home Assistant's OTBR integration (python-otbr-api 3.0.0, the
+      version HA pins) against the Echo's otbr-agent on gprcp, every call HA makes: coprocessor version ("OPENTHREAD/
+      openthread-27ded13; GP712; gprcp"), extended address, border agent id, create/get the active dataset, enable,
+      the pending dataset after set_channel, factory reset (DELETE /node; HA's fallback delete_active_dataset gets a
+      405 from upstream's REST, never asked while factory reset works).  /diagnostics: 404 (upstream's REST at this
+      pin; HA does not ask).  mDNS: `_meshcop._udp` with the border agent's port 28937 while active (49152, its
+      placeholder, while not); a border router's record outlives a factory reset or a kill (its new extended address
+      is a new name) until its TTL: Home Assistant may list a stale one for that long.
+
+Phase 4, Zigbee with the new radio program:
+- [ ] 4.1 Green Power bidirectional commissioning: the commissioning reply in the GPD's receive window (gprcp's
+      timed transmit).
+- [ ] 4.2 zigbeed's open items above (manufacturers' devices, a backup of another coordinator).
+
+Phase 5, real devices and time: a Matter-over-Thread device commissioned through Home Assistant, a CSL device
+(Phase 2), the Echo beside another border router (Home Assistant's ZBT-1, an Apple TV), a week of each.
+
+Phase 6, the words: docs/re-thread.md (the driver's RPC), GUIDE, CHANGELOG, SECURITY (NAT64's forwarding,
+TREL's port, ePSKc).
+
+Risks, in order: the public library and Amazon's driver differ in version (Phase 1 on our own RPC client); CSL's
+timing through Linux and the RPC (Phase 2.3 may end with CSL off); kernel features NAT64 or the backbone router need
+(IPv6 multicast routing, NAT); Qorvo's EULA.
 

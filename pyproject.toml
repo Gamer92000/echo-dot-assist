@@ -25,6 +25,9 @@ dependencies = [
     "jinja2==3.1.6",
     "python-slugify==9.1.2",
     "pyyaml==6.0.3",
+    # Zigbee (tests/fake_zigbee.py): Home Assistant's ZHA libraries, the coordinator's host as ZHA runs it
+    "zigpy==2.5.1",
+    "zigpy-deconz==1.1.2",
 ]
 
 [tool.uv]

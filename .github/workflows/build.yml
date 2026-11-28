@@ -67,7 +67,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        device: [donut, biscuit, radar, checkers, crown, cronos, athena, cupcake, cannoli]
+        device: [donut, biscuit, radar, checkers, crown, cronos, athena, cupcake, cannoli, laser]
         include:
           # where Wi-Fi motion's kernel module is built from, for the cache; what is downloaded is pinned in device.mk or
           # the Makefile (make kernel-tools)
@@ -97,6 +97,9 @@ jobs:
             kcc: aarch64-linux-android-4.9
           - device: cannoli
             ksrc: linux-5.4.86
+            kcc: arm-eabi-4.8
+          - device: laser
+            ksrc: linux-4.9.77
             kcc: arm-eabi-4.8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
@@ -152,6 +155,30 @@ jobs:
         if: matrix.ksrc && steps.kernel.outputs.cache-hit != 'true'
         run: make -s kernel-tools DEVICE=${{ matrix.device }} STUBS=1
 
+      # Our own Thread border router where the model has the radio (device.mk THREAD := 1, the Echo 4): upstream's
+      # ot-br-posix from pinned archives (scripts/otbr-build.sh), cmake and ninja; the archives kept by their pins
+      - name: Thread pins
+        id: thread
+        run: |
+          grep -q '^THREAD *:= *1' devices/${{ matrix.device }}/device.mk || exit 0
+          echo "on=1" >> "$GITHUB_OUTPUT"
+          echo "key=$(sed -n '/^SOURCES="/,/^"/p' scripts/otbr-build.sh scripts/gprcp-build.sh | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          command -v ninja > /dev/null || { sudo apt-get update && sudo apt-get install -y ninja-build; }
+          # gprcp (our own RCP, scripts/gprcp-build.sh) is a static musl program by zig: this zig, pinned
+          z=zig-x86_64-linux-0.17.1
+          curl -fsSL --retry 3 -o /tmp/$z.tar.xz https://ziglang.org/download/0.17.1/$z.tar.xz
+          echo "3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a  /tmp/$z.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/$z.tar.xz -C "$HOME" && echo "$HOME/$z" >> "$GITHUB_PATH"
+      - name: Thread sources cache
+        if: steps.thread.outputs.on && !env.ACT
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        with:
+          path: |
+            toolchain/src/otbr/*.tar.gz
+            toolchain/src/gp712/*.gz
+            toolchain/src/gp712/*.a
+          key: otbr-${{ steps.thread.outputs.key }}
+
       - name: Build
         run: |
           make -j"$(nproc)" DEVICE=${{ matrix.device }} STUBS=1 RELEASE=1 all build/otatool-host
@@ -177,13 +204,15 @@ jobs:
       - name: Content ID
         run: DEVICE=${{ matrix.device }} scripts/content-id.sh STUBS=1 > build/${{ matrix.device }}.content-id
       # beside build/<device>/, not in it: the artifact's root is then build/ and it holds <device>/ itself, which the
-      # release job needs (download-artifact puts a lone artifact's files straight into its path, without its name)
+      # release job needs (download-artifact puts a lone artifact's files straight into its path, without its name).
+      # NOTICE (bundle.sh wrote it: scripts/notice.py) goes with the binaries, as their licences ask
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: build-${{ matrix.device }}
           path: |
             build/${{ matrix.device }}.content-id
             build/${{ matrix.device }}.bundle-sha256
+            build/${{ matrix.device }}/NOTICE
             build/${{ matrix.device }}/hassmic
             build/${{ matrix.device }}/runas
             build/${{ matrix.device }}/plugrun
@@ -195,6 +224,12 @@ jobs:
             build/${{ matrix.device }}/*.ko
             build/${{ matrix.device }}/libhmui.so
             build/${{ matrix.device }}/libhmled.so
+            build/${{ matrix.device }}/rcpbridge
+            build/${{ matrix.device }}/otbr-agent
+            build/${{ matrix.device }}/otbr-agent-csl
+            build/${{ matrix.device }}/ot-ctl
+            build/${{ matrix.device }}/zigbeed
+            build/${{ matrix.device }}/gprcp
           if-no-files-found: error
 
   test:
@@ -221,6 +256,10 @@ jobs:
       - name: Python packages
         timeout-minutes: 5
         run: uv sync --locked           # .venv exactly as uv.lock says; fails if pyproject.toml changed without uv lock
+      # Zigbee2MQTT's library for tests/fake_zigbee_z2m.py, as package-lock.json pins it (no install scripts: its
+      # serial port binding is not needed for tcp://)
+      - name: Node packages
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix tests/zigbee-js
       # sdk/scopes.lock and messages.def keep every scope version any release carried (every tag v*: main's betas
       # and release's releases, which each lack what the other has) exactly as it carried it, nothing taken out or
       # added; one missing only where no release this commit descends from carried it.  --released fails where it

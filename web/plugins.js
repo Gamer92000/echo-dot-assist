@@ -100,6 +100,7 @@ function plgCapList(caps, widens) {
 function plgFix(install, model) {
   if (install === 'boot') return ['run ', h('code', {}, 'scripts/install-system.sh'), ' again; it flashes the boot image again, which needs the Echo in fastboot as at the first install (', h('code', {}, `devices/${model}/README.md`), ')'];
   if (install === 'cannoli-ubi') return ['build and flash the firmware ZIP again (', h('code', {}, `devices/${model}/README.md`), ')'];
+  if (install === 'laser-emmc') return ['build the firmware bundle again with laser-os-builder (', h('code', {}, '--port'), ') and flash it with ', h('code', {}, 'firebreak unlock --device laser'), ' (', h('code', {}, `devices/${model}/README.md`), ')'];
   return ['run the system install again: ', h('code', {}, 'scripts/install-system.sh'), ' (or ', h('code', {}, `scripts/setup.sh ${model} --from install`), ')'];
 }
 const SANDBOX_LEVEL = { complete: 'complete (the plugins\' own SELinux domain)', hassmic: 'without its SELinux wall (hassmic\'s domain)', su: 'without SELinux at all' };
@@ -114,7 +115,7 @@ function plgWallWarning(sandbox, install, model) {
     h('p', {}, 'The three levels: complete (plugin domain) / without its SELinux wall (hassmic\'s domain) / without SELinux at all. This Echo: ', h('b', {}, SANDBOX_LEVEL[sandbox] || sandbox), '.'),
     h('p', {}, h('b', {}, 'Still in place: '), 'a user of its own for each plugin, the system call filter (no files, no programs, no sockets of its own making), no file system, memory and thread limits, and only the network destinations you approve.'),
     h('p', {}, h('b', {}, 'To close the gap: '), 'connect the Echo to your PC (USB, or adb over Wi-Fi from this page) and ', ...plgFix(install, model),
-      install === 'boot' || install === 'cannoli-ubi' ? '. Then this warning goes away.' : '. Nothing of your settings changes. Then this warning goes away.'));
+      install === 'boot' || install === 'cannoli-ubi' || install === 'laser-emmc' ? '. Then this warning goes away.' : '. Nothing of your settings changes. Then this warning goes away.'));
 }
 // the sandbox whose missing wall the install dialog of a plugin that is not official names in full (plgDialog), and
 // that Echo's install method for the words that close the gap: hmwall.of

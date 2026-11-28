@@ -12,6 +12,18 @@ const struct board_vol board_vol_dot2[] = {
     { 0, -60 }, { 5, -47.3f }, { 10, -40.6f }, { 20, -35.7f }, { 30, -30.5f }, { 40, -26.5f }, { 50, -22.4f },
     { 60, -19.5f }, { 70, -18.4f }, { 80, -14.0f }, { 90, -10.0f }, { 100, 0 }, { -1, 0 } };
 
+/* the Echo 4's (laser), dB under volume 100 (2026-11-28, on the one unit): a 4-tone multitone (470/1070/2230/3770 Hz,
+ * -48 dBFS each) played on the TTS/Music stream through a dev-build tone hook, recorded on an Echo Dot 2 ~10 cm away
+ * (its micRaw, fixed gain, no echo canceller; laser's own micRaw is not free to mixcap and a bare mixplay never drives
+ * laser's speaker, so the tone has to come from hassmic's own output), volume stepped with the keypad and read back
+ * from MainVolume.  The low tone (470 Hz) sits under the room's 120 Hz mains hum, so the low-volume points come from
+ * the three higher tones.  The output plateaus from ~80 up (measured within ~3 dB there, peaking near 90 with libasp's
+ * top-end boost, then flat/slightly down at 100); flattened to a monotonic approach to 0 here, as the curve requires.
+ * Volume 0 is extrapolated (effectively off).  The three higher tones agreed within ~1 dB per step. */
+const struct board_vol board_vol_laser[] = {
+    { 0, -50 }, { 10, -34.5f }, { 20, -28.3f }, { 30, -21.2f }, { 40, -14.3f }, { 50, -10.3f }, { 60, -4.4f },
+    { 70, -2.5f }, { 80, -1.1f }, { 90, -0.3f }, { 100, 0 }, { -1, 0 } };
+
 float board_vol_db(int v)
 {
     const struct board_vol *c = board.volume_curve;

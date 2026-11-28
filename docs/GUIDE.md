@@ -4,7 +4,7 @@ Each feature and setting in detail, and what it costs. Installing, updating, tro
 the [README](../README.md).
 
 - [Voice](#voice) · [Wake word](#wake-word) · [Several Echos](#several-echos)
-- [Buttons and light ring](#buttons-and-light-ring) · [Music](#music) · [Bluetooth proxy](#bluetooth-proxy)
+- [Buttons and light ring](#buttons-and-light-ring) · [Music](#music) · [Bluetooth proxy](#bluetooth-proxy) · [Thread and Zigbee](#thread-and-zigbee-echo-4)
 - [In Home Assistant](#in-home-assistant) · [Sound detection](#sound-detection) · [Whisper detection](#whisper-detection) · [Wi-Fi motion](#wi-fi-motion)
 - [Settings page](#settings-page) · [Setting up from a phone](#setting-up-from-a-phone) · [Factory reset](#factory-reset)
 - [hassmic.conf](#hassmicconf) · [adb over Wi-Fi](#adb-over-wi-fi) · [ESPHome or Wyoming](#esphome-or-wyoming)
@@ -552,7 +552,7 @@ Beyond the README's two figures:
   name, author and a line about it. **Use** sets its animations, only those or all of them (the rest back to
   Amazon's), and applies. A pack travels with its designs: as a `.ringpack` file (Export, Import) or with "Copy
   models". Up to 50 packs; their designs count towards the 100.
-- **Light ring live** (Echo Dot 3, Echo Dot 2, Echo 2 and Echo Dot 5; settings page, Lights, "Live from Home Assistant", off by default): the
+- **Light ring live** (Echo Dot 3, Echo Dot 2, Echo 2, Echo Dot 5 and Echo 4; settings page, Lights, "Live from Home Assistant", off by default): the
   Echo draws its ring itself, from Home Assistant, in any colour on any LED, up to 30 pictures a second, and plays your
   designs at once, without Apply. In layers, the lowest first:
   - "Light ring" (the light above) in its exact colour instead of the nearest of the set, fading when it changes
@@ -887,6 +887,88 @@ proxy, so Home Assistant sets up no scanner for it, and the Echo stops scanning 
 Echo's Bluetooth entries in Home Assistant is not enough: the proxy is no entity, and advertisements keep coming.
 Bluetooth audio from phones, the Bluetooth speaker and the setup from a phone (Improv) keep working with it off.
 
+## Thread and Zigbee (Echo 4)
+
+The Echo 4 has a Thread and Zigbee radio (a Qorvo GP712). Amazon's own Thread border router, its Thread service and
+its Zigbee hub are stopped on every Echo 4 with hassmic, whatever you choose here. The settings page's **Thread &
+Zigbee** page picks what the radio is for, one at a time (the radio has one channel):
+
+| Setting | What runs on the Echo | What you set up in Home Assistant |
+|---|---|---|
+| Off (default) | nothing | nothing |
+| Thread, **border router** | a Thread border router of its own (OpenThread's, built for the Echo): it runs a Thread network, or joins yours, and routes it onto your Wi-Fi | Settings → Devices & services → Add integration → **OpenThread Border Router**, with the URL the page shows (`http://<echo>:28933`). It then appears in the Thread integration, and Matter devices on Thread commission through it |
+| Thread, **router** | one more router of a Thread network another border router runs: it extends that network's reach near the Echo | nothing: give the Echo that network's dataset on the page (Join a network) |
+| Thread, **remote radio** | only the radio, for a border router of your own on another machine | not Home Assistant's add-on, see below |
+| Zigbee, **coordinator** (default) | a Zigbee network of its own, run by a Zigbee stack written for the Echo ([docs/zigbee.md](zigbee.md)), which answers as a ConBee II does | **ZHA** finds it by itself (Settings → Devices & services shows it as discovered); by hand: ZHA, "Enter manually", radio type deCONZ, serial port `socket://<echo>:28935`. Or **Zigbee2MQTT**: `serial: port: tcp://<echo>:28935`, `adapter: deconz` |
+| Zigbee, **router** | one more router for a Zigbee network another coordinator runs (ZHA's, Zigbee2MQTT's, a Hue bridge's): it joins the network you pick on the page from those it heard, or the first that lets it, and relays for the devices near it; battery-less Green Power switches (Friends of Hue, Hue Tap) in its range reach ZHA through it | open joining on that network ("Add device" in ZHA) within a minute of choosing Router; it shows up as "hassmic Echo 4 Zigbee router". A Green Power switch: "Add device" in ZHA, then press the switch near the Echo |
+| Zigbee, **remote radio** | only the radio, for Zigbee2MQTT's experimental zoh adapter | Zigbee2MQTT 2.1.3 or later: `serial: port: tcp://<echo>:28934`, `adapter: zoh` |
+
+With Thread the page shows the network the Echo is on (its name, channel, how many routers) and three buttons: **New
+network** (one of its own, with a random key), **Join a network** (paste a network's dataset: in Home Assistant,
+Settings → Devices & services → Thread → Configure, the network's ⋮; it goes to the Echo sealed, as a Wi-Fi password
+does, and the Echo never shows it again) and **Leave**. **Share the network…** shows a 9-digit code for 2 minutes
+that a phone's Thread app (Google Home, Apple Home) can use to take the network, so devices it adds join it; the
+network's key itself stays on the Echo.
+
+The border router has the features of Thread 1.4: it routes between Thread and your home network, registers the
+devices' services for Home Assistant, carries Thread over the Wi-Fi to other border routers (TREL) and Thread's
+multicast across your network (Matter groups). Two are off until you switch them on:
+
+- **Thread devices reach IPv4 (NAT64):** Thread devices can reach IPv4 addresses, the internet included, through the
+  Echo. Matter devices need none of it to work with Home Assistant.
+- **Your router's IPv6 prefix for the Thread network:** where your router delegates IPv6 prefixes, the Thread network
+  gets one of them instead of a private one, so its devices are addressed like the rest of your home.
+- **Sleepy devices on a schedule (CSL)** (experimental; border router or router, our radio program): devices that
+  sleep and wake at moments of their own (CSL, some Thread 1.2+ sensors) can use the Echo as their parent. The
+  Echo's radio chip cannot do it as Amazon set it up; the Echo then loads a kernel module of its own that gives the
+  radio program the chip's own clock and makes the chip answer those devices with the acknowledgements they expect,
+  and its border router sends at their moments. The radio page's **Sleepy devices (CSL)** says whether it is on or
+  why not (the module could not hook the radio driver, a firmware this build does not know). Tried with one sleepy
+  device (an nRF52840 board on Nordic's OpenThread, waking every 500 ms): every message reached it, about a quarter
+  of a second each on average (it hears only at its moments). Off: those devices pick another parent, as before.
+
+Under Thread and Zigbee runs the **radio program**: ours by default (OpenThread's, on Qorvo's own library for the
+chip), which has the transmit security and timing Thread 1.2 and later ask of a radio; or Amazon's, from the Echo's
+firmware, which lacks them. Where ours keeps failing, the Echo switches to Amazon's by itself until it restarts, and
+the page says so. With ours, Home Assistant's OpenThread Border Router add-on should take the Echo as its remote
+radio (not tried yet). A border router added to Home Assistant with no network yet
+gets Home Assistant's preferred one, or makes a new one, from the integration itself.
+
+With Zigbee the page shows the network (channel, PAN ID, how many devices and children), whether a host is
+connected (coordinator) or whether the trust center gave the Echo a key of its own (router), and buttons to open
+joining for 3 minutes and, for a router, to leave its network and look for another. A router lists the networks it
+heard, and **Join this one** keeps it to that network (it leaves another it is on). The coordinator's **New network
+key…** gives the network a new key: every device gets it, and the network switches 20 s later. Make a new backup in
+ZHA afterwards (Settings → Devices & services → Zigbee → Configure → Create backup); until then a restart of Home
+Assistant reports changed radio settings: keep the radio's, never restore the older backup.
+
+Who may connect: the border router's API (28933), the radio (28934) and the Zigbee coordinator (28935) let in only the
+address Home Assistant's ESPHome connection to this Echo comes from, and one more address you can name on the page
+("Also let in": Zigbee2MQTT or a border router on another machine). Whoever reaches the border router's API can read
+the network's key; whoever reaches the coordinator runs the Zigbee network.
+
+What it costs, and what it cannot do yet:
+
+- As Amazon set it up, the Echo 4's radio chip cannot answer Thread 1.2's newer frames with the acknowledgements
+  they need (enhanced acks), so a device that sleeps on a schedule of its own (CSL, a few Thread 1.2+ sensors) picks
+  another parent, unless **Sleepy devices on a schedule (CSL)** (above, experimental) is on. Routers and ordinary
+  sleepy devices are not affected. Our own radio program has the transmit security and timing
+  Thread 1.2 asks of a radio; Amazon's (**Radio program**: Amazon's) lacks both, and Home Assistant's OpenThread
+  Border Router add-on refuses a radio without them. Whether the add-on takes the Echo's radio with our program has
+  not been tried yet. A border router here on the Echo is the better way anyway: the radio's timing stays on the
+  Echo, where Wi-Fi's delays do not reach it. For otbr-agent of your own:
+  `socat pty,link=/dev/ttyEcho,raw tcp:<echo>:28934` and the radio URL `spinel+hdlc+uart:///dev/ttyEcho` (add
+  `?skip-rcp-compatibility-check` with Amazon's program).
+- **The Zigbee stack is new.** It has been tested with Home Assistant's own ZHA libraries and Zigbee2MQTT's, against
+  Zigbee2MQTT's own Zigbee stack, and on the Echo's radio, but not yet with Zigbee devices of other manufacturers
+  joining it: try it with a device or two before you move a whole network. What it leaves out (Green Power switches
+  that need an answer from the proxy, among a few others) is in [docs/zigbee.md](zigbee.md).
+- ZHA's backup restores onto the Echo's coordinator (tried with the Echo's own backup); a backup of another
+  coordinator (a ConBee, a SkyConnect) has not been tried yet.
+- The radio over the network is timing-sensitive: a remote radio on a Wi-Fi with long delays loses frames, and a host
+  that loses its connection sends nothing until it reconnects.
+- A factory reset forgets the Thread network along with everything else.
+
 ## In Home Assistant
 
 | Always there | |
@@ -1066,7 +1148,9 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
   relying on it. On the Echo Dot 2 and Echo 2 also when the router changes speed (the Echo Dot 3, Echo Dot 5 and Echo Show 5
   allow for that).
 - **Through a kernel module of ours**: the Wi-Fi drivers do not report what this needs. Loaded only once you switch it
-  on (within 10 s), then until the Echo restarts. Where Wi-Fi going off and on reloads the driver (seen on the Echo
+  on (within 10 s), then until the Echo restarts.
+  Should loading it ever bring the Echo down, it is not loaded again after that restart until you switch Wi-Fi motion
+  off and on (from the version of 2026-11-27 on). Where Wi-Fi going off and on reloads the driver (seen on the Echo
   Show 5), the module hooks the new one by itself (from the version of 2026-11-17 on, once the Echo restarted; not yet
   seen on an Echo); should no frame reach it for a minute, the sensor shows unknown and the log says why.
 - ESPHome only. It does not use the microphones; muting does not stop it.
@@ -1334,7 +1418,8 @@ hassmic also has built in, deprecated there: [Move to the plugin](#microwakeword
   setting without that question. It says which of the three levels this Echo has (complete, without its
   SELinux wall, without SELinux at all), what stays in place, and how to close the gap on your model (run
   `scripts/install-system.sh` again; on the Echo Shows that flashes the boot image again, from fastboot as at the first
-  install; the Echo Dot 5 is built and flashed again from its firmware ZIP). A community wake word engine stops with
+  install; the Echo Dot 5 is built and flashed again from its firmware ZIP; the Echo 4 from its firmware bundle, by
+  Firebreak). A community wake word engine stops with
   the switch (no wake word, the page says why and what to do) and cannot be chosen while it is off.
 - **The sandbox's state line** at the top of the Plugins page: "Sandbox: complete" (each plugin in the plugins' own
   SELinux domain, which a system install from 2026-11-22 on has), "without its SELinux wall" (in hassmic's domain: a

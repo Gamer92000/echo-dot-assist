@@ -11,6 +11,7 @@ What protects an Echo running hassmic, and where that ends. Nobody has audited a
 | **In, TCP** | 16384–32767 only: 26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 updates, 28931 settings page; on the screen models that name a Kiosk Satellite package (`KIOSK_PACKAGE`), also 2324 (the app's remote administration) and 6053 (its ESPHome API), from private addresses only; with "Kiosk Satellite DLNA renderer" on (off by default), also its DLNA renderer's port (the one the app's own setting names, so any the app picks), from private addresses only and only while the app listens there; the renderer has no login (DLNA has none) |
 | **In, UDP** | 16384–32767 only (28930: arbitration between Echos, 28932: Drop In audio), and 2330 only while arbitration is in Kiosk Satellite mode (their fixed port); with "Kiosk Satellite DLNA renderer" on, 1900 (SSDP searches to 239.255.255.250, from private addresses) while the Kiosk Satellite app holds that port and nothing else on the Echo does (looked at every 5 s) |
 | **In, ICMP** | ping (echo request) from private and link-local addresses only; answers to the Echo's own traffic |
+| **Thread** (Echo 4, radio set to Thread) | in and out on the Thread interface (`ot0`), forwarding between the Thread network and the Wi-Fi both ways (Home Assistant's Matter server reaches Thread devices through the border router, and they it), mDNS on IPv6 for the border router's advertising proxy; the Thread devices' own traffic is forwarded wherever they send it |
 
 **Kiosk Satellite**, where you install it, is an app you trust like adb. Its update helper runs the app's own code as the shell user, every few minutes, so the app and each update of it can do what an adb shell can, `pm grant` included. It also gets storage and location without asking. The "microphone" and "camera" switches are Android's permissions, no wall against the app itself. Setup and `scripts/kiosk-install.sh` check who signed the APK against a pinned certificate on the PC, before it reaches the Echo; a copy you install by hand and the app's own updates are not checked by this project. The helper's provider is exported with no manifest permission, so another app on the Echo might reach it: install nothing else you do not trust. Ports 2324 and 6053 are open only while the app is installed, its DLNA renderer's only while you switch that on and the renderer listens. Its page on 2324 asks for a login once the app's remote admin password is set (seen on 2026.10.45): set one. Beyond that its pages are the app's own, and this project has not reviewed them.
 
@@ -210,6 +211,49 @@ What stays: hassmic is what sees the action button and checks the signed challen
 can open adb over Wi-Fi for someone else on the network, though not use it itself. And it can name a key of
 [Sources](#updates) for root to trust (state/update-key), and so get a bundle of its own installed as root: the one
 request root takes on hassmic's word alone, for the page's signing key of your own or no signature check.
+
+## Thread and Zigbee (Echo 4)
+
+The radio's processes are root's to start (`main.sh` `radio_watch`), never hassmic's: rcpbridge (Amazon's RCP for one
+client at a time), our border router (otbr-agent) and our Zigbee stack (zigbeed, docs/zigbee.md), all as the radio's
+own user `openthread` (the user stock's
+border router had), the border router with NET_ADMIN and NET_RAW only (its tun, routes and router advertisements),
+in a folder of that user's that hassmic may enter but not write: it reaches the sockets there through the group (the
+border router's REST, the radio, and the border router's own command socket, which can do what REST can), nothing
+else. They parse what comes over the air, so a flaw in them is a flaw on a radio anyone in range can reach;
+that is what the user and the two capabilities bound.
+
+zigbeed is new code that parses what anyone in radio range sends: its parsers are fuzzed (`make unit-zb_fuzz`, ASan
+and UBSan, 4 million inputs clean) and reviewed (2026-11-27; docs/zigbee.md "Security" says what each party can and
+cannot do), and it runs with no capability at all. As the coordinator it is the network's trust center: the network
+key goes to a device only while joining is open, or to a rejoining device whose own link key is proven (verified) or
+was never on the air (an install code's), sealed with that key; never under the global key with joining closed.
+Zigbee's well-known global key means that anyone who hears a join while joining is open learns the network key, as
+on every Zigbee network without install codes. Open joining only when you add a device. Every device of a Zigbee
+network holds the network key, so any of them can forge frames in another's name: a key rotation's broadcast and its
+switch key among them (Ember's and deCONZ's trust centers send both without APS security, so a router has to take
+them that way). That is Zigbee's model; what the stack bounds is what a member's frames can make it do.
+
+The Thread border router serves three UDP ports on the network itself, as every border router does: TREL (28936,
+Thread carried over the Wi-Fi to other border routers, secured by the network key as Thread's own frames), the border
+agent (28937, MeshCoP: DTLS, a commissioner proves the network's PSKc) and its ephemeral key (28938, only while a code
+from the page is open: DTLS under that code, 2 minutes). The code reaches the page sealed for the browser that asked
+(plain HTTP carries the answer). NAT64, off by default (`thread_nat64`), lets Thread devices reach IPv4 addresses
+through the Echo: their traffic is forwarded and masqueraded (FORWARD, never OUTPUT: the egress lock is the Echo's
+own processes'), so a Thread device can reach the internet while it is on. DHCPv6 prefix delegation, off by default
+(`thread_pd`), gives the Thread network a prefix as reachable as the home router lets it be.
+
+The border router's API (TCP 28933), the radio itself (TCP 28934) and the Zigbee coordinator (TCP 28935) are forwarded by hassmic, never served on the
+network by those processes: their sockets are on the Echo only. hassmic lets in Home Assistant's own address (the
+one its ESPHome connection to this Echo comes from: with the device key set, only a connection holding it; before
+Home Assistant set one, as with everything else on an Echo not adopted yet, any client that connected to the ESPHome
+port; with Wyoming, whichever client is connected) and one address the owner names on the page, and refuses everyone
+else before a byte goes either way. Not more than that: anything else on the same address (another container on Home
+Assistant's machine, a second program on the Zigbee2MQTT machine) is let in too. A browser on such a machine is
+not: the border router's answers name no origin a page could have (upstream's say any), and hassmic drops a request
+that carries a browser's Origin or Sec-Fetch headers before the border router sees it. The border router's API has no login of its own, and whoever reaches it reads
+the Thread network's key and can replace the network; the radio's port is the radio itself. The dataset the page
+sends to join a network is sealed as a Wi-Fi password is; the page never gets the key back.
 
 ## Plugins
 

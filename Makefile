@@ -115,14 +115,16 @@ ifneq ($(PLUGINS_PUB2_BAD),)
 $(error PLUGINS_PUB2 "$(PLUGINS_PUB2)": $(call key_why,$(PLUGINS_PUB2_BAD)) (keys/plugins.conf, secrets/fork.conf))
 endif
 endif
-ifeq ($(DEVICE),cannoli)
-# BUILD from the sources themselves (version.py), not git describe: two builds of one dirty tree must differ, since
+# The models whose bundle is baked into a firmware image by an offline builder (cannoli-os-builder, laser-os-builder).
+SOURCE_ID := cannoli laser
+ifneq ($(filter $(DEVICE),$(SOURCE_ID)),)
+# BUILD from the sources themselves (tools/source-id.py), not git describe: two builds of one dirty tree must differ, since
 # factory promotion compares the bundle's VERSION (VERSION+BUILD).  The version and build time stay the commit's, as for
 # every model: update.c reports VERSION to Home Assistant, which compares it with the releases (a fixed one had every
 # release show as an update, installed or not).  Fixed only where git gives none (a source archive).
-BUILD := $(shell python3 devices/cannoli/version.py)
+BUILD := $(shell python3 tools/source-id.py $(DEVICE))
 ifeq ($(strip $(BUILD)),)
-$(error cannot compute Cannoli source identity)
+$(error cannot compute $(DEVICE)'s source identity (tools/source-id.py))
 endif
 ifeq ($(VERSION),0)
 VERSION := 2026.11.13.000000
@@ -160,7 +162,7 @@ BIN := $(OUT)/hassmic $(OUT)/runas $(OUT)/plugrun $(OUT)/otatool $(if $(filter %
        $(if $(filter libpryon.so,$(LIBS)),$(OUT)/pryon_test $(OUT)/aed_test $(OUT)/whisper_test)
 
 .DEFAULT_GOAL := all
-all: $(BIN)
+all: $(BIN) $(if $(THREAD),$(OUT)/rcpbridge $(OUT)/otbr-agent $(OUT)/otbr-agent-csl $(OUT)/ot-ctl $(OUT)/zigbeed $(OUT)/gprcp)
 
 # Kernel module for Wi-Fi motion: the Wi-Fi driver's frame levels (device.mk: KMOD, e.g. hassmic_rcpi; src/kmod/).
 # Built against kernel.org's sources of the Echo's kernel version with its own config, by the compiler Amazon built that
@@ -181,15 +183,17 @@ KSRC_SHA256 ?= 3d80d3b8d98c3141d9e26f6c25d73575d688f1c1651b8076f0f2bfd76325b7c9
 KCC_URL     ?= https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8/+archive/26e93f6af47f7bd3a9beb5c102a5f45e19bfa38a.tar.gz
 KCC_DIGEST  ?= fcd6082697317cfa44c0b876e5ca8285a07a13c763c59c7a962e44273e0668a0
 KMAKE    = $(MAKE) -s ARCH=$(KARCH) CROSS_COMPILE=$(KCROSS) HOSTCFLAGS="-fcommon -std=gnu89 -w" KCFLAGS="$(KCFLAGS)"
-ifneq ($(KMOD),)
+# KMOD_RADIO: the radio's (the Echo 4's GP712 chip clock for timed transmit, hassmic_gptime; PLAN.md "Thread 1.4" 2b)
+KMODS := $(KMOD) $(KMOD_RADIO)
+ifneq ($(strip $(KMODS)),)
 ifneq ($(and $(wildcard $(KSRC)/Makefile),$(wildcard $(KCROSS)gcc)),)
-all: $(OUT)/$(KMOD).ko
+all: $(foreach k,$(KMODS),$(OUT)/$(k).ko)
 else
 all: kmod-missing
 endif
 endif
 kmod-missing:
-	@echo "note: $(OUT)/$(KMOD).ko not built (Wi-Fi motion on $(DEVICE)): needs $(KSRC) and $(KCROSS)gcc: make kernel-tools DEVICE=$(DEVICE)"
+	@echo "note: $(foreach k,$(KMODS),$(OUT)/$(k).ko) not built ($(DEVICE)): needs $(KSRC) and $(KCROSS)gcc: make kernel-tools DEVICE=$(DEVICE)"
 kernel-tools:
 	$(if $(KMOD),scripts/kernel-tools.sh $(KSRC) $(KCROSS) $(KSRC_URL) $(KSRC_SHA256) $(KCC_URL) $(KCC_DIGEST))
 
@@ -211,14 +215,14 @@ endif
 # Module.symvers: the kernel's own CRCs where it has CONFIG_MODVERSIONS (athena, cannoli: tools/kcrc.py), for modpost;
 # copied at every build of the module, so a changed list reaches it.  KMOD_INIT: where a kernel whose struct module is
 # not kernel.org's reads the init pointer (cannoli: Android's common kernel), tools/kmod-init.py
-$(OUT)/$(KMOD).ko: src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/ktree/.config $(wildcard devices/$(DEVICE)/Module.symvers) \
-                   $(if $(KMOD_INIT),tools/kmod-init.py)
-	@mkdir -p $(OUT)/kmod
-	cp src/kmod/$(KMOD).c src/kmod/Kbuild $(OUT)/kmod/
+$(foreach k,$(KMODS),$(OUT)/$(k).ko): $(OUT)/%.ko: src/kmod/%.c src/kmod/Kbuild $(wildcard src/kmod/*.h) $(OUT)/ktree/.config \
+                   $(wildcard devices/$(DEVICE)/Module.symvers) $(if $(KMOD_INIT),tools/kmod-init.py)
+	@mkdir -p $(OUT)/kmod-$*
+	cp src/kmod/$*.c src/kmod/Kbuild $(wildcard src/kmod/*.h) $(OUT)/kmod-$*/
 	$(if $(wildcard devices/$(DEVICE)/Module.symvers),cp devices/$(DEVICE)/Module.symvers $(OUT)/ktree/Module.symvers)
-	$(KMAKE) -C $(OUT)/ktree M=$(CURDIR)/$(OUT)/kmod HM_KMOD=$(KMOD) modules 2>&1 | grep -v -e 'Module.symvers' -e 'no dependencies and modversions' || true
-	$(if $(KMOD_INIT),python3 tools/kmod-init.py $(OUT)/kmod/$(KMOD).ko $(KMOD_INIT))
-	cp $(OUT)/kmod/$(KMOD).ko $@
+	$(KMAKE) -C $(OUT)/ktree M=$(CURDIR)/$(OUT)/kmod-$* HM_KMOD=$* modules 2>&1 | grep -v -e 'Module.symvers' -e 'no dependencies and modversions' || true
+	$(if $(KMOD_INIT),python3 tools/kmod-init.py $(OUT)/kmod-$*/$*.ko $(KMOD_INIT))
+	cp $(OUT)/kmod-$*/$*.ko $@
 
 ifeq ($(STUBS),1)
 # Written in the list's order, as assembly: the linker lists what it exports from the executable in the order it meets the
@@ -258,6 +262,43 @@ build/otatool-host: src/tools/otatool.c src/third_party/monocypher.c
 $(OUT)/runas: src/tools/runas.c
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
+
+# The 802.15.4 radio (device.mk THREAD := 1, the Echo 4; docs/re-thread.md): rcpbridge serves Amazon's RCP on a unix
+# socket for a remote host (root runs it, main.sh radio_watch), otbr-agent is our own Thread border router, upstream's
+# ot-br-posix built by scripts/otbr-build.sh from pinned sources (cmake and ninja on the PC; nothing of Amazon's)
+$(OUT)/rcpbridge: src/tools/rcpbridge.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
+build/rcpbridge-host: src/tools/rcpbridge.c
+	@mkdir -p build
+	cc -O2 -Wall -Wextra $< -o $@
+# zigbeed: the Zigbee stack of our own on the same radio (src/zigbee/, docs/zigbee.md): a coordinator for ZHA and
+# Zigbee2MQTT (the deCONZ protocol), or a router of another's network.  Root runs it as rcpbridge's client
+ZIGBEE_SRC := $(wildcard src/zigbee/*.c)
+$(OUT)/zigbeed: $(ZIGBEE_SRC) src/zigbee/zb.h $(OUT)/libmbedtls.a
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(MBEDTLS_INC) $(ZIGBEE_SRC) $(OUT)/libmbedtls.a -o $@ -pie -fuse-ld=lld
+# zigbeed's parsers fuzzed (tests/unit/zb_fuzz.c: frames from the air in every role, the deCONZ host's bytes; the
+# MIC check passes in this build only), FUZZ_SECS, clang; not in make unit
+unit-zb_fuzz: build/libmbedtls-host.a
+	@mkdir -p build/zb_fuzz-corpus
+	clang -O1 -g -Wall -Wextra -DZB_FUZZ -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all $(MBEDTLS_INC) tests/unit/zb_fuzz.c \
+		$(filter-out src/zigbee/spinel.c src/zigbee/zigbeed.c src/zigbee/store.c,$(ZIGBEE_SRC)) build/libmbedtls-host.a -o build/zb_fuzz
+	build/zb_fuzz -max_total_time=$(FUZZ_SECS) -max_len=1024 -print_final_stats=1 -artifact_prefix=build/zb_fuzz-crash- build/zb_fuzz-corpus
+build/zigbeed-host: $(ZIGBEE_SRC) src/zigbee/zb.h build/libmbedtls-host.a
+	@mkdir -p build
+	cc -O2 -g -Wall -Wextra $(MBEDTLS_INC) $(ZIGBEE_SRC) build/libmbedtls-host.a -o $@
+$(OUT)/otbr-agent $(OUT)/ot-ctl &: scripts/otbr-build.sh
+	scripts/otbr-build.sh $(OUT) $(TARGET) $(NDK)
+# the same with the CSL transmitter (OTBR_CSL=1): what root runs where the setting thread_csl is on and our module
+# hooked the GP712's driver (main.sh radio_csl); built in a folder of its own, its ot-ctl the same as the other's
+$(OUT)/otbr-agent-csl: scripts/otbr-build.sh
+	OTBR_CSL=1 scripts/otbr-build.sh $(OUT)/otbr-csl $(TARGET) $(NDK)
+	cp $(OUT)/otbr-csl/otbr-agent $@
+# gprcp: our own RCP for the GP712 in place of Amazon's ot-rcp (PLAN.md "Thread 1.4"; docs/re-gp712.md): OpenThread's
+# RCP on Qorvo's GP712 platform and public library, transmit security and timing in software; zig, static musl
+$(OUT)/gprcp: scripts/gprcp-build.sh $(shell find src/gprcp -type f)
+	scripts/gprcp-build.sh $(OUT)
 
 # The plugins' launcher (docs/plugins.md 2): root's, static, nothing of Amazon's; its system call filter is made
 # from the table the SDK also reads.  The PC's (hassmic's own tests) changes no user and has the x86_64 filter.
@@ -374,14 +415,14 @@ $(OUT)/libmbedtls.a: $(patsubst $(MBEDTLS_DIR)/library/%.c,$(OUT)/mbedtls/%.o,$(
 build/libmbedtls-host.a: $(patsubst $(MBEDTLS_DIR)/library/%.c,build/mbedtls-host/%.o,$(MBEDTLS_C))
 	rm -f $@; ar rcsD $@ $^
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/hfp.c src/hassmic/scoaudio.c src/hassmic/cvsd.c src/hassmic/msbc.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/sources.c src/hassmic/tls.c src/hassmic/http.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/hfp.c src/hassmic/scoaudio.c src/hassmic/cvsd.c src/hassmic/msbc.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/sources.c src/hassmic/tls.c src/hassmic/http.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/radio.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/hassmic/plugin.c src/hassmic/plugin_store.c src/hassmic/plugin_fetch.c src/hassmic/plugin_index.c src/hassmic/plugin_net.c src/hassmic/logread.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
 HASSMIC_H := $(wildcard src/hassmic/*.h src/include/*.h) sdk/plugmsg.h build/.build-id
 
 # The settings page (web.c), gzip'd into the binary
-WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/loudness.js:/loudness.js web/matrix.js:/matrix.js web/ring.js:/ring.js web/plugins.js:/plugins.js
+WEB := web/index.html:/ web/app.js:/app.js web/crypto.js:/crypto.js web/tar.js:/tar.js web/loudness.js:/loudness.js web/matrix.js:/matrix.js web/ring.js:/ring.js web/plugins.js:/plugins.js web/radio.js:/radio.js
 # The countries' borders (geo.c; geo/README.md), built in as they are
 build/geo_data.c: tools/geo/embed.py geo/borders.bin
 	@mkdir -p build
@@ -445,7 +486,7 @@ build/testbutton: tests/plugins/testbutton.c sdk/hmplugin.c sdk/hassmic_plugin.h
 
 # What tests/run.py needs built (CI's test job builds exactly this: a stand-in plugin left out of a list of its own
 # there failed five tests on the runner only, where a PC had it from an earlier make host)
-HOST_TESTS := build/hassmic-host build/hassmic-host-screen build/otatool-host build/plugrun-host build/testwake build/testnet build/testmusic build/testcall build/testreq build/testbutton
+HOST_TESTS := build/hassmic-host build/hassmic-host-screen build/otatool-host build/plugrun-host build/rcpbridge-host build/zigbeed-host build/testwake build/testnet build/testmusic build/testcall build/testreq build/testbutton
 host-tests: $(HOST_TESTS)
 host: $(HOST_TESTS) $(OUT)/hassmic-qemu
 
@@ -454,8 +495,15 @@ UNIT := $(MBEDTLS_INC) src/hassmic/hash.c src/hassmic/ws.c src/hassmic/tls.c src
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash http ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs cvsd msbc scoaudio \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall netio
+	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall netio \
+	zb_crypto notice
 unit: $(addprefix unit-,$(UNIT_TESTS))
+# zigbeed's cryptography (src/zigbee/crypto.c) against Python's AES-CCM and an MMO hash of its own, and the install
+# code example of Zigbee's spec
+unit-zb_crypto: build/zb_crypto_test
+	.venv/bin/python tests/unit/zb_crypto_ref.py | build/zb_crypto_test ref
+build/zb_crypto_test: tests/unit/zb_crypto_test.c src/zigbee/crypto.c src/zigbee/zb.h build/libmbedtls-host.a
+	cc -O2 -Wall -Wextra $(MBEDTLS_INC) tests/unit/zb_crypto_test.c src/zigbee/crypto.c build/libmbedtls-host.a -o $@
 # the plugins' launcher on the PC: the protocol, the sandbox as far as x86_64 shows it (a static test program)
 # and both seccomp programs, ARM's too, run in an interpreter against the table they were made from
 # A musl program beside the glibc one: plugins are musl (5.8), whose raise(), abort() and pthread_kill() send with
@@ -582,7 +630,7 @@ unit-wakealign:
 	.venv/bin/python tests/unit/wakealign_ref.py build/wakealign_test
 unit-wifimotion:
 	@mkdir -p build
-	cc -O2 -Wall -Isrc/hassmic tests/unit/wifimotion_test.c src/hassmic/wifimotion.c -lpthread -lm -o build/wifimotion_test && build/wifimotion_test
+	cc -O2 -Wall -Isrc/hassmic tests/unit/wifimotion_test.c src/hassmic/wifimotion.c src/hassmic/statefile.c -lpthread -lm -o build/wifimotion_test && build/wifimotion_test
 unit-spkgain:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/spkgain_test.c src/hassmic/spkgain.c -lpthread -o build/spkgain_test && build/spkgain_test
@@ -667,6 +715,9 @@ unit-uninstall_boot:
 # the wake word aligners onto /system: the installers stage them, sysinstall.sh where they fit
 unit-sysinstall_aligners:
 	bash tests/unit/sysinstall_aligners_test.sh
+# NOTICE as each model's bundle carries it (scripts/notice.py), and the lists that ship it
+unit-notice:
+	python3 tests/unit/notice_test.py
 unit-ring_pack:
 	if command -v node >/dev/null; then node tests/unit/ring_pack_test.js; else echo "ring packs: node missing, skipped"; fi
 unit-mww:
@@ -702,6 +753,7 @@ unit-ringviz: build/ringviz
 unit-ringlive:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ringlive_test.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c -lm -lpthread -o build/ringlive_test && build/ringlive_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ringlive_leds_test.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ringdesign.c src/hassmic/json.c src/hassmic/statefile.c -lm -lpthread -o build/ringlive_leds_test && build/ringlive_leds_test
 	python3 tests/unit/ringlive_conf.py
 unit-ring_band:
 	@mkdir -p build

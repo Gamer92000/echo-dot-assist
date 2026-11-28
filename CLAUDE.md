@@ -13,7 +13,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`; every Echo on Fire OS or Vega OS and its status in `devices/MODELS.md`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-hfp.md` (phone calls over Bluetooth: where each chip puts a call's audio), `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-hfp.md` (phone calls over Bluetooth: where each chip puts a call's audio), `re-davs-login.md`, `re-thread.md` (the Echo 4's Thread and Zigbee radio), `zigbee.md` (zigbeed, our Zigbee stack), `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
 corpus, tables generated into `wake-word-end/`), `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`, `kiosk-satellite.md`: Kiosk Satellite next to hassmic on the Shows).
 
@@ -33,7 +33,7 @@ make host                # build/hassmic-host (PC: file audio + no wake word, SI
                          # otatool for the PC, as tests' stand-in for the device side), build/hassmic-host-screen (the same
                          # with screen.c and the band, for tests/fake_screen.py, fake_ma_api.py). Needs libopus
 make build/uishot        # the Echo Show's screen UI as PNG pictures, every view (FreeType; build/uishot <dir>)
-make unit                # C unit tests; ws/noise are checked against Python reference impls in .venv; the Drop In
+make unit                # C unit tests (zigbeed's crypto too; make unit-zb_fuzz fuzzes its parsers, clang); ws/noise are checked against Python reference impls in .venv; the Drop In
                          # blueprint (tests/blueprint_dropin.py); one target each (unit-<name>): make -j unit runs them at once
 make build/plugrun-host build/testwake   # the plugins' launcher and the tests' stand-in plugin for the PC (in make host)
 make build/hassmic-host  # single target
@@ -56,6 +56,20 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
 .venv/bin/python tests/fake_ha_esphome_features.py #   sound detection (HASSMIC_FAKE_SOUND_WINDOW: 3 s windows), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py  #   runs cancelled while HA thinks or streams, the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py  #   a new address: links closed, mDNS announced again
+.venv/bin/python tests/fake_radio.py          # the Echo 4's Thread and Zigbee radio (radio.c): the real rcpbridge
+                                             # (build/rcpbridge-host) before a stand-in RCP (tests/fake_rcp.py), a
+                                             # stand-in of otbr-agent's REST on its unix socket: Home Assistant's
+                                             # address only, one host at a time, a fresh RCP each, the page's actions
+.venv/bin/python tests/fake_zigbee.py         # zigbeed (src/zigbee/) on simulated RCPs (tests/zbair.py): zigpy-deconz, ZHA's
+                                             # library, forms the network, a router and a sleepy end device two hops
+                                             # away join (key tunnelled) and are interviewed, energy scan, restart, leave;
+                                             # APS fragments both ways, a Green Power switch through R's proxy (zigpy's
+                                             # sink; frames injected: zbair Air.inject), an address conflict, a key
+                                             # rotation (ZIGBEED_ROTATE_MS), ZHA's backup restored on a wiped C, the
+                                             # deCONZ watchdog, a PAN ID conflict
+.venv/bin/python tests/fake_zigbee_z2m.py     # zigbeed against Zigbee2MQTT's library (tests/zigbee-js, npm ci): its deconz
+                                             # adapter on our coordinator; zigbee-on-host as the trust center our router
+                                             # joins, an end device joining through our router
 .venv/bin/python tests/fake_ha_end.py         # the end of a request heard on the Echo (micend.c): a talker, dishes as loud
                                              # (no speech in the front end's records written into the capture), quieter
                                              # voices on another pitch; end of audio, not an abort; the gain left alone;
@@ -294,6 +308,8 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   on the push port with `secrets/update.key`; no HA needed), or kept open by `ADB_WIFI=1` in `hassmic.conf`. Then
   `adb connect <echo-ip>:5555`. USB always works.
 - `scripts/deploy.sh`: build + push to `/data/local/hassmic` for trial runs (`adb shell sh /data/local/hassmic/run.sh`).
+- `DEVICE=laser scripts/port-bundle.sh`: the signed `build/<codename>/hassmic.bundle` an OS builder's `--port` bakes in
+  (laser-os-builder), binaries as `ota-push.sh` takes them (`build_binaries`), the update key pair made when missing.
 - `scripts/ota-push.sh [--plugin <file.hmp>]... [host]`: build, sign with `secrets/update.key`, push bundle to TCP 28929 on an installed Echo
   (`--plugin`: an official plugin's package after it, `otatool.py plugin`, ota.c `HMOTA-PLUG1`; "Plugins" below).
   The Echo verifies against the public key on its system partition and falls back if the new build does not stay up.
@@ -1475,6 +1491,76 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   from `tools/kcrc.py` (boot.img's `__kcrctab`, checked against stock modules).  Cannoli (Android's common kernel 5.4):
   `HM_DRIVER_SYMS` (no `kallsyms_lookup_name` export: the driver's own symtab via `find_module`; the `bl` written
   through a `vmap` alias), `KMOD_INIT` 0xfc (`tools/kmod-init.py`: its `struct module` has `init` 36 bytes on).
+  Laser (4.9.77+, MODVERSIONS, no readable kernel image): checkers' config with MODVERSIONS and LOCALVERSION "+";
+  kernel.org's genksyms gets every CRC that reaches task_struct wrong (Amazon's structs), so `HM_KALLSYMS` imports only
+  what stock modules import (`devices/laser/Module.symvers` by `tools/kcrc.py --modules`) and finds the rest by
+  `kallsyms_lookup_name`.  main.sh `kmod()` marks the flash around insmod (`KMOD_TRY`): a load the kernel fell in is not
+  tried at the next boots until Wi-Fi motion is switched off and on.
+- **Thread and Zigbee** (`radio.c`, `radio.h`, `src/tools/rcpbridge.c`, `scripts/otbr-build.sh`, main.sh
+  `radio_watch`; docs/re-thread.md; the Echo 4 only: `board.radio_rcp`, device.conf `RADIO_RCP`, `RADIO_SERVICES`,
+  `RADIO_USER`/`RADIO_GROUPS`, device.mk `THREAD := 1`): a Qorvo GP712 behind Amazon's `/system/bin/ot-rcp`
+  (OpenThread's RCP, Spinel 4.3, RCP API 11, no transmit security or timing).  Stock's otservice, connthreadsvc,
+  zigbeeservice stopped at every look (init restarts them at every wlan.driver.status=ok).  Settings `radio`
+  (off/thread/zigbee), `thread_role` (border_router/router/remote), `zigbee_role` (remote), group "Radio", page
+  `#/radio` (`web/radio.js`), not exported.  Root runs every holder of the radio (hassmic never forks one: DHA waits
+  for its children): rcpbridge (as `openthread`, a fresh RCP per client on `$RADIO_DIR/rcp.sock`, PDEATHSIG) whenever
+  the radio is on, and for Thread's border router or router our otbr-agent (upstream ot-br-posix, pinned archives,
+  `skip-rcp-compatibility-check`, CSL transmitter and link metrics subject off, OpenThread's own mDNS, REST on
+  `$RADIO_DIR/rest.sock`; `runas -c NET_ADMIN,NET_RAW`: ambient capabilities) as rcpbridge's client; a router has no
+  `-B`.  hassmic forwards TCP `RADIO_REST_PORT` 28933 (border router only) and `RADIO_RCP_PORT` 28934 (remote roles,
+  one host at a time) to those sockets for `proto->peers` (Home Assistant's keyed links) and state/radio's one
+  `allow` address; `/api/radio` (status without the key; "form", "join" sealed TLVs, "leave", "allow", "share" /
+  "unshare": the ephemeral key, `radio_share`, its code sealed to the browser by web.c, `share_left` in the status).
+  Thread 1.4's border router features (otbr-build.sh): NAT64 (`thread_nat64`, off: root's `radio_nat64`), upstream DNS
+  (`radio_dns`: the Wi-Fi's local servers into /data/local/hassmic/thread-resolv.conf, the resolver patched to read
+  it), TREL (`trel://$WLAN`, UDP 28936), the backbone router, DHCPv6 PD (`thread_pd`, off), the border agent on 28937
+  and its ephemeral key on 28938; the switches told by ot-ctl to each otbr-agent (`radio_ctl`).  lockdown.sh: ot0's
+  rules (IPv4 FORWARD too, for NAT64), `-d ff03::/16 -o ot0` in hassmic_out, IPv6 mDNS and 28936-28938 while
+  `radio=thread`.  A factory reset forgets the network (`thread-forget`).  `HASSMIC_RADIO_DIR`,
+  `HASSMIC_RADIO_PORTS=<rest>:<rcp>:<zb>` for tests.  The RCP itself: ours by default, `gprcp`
+  (scripts/gprcp-build.sh: OpenThread's RCP on src/gprcp/, our copy of ot-qorvo's GP712 platform, and Qorvo's public
+  library patched to the driver's API 2.7, docs/re-gp712.md; zig, static musl hard float; software TX security and
+  timing, so otbr-agent runs without `skip-rcp-compatibility-check`), or Amazon's ot-rcp (setting `radio_program`;
+  main.sh `radio_program`, the fallback for the boot after three short-lived clients, `/data/local/hassmic/radio-program`
+  -> radio.c `program`, `HASSMIC_RADIO_PROGRAM` for tests).  `src/kmod/hassmic_gptime.c` (device.mk `KMOD_RADIO`;
+  the Makefile's `KMODS`): the chip clock beside the host's, caught at the GP712 driver's own gpHal_GetTime calls,
+  /proc/hassmic_gptime; where it is loaded gprcp reports TRANSMIT_TIMING and times frames on the chip's clock
+  (`src/gprcp/timed.c`: Qorvo's DataRequest wrapped at link time, the frame staged, ScheduleTimedTx 0x8E; only pairs
+  counted after gprcp's start, the chip's clock begins again then); it also extends the chip's MAC filter program
+  after every gpHal_Init (hook on gpBaseComps_StackInit) for 802.15.4-2015 frames and Enh-Acks
+  (`src/kmod/hassmic_gpfilter.h`, made by `tools/gp712/mkseq.py`; docs/re-gp712.md "The MAC filter program");
+  loaded by main.sh `radio_csl` where the setting `thread_csl` (experimental, off) is on with our radio program and a
+  Thread role of its own (mark `radio-kmod-try` against a load the kernel fell in, as kmod(); `/proc` FILTER_HOOKED and
+  HOOKED = 3 required, a FILTER_REFUSED falls back; parameter `enhack` written 0 elsewhere: the module stays loaded),
+  which then runs `otbr-agent-csl` (otbr-build.sh `OTBR_CSL=1`: the CSL transmitter; with the patch the module sets the
+  chip's ack wait, register 0x408, to 63 x 32 us: gpHal_Init's 32 took no ack over ~20 bytes, a CSL child's secured
+  Enh-Acks are 23 and 31; docs/re-gp712.md "The ack wait"; tried with a XIAO nRF52840 on NCS's OpenThread, tools/gp712) and says so in
+  `/data/local/hassmic/radio-csl` (radio.c `csl_now`, `HASSMIC_RADIO_CSL`; the page's "Sleepy devices (CSL)").  `src/kmod/hassmic_gp8051.c`: the chip RAM experiments' module (not
+  built by default: `KMOD_RADIO="hassmic_gptime hassmic_gp8051"`), `tools/gp712/enhack.py` the Enh-Ack test.  `tools/gp712/timedtx.py`: timed frames through gprcp over Spinel, against the module's TX.
+- **Zigbee** (`src/zigbee/`: zigbeed; docs/zigbee.md): a Zigbee PRO stack of our own on the same RCP, run by root's
+  `radio_watch` (zigbee_role coordinator, the default, or router; `zigbee-<role>` folders: each role's network kept)
+  as rcpbridge's client.  `spinel.c` (one transmission at a time; what the RCP says unasked queued and acted on in
+  `rcp_dispatch` from the main loop only: acting on it may ask the RCP, which reads; energy scan one channel a
+  request; a running network's scan from timers, `rcp_energy_scan_async`: a blocking wait there hung the daemon),
+  `mac.c`, `nwk.c` (security re-applied at every hop, a counter per sender always, routing (route replies hop by
+  hop), broadcasts (held for sleepy children), link status, children, rejoin, joining, address and PAN ID
+  conflicts, the key switch: `nwk_switch_key`, the old key 30 min with counters of its own, a frame under the
+  pending key switches, a frame that holds under ours with another number teaches it: deCONZ has no key number),
+  `aps.c` (acks, fragmentation, link-key security, the trust center: transport key straight or tunnelled, update
+  device (APS-secured from its router, or while joining is open), request/verify/confirm key (a device asks for
+  itself only; the global key never for a peer whose own is proven), `aps_rotate_key`), `gp.c` (the router's Green
+  Power basic proxy, zigpy's sink the reference), `zdo.c` (ZDO server, a router's ZCL Basic), `deconz.c` (the host:
+  deCONZ serial protocol as zigpy-deconz's COMMAND_SCHEMAS; a ConBee II 0x26780700, protocol 0x010C; indication and
+  confirm queues, MAC poll, the watchdog), `store.c` (`zb.state`; the NWK frame counter saved 4096 ahead; joiners
+  that never proved the network key not saved), `zigbeed.c` (poll loop, timers, formation, the control socket
+  `zb.ctl`: status, leave, permit, rotate, prefer).  docs/zigbee.md "Security" is what each party can do: keep it
+  true.  hassmic forwards TCP `RADIO_ZB_PORT` 28935 to
+  `zb.sock` (coordinator) and adds `_zigbee-coordinator._tcp` (radio_type=deconz) to its avahi file
+  (`radio_mdns_service`, `core_mdns_refresh`), so ZHA discovers it.  Tests: `tests/zbair.py` (simulated RCPs on one
+  medium, pcap), `tests/fake_zigbee.py` (zigpy-deconz), `tests/fake_zigbee_z2m.py` (zigbee-herdsman: deconz adapter
+  and zigbee-on-host as trust center; `tests/zigbee-js`, npm ci), `make unit-zb_crypto`, `make unit-zb_fuzz` (not in
+  `make unit`; `-DZB_FUZZ` passes the MIC check).  Not yet: other manufacturers' devices, bidirectional Green Power
+  (PLAN.md, docs/zigbee.md).
 - **Speaker gain** (`spkgain.c`, setting `speaker_gain`, page only, not exported): +0..+12 dB on the ALSA control
   `board.speaker_gain` (Dot 2 / Echo 2: the codec's `HP Driver Gain Volume`, stock 6; Dot 3: the TAS2770 amplifier's
   `DAC Playback Volume` = AMP_LEVEL, stock 16 of 0..20 in 0.5 dB steps (`speaker_gain_steps` 2), so +2 dB at most:
@@ -1607,8 +1693,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   (`main.sh` `ledc_start`/`ledc_watch`): a copy without its file capability, else the linker ignores LD_PRELOAD.  The
   beam: `com.amazon.ledd BeamDirection` via liblipc (dlopen), polled while listening (`hassmic_hold_N` when it moves).  PC: `HASSMIC_LED_ROOT` (for /system/etc), `HASSMIC_FAKE_LED` (ledctrl calls into a file),
   `HASSMIC_FAKE_BEAM`.
-- **Light ring live** (`ringlive.c`, `ringlive.h`, feature `ring_live`, off): hassmic writes the LED driver's frame (the Dot 5: below)
-  itself (`board.ring_frame`, donut's, biscuit's and radar's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0
+- **Light ring live** (`ringlive.c`, `ringlive.h`, feature `ring_live`, off): hassmic writes the LED driver's frame (the Dot 5
+  and the Echo 4: below) itself (`board.ring_frame`, donut's, biscuit's and radar's IS31FL3236 `0-003f/frame`: 12 x `RRGGBB` text, LED 0
   first, on donut scaled by the unit's calibration in the driver; ledcontroller writes it only when its picture
   changes; radar matched to biscuit by firmware, not probed; PLAN.md "Light ring live",
   `scripts/led-probe.sh`).  Root's `main.sh` `led_frame` gives that one file to group `LED_GID` 3991 (device.conf
@@ -1649,6 +1735,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   gaps).  Full duty: ledcontroller gives the LED manager its brightness tables (`prepare_brightness_tables_for_acs`).
   No read back, marker or SIGTERM frame: `ring_start` unsets the slot.  `shim_check` (ring_tick, `ring_live_on`): the
   connection hung up = ledcontroller ended, the light and the live frame drawn again into the next one.
+  The Echo 4 (laser: two LP5036, no frame file; `board.ring_led_color` a `%d` pattern of each LED's `color` file,
+  `ring_led_power` the chips' `ledhven`): the frame LED by LED as libacehal_led.so writes it ("%d %d %d", only the
+  LEDs that changed, all again after the Echo's own pattern or a fight, `leds_forget`; the supply "1"/"0" as the ring
+  goes lit or dark), the level the HAL's `global_current`; `LED_FRAME` a list with globs (main.sh `led_frame`);
+  `HASSMIC_FAKE_RING_LEDS`, `tests/unit/ringlive_leds_test.c`.  From the firmware, not run yet.
   An update stops the animation it replaces (measured), so libhmled.so wraps ledcontroller's
   `aceLedMgr_startAnimationWithConfig`/`stopAnimation`/`stopAllAnimations` (preloaded: its HAL's PLT calls land there)
   and keeps `hassmic_live` as a pair with `hassmic_live_b`: a frame into the one not showing, started with
@@ -1726,7 +1817,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   on the same state included); `tests/unit/band_map_test.py` holds web/ring.js's band drawing to ring_band.c's, pixel
   for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
-- `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
+- `src/tools/`: standalone device tools (`rcpbridge`: the radio for one client, root's; `mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
   the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `scoprobe`, `ebcprobe`, `dha_test` not in `all`).
 
 Boot integration (`scripts/system/`, rc in `devices/<codename>/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on /system), which picks the factory
@@ -1741,7 +1832,7 @@ stock behaviour. `scripts/device/` holds on-device helpers (`lockdown.sh` firewa
 Firewall invariant: Amazon's daemons may only reach local addresses; hassmic itself may reach any address (it fetches
 TTS/media URLs from HA/MA). `otad`/`ace_otad` (firmware updates) must never get out. Inbound TCP and UDP are only admitted on
 16384–32767, so every listening port (26053 ESPHome, 16700 Wyoming, 28928 Sendspin, 28929 OTA, 28931 settings page, UDP 28930 arbitration)
-must stay in that range (UDP 28932 Drop In too). Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
+must stay in that range (UDP 28932 Drop In too; TCP 28933 the border router's REST, 28934 the radio, 28935 the Zigbee coordinator, radio.c; UDP 28936 TREL, 28937 the border agent, 28938 its ephemeral key: otbr-agent's own, otbr-build.sh, admitted over IPv6 by lockdown.sh while radio=thread).  NAT64 (`thread_nat64`): main.sh `radio_nat64`, a MASQUERADE for 192.168.255.0/24 and IPv4 forwarding, only while on, cleared at every radio_watch start. Exceptions: UDP 2330 (Kiosk Satellite's fixed port), which `lockdown.sh` admits only while
 `state/config` says `arbitration_mode=kiosk` (`kiosk_state`), and, where device.conf has `KIOSK_PACKAGE` (and the board `kiosk`, for the settings), the app's own TCP 2324 and 6053 from private addresses while it is installed, and with `kiosk_dlna` on its DLNA renderer (`kiosk_dlna` in `lockdown.sh`: the TCP port of the app's own setting `flutter.ks.dlna.port`, read through `runas` as its user, while its uid listens there per `/proc/net/tcp*`; UDP 1900 to 239.255.255.250 only while its uid alone holds 1900; issue #109); its uid may also reach the internet unless `kiosk_internet` is off (`KSUID`). Ping (ICMP echo request) is admitted from the private
 and link-local ranges of `LOCAL4` only. A stock rule hassmic comes to depend on (INPUT or OUTPUT) goes into `keep`, worded as `iptables -S`
 prints it. Plugins' users (6900–6907, `PLUGIN_UID`/`PLUGIN_SLOTS`) get nothing out at all: one DROP rule a user, first in `hassmic_out`
@@ -1773,4 +1864,9 @@ output, a PC microphone beside it, for `board.cold_lead_ms`).
 - Code comments explain *why* with device facts and measurements; match that style and density.
 - Proprietary/derived/secret material is git-ignored and must stay out of git: `firmware/` (per model:
   stock image, unpacked rootfs, unlock zips, `re/` disassembly), `toolchain/`, `build/`, `device-logs/`, `secrets/`, `*.bin`, `*.zip`.
-- Third-party code in `src/third_party/` keeps its own licence (freeaptx is LGPL, statically linked).
+- Third-party code in `src/third_party/` keeps its own licence (freeaptx is LGPL, statically linked).  `NOTICE` is the
+  one source of the notices that go with the binaries: parts "Every model" and one per model by codename ("The Echo 4
+  (laser)"), `Full text: <path>` lines for licence files taken whole; `scripts/notice.py <codename>` cuts it to a
+  model (`device.sh` `notice_make`: bundle.sh, deploy.sh, install-system.sh, install-boot.sh; CI's artifact; `make
+  unit-notice`).  New code of others in a shipped binary (a library, a static runtime) gets its notice there.
+  `gprcp` carries Qorvo's line in itself (`src/gprcp/system.c`, `gprcp --notice` on stderr).

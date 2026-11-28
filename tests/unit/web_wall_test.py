@@ -18,6 +18,7 @@ console.log(JSON.stringify([
   m.of(chk('official', 'su', 'boot'), null), m.of(chk('official', 'hassmic', 'twrp-ab'), mine('su', 'boot')),
   m.of(chk('community', 'complete', 'twrp-ab'), null), m.of(chk('sideload', 'complete', 'boot'), mine('su', 'boot')), m.of(chk('community', 'none', 'boot'), null),
   m.of(chk('community'), mine('su', 'running')), m.of(chk('sideload'), null), m.of(chk('official'), mine('su', 'boot')), m.of(null, null),
+  m.of(chk('sideload', 'su', 'laser-emmc'), mine('complete', 'twrp-ab')),
 ]));
 """
 r = subprocess.run(["node", "-e", JS, os.path.join(ROOT, "web/plugins.js")], capture_output=True, text=True)
@@ -33,6 +34,7 @@ want = [
     None, None, None,                                   # complete, or no sandbox at all (nothing installs there): none
     {"sandbox": "su", "install": "running"},            # a check without the fields, for this Echo: its own word
     None, None, None,                                   # ... for another Echo: none; official; nothing checked
+    {"sandbox": "su", "install": "laser-emmc"},         # the Echo 4's firmware bundle, from its own check
 ]
 bad = 0
 for i, (got, exp) in enumerate(zip(o, want)):

@@ -26,6 +26,7 @@
 #include "statefile.h"
 #include "buttons.h"
 #include "hfp.h"
+#include "radio.h"
 #include <ctype.h>
 #include <limits.h>
 #include <math.h>
@@ -78,6 +79,9 @@ static int wifi_roam = 1;                                 /* root's roam.sh read
 static int kiosk_mic;                                     /* off: main.sh keeps RECORD_AUDIO from the app; it reads state/config */
 static int kiosk_cam;                                     /* off: and CAMERA */
 static int kiosk_dlna;                                    /* off: lockdown.sh admits the app's DLNA renderer only on "=on" */
+static int thread_nat64, thread_pd, thread_csl;            /* off: root's main.sh reads them (radio_watch) */
+static int radio_program;                                  /* 0 ours (gprcp), 1 Amazon's ot-rcp: main.sh radio_watch */
+static const char *const radio_programs[] = { "ours", "amazon" };
 static int bt_stay;                                     /* a2dp.c gets it only while the feature is on: off drops the link */
 static int plugins;                                     /* off: no plugin runs (plugin.h, docs/plugins.md) */
 static int community;                                   /* off: only official plugins are installed and run (plugin_community) */
@@ -114,7 +118,7 @@ static int colour_actual(void)
 /* ---------------------------------------------------------------- the table */
 
 enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, ANSWER_VOICE, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, RADIO, THREAD_ROLE, ZIGBEE_ROLE, THREAD_NAT64, THREAD_PD, THREAD_CSL, RADIO_PROGRAM, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -260,6 +264,24 @@ static const struct setting table[NSET] = {
     /* stored on/off: root's lockdown.sh admits the app's DLNA renderer (its TCP port, SSDP) from the LAN (issue #109;
      * not exported: it opens ports, so each Echo's owner switches it there) */
     [KIOSK_DLNA]  = { "kiosk_dlna", "Kiosk Satellite DLNA renderer", "System", NULL, S_BOOL, 0, 1, 0, 0 },
+    /* radio.c, root's main.sh radio_watch from state/config: Thread or Zigbee on the Echo's 802.15.4 radio, and in
+     * which role.  Not exported: a network has one coordinator, and its border routers and routers are placed one by
+     * one, so one Echo's role is never another's.  No entity: Home Assistant does not move its own network's radio */
+    [RADIO]       = { "radio", "Thread and Zigbee radio", "Radio", NULL, S_CHOICE, 0, 0, 0, 0 },
+    [THREAD_ROLE] = { "thread_role", "Thread role", "Radio", NULL, S_CHOICE, 0, 0, 0, 0 },
+    [ZIGBEE_ROLE] = { "zigbee_role", "Zigbee role", "Radio", NULL, S_CHOICE, 0, 0, 0, 0 },
+    /* the border router's (main.sh radio_watch: ot-ctl, and for NAT64 the Echo's MASQUERADE and IPv4 forwarding).
+     * Off by default: NAT64 lets Thread devices reach the internet through the Echo; prefix delegation gives the
+     * Thread network a prefix of the home router's, routable from wherever that router routes.  Not exported */
+    [THREAD_NAT64] = { "thread_nat64", "Thread devices reach IPv4 (NAT64)", "Radio", NULL, S_BOOL, 0, 1, 0, 0 },
+    [THREAD_PD]   = { "thread_pd", "Thread network's prefix from your router", "Radio", NULL, S_BOOL, 0, 1, 0, 0 },
+    /* CSL, sleepy devices on a schedule of their own (PLAN.md "Thread 1.4" 2.1, 2b.3; experimental, off): root loads
+     * hassmic_gptime (the chip's clock for timed transmit, and its filter patched for 2015 frames and Enh-Acks) and
+     * runs the border router built with the CSL transmitter, where the module took both (main.sh radio_csl) */
+    [THREAD_CSL]  = { "thread_csl", "Sleepy devices on a schedule (CSL)", "Radio", NULL, S_BOOL, 0, 1, 0, 0 },
+    /* the radio program under all of it (main.sh radio_watch): ours (gprcp: OpenThread's RCP on Qorvo's library,
+     * PLAN.md "Thread 1.4") or Amazon's ot-rcp; root falls back to Amazon's for the boot where ours keeps failing */
+    [RADIO_PROGRAM] = { "radio_program", "Radio program", "Radio", NULL, S_CHOICE, 0, 0, 0, 0 },
     [SS_UNPAIRED] = { "sendspin_unpaired", "Music Assistant without pairing", "Music", NULL, S_BOOL, 0, 1, 1, 0 },
     [EQ_BASS]     = { "equalizer_bass", "Equalizer bass", "Sound", "dB", S_INT, -6, 6, 1, 0 },
     [EQ_MID]      = { "equalizer_mid", "Equalizer mid", "Sound", "dB", S_INT, -6, 6, 1, 0 },
@@ -314,6 +336,7 @@ static int present(enum id i)
     case BAND: return ring_band_rows(-1) >= 0;
     case MUSIC_PAGE: return screen_ui();
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: case KIOSK_DLNA: return board.kiosk;
+    case RADIO: case THREAD_ROLE: case ZIGBEE_ROLE: case THREAD_NAT64: case THREAD_PD: case THREAD_CSL: case RADIO_PROGRAM: return radio_present();
     case WIFI_ROAM: { const char *e = getenv("HASSMIC_WIFI_ROAMING"); return e ? *e == '1' : WIFI_ROAMING; }     /* tests */
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
     case SCR_COLOUR: return colour_actual() >= 0;
@@ -368,6 +391,10 @@ int settings_choices(const struct setting *s, const char *const **names)
         *names = bt_lang_codes; return bt_lang_count;
     case UPDATES: *names = update_channels; return 3;
     case ARB_MODE: *names = arb_modes; return 2;
+    case RADIO: *names = radio_modes; return RADIO_MODES;
+    case THREAD_ROLE: *names = radio_thread_roles; return THREAD_ROLES;
+    case ZIGBEE_ROLE: *names = radio_zigbee_roles; return ZIGBEE_ROLES;
+    case RADIO_PROGRAM: *names = radio_programs; return 2;
     case WAKE_ENGINE: return core_wake_engines(names);        /* the fixed three and the wake plugins (main.c) */
     case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
@@ -433,6 +460,13 @@ int settings_get(const struct setting *s)
     case KIOSK_MIC: return kiosk_mic;
     case KIOSK_CAM: return kiosk_cam;
     case KIOSK_DLNA: return kiosk_dlna;
+    case RADIO: return radio_mode(-1);
+    case THREAD_ROLE: return radio_thread_role(-1);
+    case ZIGBEE_ROLE: return radio_zigbee_role(-1);
+    case THREAD_NAT64: return thread_nat64;
+    case THREAD_PD: return thread_pd;
+    case THREAD_CSL: return thread_csl;
+    case RADIO_PROGRAM: return radio_program;
     case SS_UNPAIRED: return sendspin_unpaired(-1);
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: return core_eq((int)(s - table) - EQ_BASS);
     case BT_PROXY: return bt_proxy;
@@ -507,7 +541,7 @@ static void put(enum id i, int v)
     case LED_LEVEL: core_led_brightness(v); break;              /* a level of its own: auto off, or it moves */
     case RING_ROT: ring_rotation(v); break;
     case SOUND: core_sound(v); break;
-    case WIFI_MOTION: wifimotion_enable(v); break;
+    case WIFI_MOTION: if (!loading && v && !wifimotion_enable(-1)) { wifimotion_enable(v); wifimotion_switched_on(); } else wifimotion_enable(v); break;
     case WIFI_SENS: wifimotion_sensitivity(v); break;
     case UPDATES: update_channel(v); break;
     case HTTPS_VERIFY: https_verify(v); break;
@@ -521,6 +555,13 @@ static void put(enum id i, int v)
     case KIOSK_MIC: kiosk_mic = v; break;
     case KIOSK_CAM: kiosk_cam = v; break;
     case KIOSK_DLNA: kiosk_dlna = v; break;
+    case RADIO: radio_mode(v); break;
+    case THREAD_ROLE: radio_thread_role(v); break;
+    case ZIGBEE_ROLE: radio_zigbee_role(v); break;
+    case THREAD_NAT64: thread_nat64 = v; break;
+    case THREAD_PD: thread_pd = v; break;
+    case THREAD_CSL: thread_csl = v; break;
+    case RADIO_PROGRAM: radio_program = v; break;
     case SS_UNPAIRED: sendspin_unpaired(v); break;              /* sendspin.c keeps it */
     case EQ_BASS: case EQ_MID: case EQ_TREBLE: core_set_eq(i - EQ_BASS, v); break;     /* the mixer keeps it */
     case BT_PROXY: bt_proxy = v; break;                    /* the links close (feature): proto_esphome.c ends scan and links */

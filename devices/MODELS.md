@@ -22,7 +22,7 @@ ones with the way into each; [`README.md`](README.md) here says how to add a mod
 | ❌ | Echo Flex | C77A68 | `croissant` | 2019-11-14 | *no known exploit yet*; `crumpet`'s boot chain ([#83](https://github.com/Gamer92000/echo-dot-assist/issues/83)) |
 | ✅ | Echo Show 8 1st gen | C7H6N3 | [`crown`](crown/README.md) | 2019-11-21 | added in [`7745dca`](https://github.com/Gamer92000/echo-dot-assist/commit/7745dca) |
 | ❌ | Echo Input Portable | RA73E6 | `cupcake` | 2019-12-18 | the Echo Input's codename, never tried |
-| ❌ | Echo 4th gen | L4S3RE | `laser` | 2020-10-22 | *no known exploit yet* |
+| 🚧 | Echo 4th gen | L4S3RE | [`laser`](laser/README.md) | 2020-10-22 | works, by hand: the port runs on one unit (mixer + Pryon, eMMC install; rooted by Firebreak's preloader route, U-Boot's FIT check falls to CVE-2026-46728); setup from a phone, Home Assistant, the voice pipeline, the buttons, Wi-Fi motion, push updates, the live light ring and the volume curve all work; phone calls (built from the firmware) and the rollback not tried yet; no guided setup |
 | ❌ | Echo Dot 4th gen | B7W64E | `brownie` | 2020-10-22 | *no known exploit yet* |
 | ❌ | Echo Dot Kids Edition 4th gen | B7W64E | `brownie` | 2020-10-22 | *no known exploit yet* |
 | ❌ | Echo Dot 4th gen with clock | B7W644 | `ganache` | 2020-10-22 | *no known exploit yet* |

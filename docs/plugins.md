@@ -520,6 +520,7 @@ The last paragraph is worded per model, from `device.conf`'s `INSTALL` (*checked
 | `running` | athena | the same script; the policy is `/vendor/etc/selinux/precompiled_sepolicy` (`SEPOLICY_FILE`) | the same |
 | `boot` | checkers, cronos, crown | `scripts/install-system.sh` hands over to `scripts/install-boot.sh`: the policy is inside `boot.img`, rebuilt by `scripts/mkbootroot.py` and flashed in amonet's fastboot | "run `scripts/install-system.sh`; it flashes the boot image again, which needs the Echo in fastboot as at the first install (`devices/<model>/README.md`)" |
 | `cannoli-ubi` | cannoli | not this script (it refuses): the firmware ZIP's offline builder patches the policy | "build and flash the firmware ZIP again (`devices/cannoli/README.md`)" |
+| `laser-emmc` | laser | not this script (it refuses): laser-os-builder `--port` patches the policy in the ext4 image it builds | "build the firmware bundle again with laser-os-builder (`--port`) and flash it with `firebreak unlock --device laser` (`devices/laser/README.md`)" |
 
 That `install-system.sh` run again leaves an installed Echo's settings alone is its documented use ("again if ...
 the SELinux policy has to change"); that it does so with plugins installed is to be tried. Official plugins show
@@ -591,7 +592,7 @@ every plugin that is not official (`web/plugins.js` `hmwall.of`, from the instal
 `sandbox`, `install_method`), have the warning above in full where the sandbox is "hassmic" or "su", worded by
 `install_method` (the Makefile's `INSTALL_METHOD`, device.conf `INSTALL`): `twrp-ab` and `running` "run the system install again: `scripts/install-system.sh` (or `scripts/setup.sh
 <model> --from install`)", `boot` the boot image flashed again from fastboot, `cannoli-ubi` the firmware ZIP built and
-flashed again. Off: `ps_stage_check` refuses whatever is not official (a file, the index's community listing; a
+flashed again, `laser-emmc` the firmware bundle built with laser-os-builder again and flashed by Firebreak. Off: `ps_stage_check` refuses whatever is not official (a file, the index's community listing; a
 listing under the build's least counts as a file's), at the check and again as the package is written; `ps_scan`
 marks such a plugin installed `community_off` (refused with the switch's words: stopped, kept, its card says why, its
 entities leave Home Assistant, the update's self test does not wait for it); a community wake word engine is down with words naming the switch and is not chosen while it is off

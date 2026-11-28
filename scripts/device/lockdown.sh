@@ -61,13 +61,13 @@ KIOSK_IN="INPUT -i $WLAN -p udp -m udp --dport 2330 -j ACCEPT"
 # KSTCP, KSSDP: what of its DLNA renderer is admitted (kiosk_dlna below).
 kiosk_state() {
     local l net=on dlna= cf=/data/local/hassmic/state/config
-    KIOSK=; KSUID=; KSAPP=; KSTCP=; KSSDP=; KSSDP_BY=
+    KIOSK=; KSUID=; KSAPP=; KSTCP=; KSSDP=; KSSDP_BY=; THREAD=
     [ -z "$OTA_ONLY" ] || return 0
     # whole lines, as grep -x would (a last one without its newline too); read by the shell: no fork every 5 s.  The
     # error's redirection first: one for a missing file every 5 s would fill the log
     [ -f $cf ] && [ ! -L $cf ] || cf=/dev/null         # not through a link, nor a FIFO (it would hold this loop)
     while IFS= read -r l || [ -n "$l" ]; do
-        case $l in arbitration_mode=kiosk) KIOSK=1;; kiosk_internet=off) net=off;; kiosk_dlna=on) dlna=1;; esac
+        case $l in arbitration_mode=kiosk) KIOSK=1;; kiosk_internet=off) net=off;; kiosk_dlna=on) dlna=1;; radio=thread) THREAD=1;; esac
     done 2>/dev/null < $cf
     [ -n "$KIOSK_PACKAGE" ] || return 0
     u=$(while read -r p i _; do [ "$p" = "$KIOSK_PACKAGE" ] && { echo "$i"; break; }; done < /data/system/packages.list) 2>/dev/null
@@ -212,6 +212,10 @@ rules() {
     # loaded on every model: a range in the match (6900-6907) is untried on Android's xt_qtaguid
     u=$PLUGIN_UID; while [ $u -lt $((PLUGIN_UID + PLUGIN_SLOTS)) ]; do echo "-A hassmic_out -m owner --uid-owner $u -j DROP"; u=$((u + 1)); done
     echo "-A hassmic_out -o lo -j RETURN"
+    # Our Thread border router or router (main.sh radio_watch): the Thread network's realm-local multicast (ff03::, MLE
+    # and the like on ot0), which LOCAL6 does not name; its unicast (mesh-local, OMR: ULAs) is in LOCAL6 already.  Not
+    # all of ot0: a socket bound to it would reach whatever other border routers forward to (NAT64, the internet)
+    [ $1 = iptables ] || [ -z "$THREAD" ] || echo "-A hassmic_out -d ff03::/16 -o ot0 -j RETURN"
     if [ -n "$OTA_ONLY" ]; then u=$(update_uid); [ -n "$u" ] && echo "-A hassmic_out -m owner --uid-owner $u -j DROP"; return; fi
     for d in $loc; do echo "-A hassmic_out -d $d -j RETURN"; done
     for d in $DNS; do
@@ -288,9 +292,31 @@ keep() {
         # nothing else admits the DHCP server's answers once INPUT drops (they come to a broadcast, not as a reply)
         [ -z "$FW_KEEP" ] || echo "$FW_KEEP" | tr ';' '\n' | while read -r r; do [ -n "$r" ] && echo "-A $r"; done
         if [ -n "$KIOSK" ]; then echo "-A $KIOSK_IN"; fi                   # only in Kiosk Satellite mode (kiosk_state)
+        # Thread: NAT64's IPv4 (main.sh radio_nat64: OpenThread's translator out of ot0, the Echo's MASQUERADE) is
+        # forwarded between ot0 and the Wi-Fi, FORWARD's policy dropping the rest; stock's firewall.sh has the two.
+        # (TREL and the border agent over IPv4 are in 16384:32767 above.)
+        if [ -n "$THREAD" ]; then
+            echo "-A FORWARD -i ot0 -j ACCEPT"
+            echo "-A FORWARD -o ot0 -j ACCEPT"
+        fi
     else
         echo "-A INPUT -p icmpv6 -j ACCEPT"                                # neighbour discovery: no IPv6 without it
         echo "-A INPUT -i $WLAN -p udp -m udp --dport 546 -j ACCEPT"       # DHCPv6
+        # Thread (main.sh radio_watch, radio=thread in state/config): stock's firewall.sh has these for its own border
+        # router (ot0 in and out, forwarding between the Thread network and the Wi-Fi both ways: Home Assistant's Matter
+        # server reaches the devices through the border router, and they it), and the border router's mDNS on IPv6:
+        # its advertising proxy answers for the Thread devices' services there (OpenThread's own mDNS, 5353)
+        if [ -n "$THREAD" ]; then
+            echo "-A INPUT -i ot0 -j ACCEPT"
+            echo "-A OUTPUT -o ot0 -j ACCEPT"
+            echo "-A FORWARD -i ot0 -j ACCEPT"
+            echo "-A FORWARD -o ot0 -j ACCEPT"
+            echo "-A INPUT -i $WLAN -p udp -m udp --dport 5353 -j ACCEPT"
+            # TREL: Thread over the Wi-Fi between border routers (otbr-build.sh fixes its port, 28936)
+            echo "-A INPUT -i $WLAN -p udp -m udp --dport 28936 -j ACCEPT"
+            # the border agent (MeshCoP: a phone's Thread app, commissioners) and its ephemeral key (otbr-build.sh)
+            echo "-A INPUT -i $WLAN -p udp -m udp --dport 28937:28938 -j ACCEPT"
+        fi
     fi
 }
 # Those of them that the listing $2 ("iptables -S") does not have

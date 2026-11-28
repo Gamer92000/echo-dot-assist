@@ -83,6 +83,7 @@
 #include "update.h"
 #include "sources.h"
 #include "wifi.h"
+#include "radio.h"
 #include "ws.h"
 #include "statefile.h"
 #include "../third_party/monocypher.h"
@@ -2268,6 +2269,60 @@ static void wifi_api(int fd, struct req *r)
     respond_sjson(fd, r, busy ? 409 : 400, o);
 }
 
+/* /api/radio   GET   the Thread and Zigbee radio (radio.c): what runs, the network it is on (never its key)
+ *              POST  "form <name hex>": a new Thread network on the border router; "join <dataset sealed, hex>": the
+ *                    network of a Thread dataset (its TLVs, as Home Assistant's Thread settings show them; sealed as a
+ *                    Wi-Fi password: they hold the network key); "leave": the network forgotten; "allow <IPv4>|-": the
+ *                    one address besides Home Assistant's that may connect to the radio's ports
+ * Signed; a POST answers what GET does, or 400 with why, 409 while the border router is not up. */
+static void radio_api(int fd, struct req *r)
+{
+    char err[200], ej[260], *o; int write = !strcmp(r->method, "POST"), rc = 0;
+    if (!signed_ok(r, write)) { respond_json(fd, 401, "{\"error\":\"not logged in\"}"); return; }
+    if (!radio_present()) { respond_sjson(fd, r, 404, "{\"error\":\"not found\"}"); return; }
+    err[0] = 0;
+    if (write) {
+        char what[12] = "", arg[600] = ""; int k = sscanf(r->body ? r->body : "", "%11s %599s", what, arg);
+        if (k >= 1 && !strcmp(what, "join")) {
+            uint8_t sealed[256], tlv[256]; int n;
+            if (k < 2 || (n = unhex_any(sealed, sizeof sealed, arg)) < 0 || unseal(r, sealed, (size_t)n, tlv)) { rc = -1; snprintf(err, sizeof err, "bad request"); }
+            else rc = radio_action("join", "", tlv, (size_t)n, err, sizeof err);
+            crypto_wipe(tlv, sizeof tlv); crypto_wipe(sealed, sizeof sealed);
+        } else if (k >= 1 && !strcmp(what, "form")) {
+            char name[20]; int n = k < 2 ? 0 : unhex_any((uint8_t *)name, sizeof name - 1, arg);
+            if (n < 0) { rc = -1; snprintf(err, sizeof err, "bad request"); }
+            else { name[n] = 0; rc = radio_action("form", name, NULL, 0, err, sizeof err); }
+        } else if (k >= 1 && (!strcmp(what, "share") || !strcmp(what, "unshare"))) {
+            /* the ephemeral key: its code to this browser alone, sealed (seal2 under a nonce of this answer's own, as
+             * the plugin storage's: plain HTTP carries the answer), never in the status */
+            char code[16] = ""; uint8_t pub[32], nonce[16], sb[16]; char nh[33], sh[33], o2[200];
+            rc = radio_share(!strcmp(what, "share"), code, err, sizeof err);
+            if (!rc && code[0]) {
+                size_t cl = strlen(code);
+                ws_random(nonce, sizeof nonce); memcpy(sb, code, cl);
+                if (unhex(pub, r->pub, 32) || seal2(pub, r->ctr, nonce, "hassmic seal back 3", sb, cl)) {
+                    crypto_wipe(code, sizeof code); crypto_wipe(sb, sizeof sb); respond_sjson(fd, r, 401, "{\"error\":\"not logged in\"}"); return;
+                }
+                hex(nh, nonce, 16); hex(sh, sb, cl);
+                snprintf(o2, sizeof o2, "{\"share\":{\"nonce\":\"%s\",\"sealed\":\"%s\",\"seconds\":120}}", nh, sh);
+                crypto_wipe(code, sizeof code); crypto_wipe(sb, sizeof sb);
+                respond_sjson(fd, r, 200, o2); return;
+            }
+        } else if (k >= 1 && (!strcmp(what, "leave") || !strcmp(what, "allow") || !strcmp(what, "permit") || !strcmp(what, "zb_leave") ||
+                            !strcmp(what, "zb_rotate") || !strcmp(what, "zb_prefer")))
+            rc = radio_action(what, k < 2 ? (strcmp(what, "permit") ? "-" : "0") : arg, NULL, 0, err, sizeof err);
+        else { rc = -1; snprintf(err, sizeof err, "bad request"); }
+    }
+    if (rc) {
+        char e[300]; jesc(ej, sizeof ej, err); snprintf(e, sizeof e, "{\"error\":\"%s\"}", ej);
+        respond_sjson(fd, r, rc == -2 ? 409 : 400, e); return;
+    }
+    size_t cap = 4096; o = malloc(cap);
+    if (!o) { respond_sjson(fd, r, 503, "{\"error\":\"no memory\"}"); return; }
+    size_t n = radio_status_json(o, cap);
+    respond_s(fd, r, 200, "application/json", NULL, o, n); free(o);
+}
+
 /* ---------------------------------------------------------------- plugins (plugin.h, plugin_store.h; docs/plugins.md 4.3, 5.4)
  * /api/plugins                              GET   everything the Plugins page shows; "install": a package on its way
  * /api/plugins/upload/begin                 POST  "<size>": a package (.hmp) starts
@@ -4097,6 +4152,7 @@ static void handle(int fd)
     else if (!strncmp(r.path, "/api/plugins", 12)) plugins_api(fd, &r);
     else if (!strncmp(r.path, "/api/ring", 9)) ring_api(fd, &r);
     else if (!strncmp(r.path, "/api/wifi", 9)) wifi_api(fd, &r);
+    else if (!strcmp(r.path, "/api/radio")) radio_api(fd, &r);
     else if (!strcmp(r.path, "/api/mass")) mass_api(fd, &r);
     else if (!strcmp(r.path, "/api/screen")) screen_api(fd, &r);
     else if (!strncmp(r.path, "/api/timer-sound", 16)) timer_sound_api(fd, &r);

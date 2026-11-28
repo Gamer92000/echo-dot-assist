@@ -1,0 +1,4 @@
+config HM_XIAO_BOOTLOADER
+	bool "Shell command 'bootloader': reset into the XIAO's Adafruit nRF52 bootloader"
+	default y
+	depends on SOC_NRF52840 && SHELL

@@ -90,6 +90,7 @@
 #include "board.h"
 #include "clock.h"
 #include "statefile.h"
+#include "radio.h"
 
 #define PIPELINE_TIMEOUT 30         /* seconds in LISTENING or THINKING before giving up */
 #define TTS_RATE         22050      /* assumed when audio-start carries no rate */
@@ -1216,6 +1217,17 @@ static atomic_llong dnd_clear_at;
  * sound setting says: it was asked for.  Again while it runs: longer, and the sound once more.  Lock held or not. */
 #define IDENTIFY_MS 10000
 static atomic_llong identify_until;
+void esphome_mdns_refresh(void);
+void core_mdns_refresh(void) { if (proto == &proto_esphome) esphome_mdns_refresh(); }
+
+int core_ha_peers(uint32_t *addr, int max)
+{
+    pthread_mutex_lock(&core_lock);
+    int n = proto->peers ? proto->peers(addr, max) : 0;
+    pthread_mutex_unlock(&core_lock);
+    return n;
+}
+
 void core_identify(void)
 {
     if (!atomic_exchange(&identify_until, mono_ms() + IDENTIFY_MS)) led("-s", "zzz_rainbow");
@@ -4653,6 +4665,7 @@ int main(int argc, char **argv)
     pthread_mutex_lock(&core_lock); core_volume(); tell_plugins(); pthread_mutex_unlock(&core_lock);      /* what plugins are told at their READY (plugin.c) */
     ringlive_begin();                   /* the mute and the Echo's own patterns known: what the last run left lit, dark */
     davs_start();                                             /* Amazon login for artifact downloads (settings page) */
+    radio_start();                      /* Thread and Zigbee: what root runs forwarded to Home Assistant (radio.c) */
     static const struct web_hooks web_hooks = { web_attention, web_approved };
     if (core_web_port && web_start(core_web_port, &web_hooks)) { fprintf(stderr, "web: not available\n"); core_web_port = 0; }
     pf_start(core_web_port);            /* the plugin index's revocation list: daily, and between the Echos (plugin_fetch.c) */

@@ -4,7 +4,8 @@
  * kernel 4.4.22, arm64), the Echo Show 5 (checkers, kernel 4.9.77, 32-bit ARM) and the Echo Show 8 2nd gen (athena, 4.4.146:
  * a gen2 driver name, but the same RX vector code, nicRxGetRcpiValueFromRxv included; frames at 119-120 for -50 dBm unicast,
  * 129 for broadcasts, 2026-10-16); the Echo Dot 5 (cannoli, 5.4.86, 32-bit ARM: athena's driver name and RX path,
- * HM_DRIVER_SYMS below).  hassmic_rcpi.c's counterpart for
+ * HM_DRIVER_SYMS below); the Echo 4 (laser, 4.9.77+, 32-bit ARM: cannoli's driver and offsets, HM_KALLSYMS below).
+ * hassmic_rcpi.c's counterpart for
  * that driver.  The driver's own RX_STAT answer is the firmware's figure for
  * the last frame from anyone on the channel, every station and neighbouring network included, and one per ioctl; this
  * counts only what reaches the driver's data path, which in station mode is the access point's, frame by frame.
@@ -48,6 +49,7 @@
  * Linaro GCC 6.3 is no longer published; Makefile).
  */
 #include <linux/atomic.h>
+#include <linux/delay.h>
 #include <linux/jiffies.h>
 #include <linux/kallsyms.h>
 #include <linux/module.h>
@@ -59,27 +61,67 @@
 #include <linux/vmalloc.h>
 #include <asm/cacheflush.h>
 
+#ifdef HM_KALLSYMS
+/* laser's kernel (4.9.77+, MODVERSIONS, Amazon's and MediaTek's own structs: kernel.org's sources give the CRCs of
+ * simple prototypes exactly and of everything that reaches task_struct wrongly, 29 of 69 compared, module_layout among
+ * them, 2026-11-27).  So this build imports only what laser's stock modules import too, their __versions being the
+ * kernel's own CRCs (devices/laser/Module.symvers, tools/kcrc.py --modules): no param_ops_uint (int parameters), no
+ * __module_text_address or preempt_disable() (no CRC for preempt_count_sub), no struct mutex of ours (an atomic and
+ * msleep); the rest is looked up by kallsyms_lookup_name at load and called through a pointer, which no CRC guards and
+ * none needs: probe_kernel_read, stop_machine, register_module_notifier, sprint_symbol, the cache flush.  The structs
+ * of ours the kernel reads are struct module's head (its init and exit at laser's stock offsets, 0xdc and 0x1e4),
+ * file_operations (laid out as a stock module's: HM_FOPS, Amazon's has a field more), kernel_param and notifier_block */
+#define HM_PT int
+typedef int hm_pt;
+#else
+#define HM_PT uint
+typedef uint hm_pt;
+#endif
 static char *hook_sym = "nicRxProcessDataPacket";
 static char *fill_sym = "nicRxFillRFB";
-static uint scan_max = 64;          /* instructions of hook_sym searched for the call (donut: the 21st, checkers: 26th) */
+static hm_pt scan_max = 64;          /* instructions of hook_sym searched for the call (donut: the 21st, checkers: 26th) */
 #ifdef CONFIG_ARM64
-static uint rfb_vld = 32;           /* SW_RFB_T.ucGroupVLD: nicRxFillRFB, from RX descriptor DW0 bits 25-28 */
-static uint rfb_grp3 = 64;          /* SW_RFB_T.prRxStatusGroup3 */
+static hm_pt rfb_vld = 32;           /* SW_RFB_T.ucGroupVLD: nicRxFillRFB, from RX descriptor DW0 bits 25-28 */
+static hm_pt rfb_grp3 = 64;          /* SW_RFB_T.prRxStatusGroup3 */
 #else
-static uint rfb_vld = 16;           /* the same on 32-bit ARM (checkers) */
-static uint rfb_grp3 = 32;
+static hm_pt rfb_vld = 16;           /* the same on 32-bit ARM (checkers) */
+static hm_pt rfb_grp3 = 32;
 #endif
-static uint vld_grp3 = 2;           /* ucGroupVLD's bit for group 3 */
-static uint grp3_rcpi = 12;         /* RCPI0 in group 3: RX vector word 3, byte 0, RCPI1 after it (nicRxGetRcpiValueFromRxv) */
-static uint rate_mask = 0x1f07f;    /* rate, mode, bandwidth in RX vector word 0 */
+static hm_pt vld_grp3 = 2;           /* ucGroupVLD's bit for group 3 */
+static hm_pt grp3_rcpi = 12;         /* RCPI0 in group 3: RX vector word 3, byte 0, RCPI1 after it (nicRxGetRcpiValueFromRxv) */
+static hm_pt rate_mask = 0x1f07f;    /* rate, mode, bandwidth in RX vector word 0 */
 module_param(hook_sym, charp, 0444);
 module_param(fill_sym, charp, 0444);
-module_param(scan_max, uint, 0444);
-module_param(rfb_vld, uint, 0444);
-module_param(vld_grp3, uint, 0444);
-module_param(rfb_grp3, uint, 0444);
-module_param(grp3_rcpi, uint, 0444);
-module_param(rate_mask, uint, 0444);
+module_param(scan_max, HM_PT, 0444);
+module_param(rfb_vld, HM_PT, 0444);
+module_param(vld_grp3, HM_PT, 0444);
+module_param(rfb_grp3, HM_PT, 0444);
+module_param(grp3_rcpi, HM_PT, 0444);
+module_param(rate_mask, HM_PT, 0444);
+
+#ifdef HM_KALLSYMS
+static long (*hm_pkr)(void *dst, const void *src, size_t size);
+static int (*hm_stop)(int (*fn)(void *), void *data, const struct cpumask *cpus);
+static int (*hm_notifier)(struct notifier_block *nb);
+static int (*hm_sprint)(char *buf, unsigned long addr);
+static void (*hm_coherent)(unsigned long start, unsigned long end);
+#define probe_kernel_read(d, s, n) hm_pkr(d, s, n)
+#define stop_machine(f, d, c) hm_stop(f, d, c)
+#undef flush_icache_range
+#define flush_icache_range(s, e) hm_coherent(s, e)
+/* each by name, all of them or the module does not load */
+static int resolve(void)
+{
+    hm_pkr = (void *)kallsyms_lookup_name("probe_kernel_read");
+    hm_stop = (void *)kallsyms_lookup_name("stop_machine");
+    hm_notifier = (void *)kallsyms_lookup_name("register_module_notifier");
+    hm_sprint = (void *)kallsyms_lookup_name("sprint_symbol");
+    hm_coherent = (void *)kallsyms_lookup_name("v7_coherent_kern_range");
+    if (hm_pkr && hm_stop && hm_notifier && hm_sprint && hm_coherent) return 0;
+    pr_err("hassmic_rcpi4m: probe_kernel_read, stop_machine, register_module_notifier, sprint_symbol or v7_coherent_kern_range not in this kernel\n");
+    return -ENOENT;
+}
+#endif
 
 static atomic_t last = ATOMIC_INIT(-1), frames = ATOMIC_INIT(0);    /* last: RCPI | kind << 8, one frame's pair */
 static unsigned long last_jiffies;
@@ -115,7 +157,20 @@ static int show(struct seq_file *m, void *v)
 }
 
 static int open_fn(struct inode *inode, struct file *file) { return single_open(file, show, NULL); }
+#ifdef HM_KALLSYMS
+/* laser's struct file_operations is not kernel.org's: one pointer more between read and open, 124 bytes (the stock
+ * perf_cpu_info.ko's, by its relocations: owner 0, llseek 4, read 8, open 0x34, release 0x3c).  With kernel.org's
+ * layout the kernel found no open at its place, called none, and seq_read took the file's empty private_data for its
+ * seq_file: a NULL dereference at 0x30 and a panic at the first read (2026-11-27, the unit's pstore).  So the words are
+ * laid out as that stock module's are, and nothing else of the struct is ours */
+static const void *const fops_words[31] = {
+    [0] = THIS_MODULE, [1] = seq_lseek, [2] = seq_read, [0x34 / 4] = open_fn, [0x3c / 4] = single_release,
+};
+#define HM_FOPS ((const struct file_operations *)fops_words)
+#else
 static const struct file_operations fops = { .owner = THIS_MODULE, .open = open_fn, .read = seq_read, .llseek = seq_lseek, .release = single_release };
+#define HM_FOPS (&fops)
+#endif
 
 #ifdef CONFIG_ARM64
 #define PATCHER "aarch64_insn_patch_text"
@@ -254,6 +309,20 @@ static int patch(void *unused, void *addr, u32 insn)
  * the driver ("" for a driver built into the kernel, which never reloads: nothing for the notifier); -1 while it is
  * going: kallsyms still finds it, and its text is freed once its GOING notifier, which waits for hook_lock, is
  * through.  Preemption off: __module_text_address walks the module list under RCU-sched */
+#ifdef HM_KALLSYMS
+/* HM_KALLSYMS: the module's name from sprint_symbol ("nicRxProcessDataPacket+0x0/0x7a4 [wlan_mt76x3_sdio]"), and
+ * going from the notifier: GOING for that name sets it under the hook lock before the text is freed, LIVE clears it */
+static int drv_going;
+static int drv_of(unsigned long caller, char *name)
+{
+    char buf[KSYM_SYMBOL_LEN], *a, *b;
+    name[0] = 0;
+    hm_sprint(buf, caller);
+    buf[sizeof buf - 1] = 0;
+    if ((a = strchr(buf, '[')) && (b = strchr(a, ']')) && b - a - 1 < MODULE_NAME_LEN) { memcpy(name, a + 1, b - a - 1); name[b - a - 1] = 0; }
+    return drv_going && !strcmp(name, drv_name) ? -1 : 0;
+}
+#else
 static int drv_of(unsigned long caller, char *name)
 {
     struct module *mod;
@@ -265,12 +334,21 @@ static int drv_of(unsigned long caller, char *name)
     preempt_enable();
     return going ? -1 : 0;
 }
+#endif
 #define HM_LOCK() do { } while (0)
 #define HM_UNLOCK() do { } while (0)
 #endif
 
 /* init_fn and the module notifier both hook, and may at once (a driver loaded while init_fn runs): one at a time */
+#ifdef HM_KALLSYMS
+static atomic_t hook_busy = ATOMIC_INIT(0);     /* no struct mutex of ours where the kernel's layout is not known */
+#define HOOK_LOCK() do { while (atomic_cmpxchg(&hook_busy, 0, 1)) msleep(1); smp_mb(); } while (0)
+#define HOOK_UNLOCK() do { smp_mb(); atomic_set(&hook_busy, 0); } while (0)
+#else
 static DEFINE_MUTEX(hook_lock);
+#define HOOK_LOCK() mutex_lock(&hook_lock)
+#define HOOK_UNLOCK() mutex_unlock(&hook_lock)
+#endif
 
 /* Finds the call in the driver loaded now and patches it; a call already to hm_fill counts as done (init_fn hooks
  * twice, and a notifier for a driver it already hooked may follow).  Process context, hook_lock and HM_LOCK held:
@@ -320,8 +398,11 @@ static int on_module(struct notifier_block *nb, unsigned long state, void *data)
 {
     struct module *mod = data;
     if (state != MODULE_STATE_GOING && state != MODULE_STATE_LIVE) return NOTIFY_OK;
-    mutex_lock(&hook_lock);
+    HOOK_LOCK();
     if (drv_name[0] && !strcmp(mod->name, drv_name)) {
+#ifdef HM_KALLSYMS
+        drv_going = state == MODULE_STATE_GOING;
+#endif
         if (state == MODULE_STATE_GOING) {
             WRITE_ONCE(hooked, 0); pr_info("hassmic_rcpi4m: %s unloading, no frames until it is back\n", drv_name);
         } else {
@@ -329,7 +410,7 @@ static int on_module(struct notifier_block *nb, unsigned long state, void *data)
             HM_LOCK(); hook(); HM_UNLOCK();
         }
     }
-    mutex_unlock(&hook_lock);
+    HOOK_UNLOCK();
     return NOTIFY_OK;
 }
 static struct notifier_block module_nb = { .notifier_call = on_module };
@@ -342,11 +423,15 @@ static struct notifier_block module_nb = { .notifier_call = on_module };
 static int __init init_fn(void)
 {
     int r;
-    if (!proc_create("hassmic_rcpi4m", 0444, NULL, &fops)) return -ENOMEM;
-    mutex_lock(&hook_lock); HM_LOCK(); r = hook(); HM_UNLOCK(); mutex_unlock(&hook_lock);
+#ifdef HM_KALLSYMS
+    if ((r = resolve())) return r;
+#define register_module_notifier(nb) hm_notifier(nb)
+#endif
+    if (!proc_create("hassmic_rcpi4m", 0444, NULL, HM_FOPS)) return -ENOMEM;
+    HOOK_LOCK(); HM_LOCK(); r = hook(); HM_UNLOCK(); HOOK_UNLOCK();
     if (r) { remove_proc_entry("hassmic_rcpi4m", NULL); return r; }
     register_module_notifier(&module_nb);         /* 0 in every kernel here: notifier_chain_register cannot fail */
-    mutex_lock(&hook_lock); HM_LOCK(); hook(); HM_UNLOCK(); mutex_unlock(&hook_lock);
+    HOOK_LOCK(); HM_LOCK(); hook(); HM_UNLOCK(); HOOK_UNLOCK();
     return 0;
 }
 

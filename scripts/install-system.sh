@@ -34,6 +34,7 @@ if [ "$1" != --uninstall ]; then
     [ -f $SEPOLICY_TOOL ] || die "no $SEPOLICY_TOOL: lib/armeabi-v7a/libmagiskpolicy.so of Magisk v30.7's APK ($DDIR/README.md; scripts/setup.sh fetches it)"
     [ "$(adb get-state 2>/dev/null)" = device ] && device_check_firmware
     build_binaries                      # built here or this commit's release build (PREBUILT, scripts/lib/build.sh)
+    notice_make                         # NOTICE beside them, as every bundle has it (scripts/lib/device.sh)
     # Signing key for push updates.  The public half goes onto the read-only system partition and is what the device trusts.
     mkdir -p secrets
     [ -f secrets/update.key ] || { python3 scripts/otatool.py keygen secrets/update.key secrets/update.pub; echo "new update signing key: secrets/update.key (keep it, back it up)"; }
@@ -72,7 +73,7 @@ if [ "$1" != --uninstall ]; then
 fi
 # What goes into /system/hassmic, whichever way it gets there.  The tools and the Wi-Fi motion module are optional (no
 # kernel toolchain, no .ko): `|| true`, since an assignment takes the substitution's status and set -e would end here.
-FILES="$OUT/hassmic $OUT/runas $(ls $OUT/plugrun $OUT/mixcap $OUT/mixplay $OUT/pryon_test $OUT/*.ko 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
+FILES="$OUT/hassmic $OUT/runas $OUT/NOTICE $(ls $OUT/plugrun $OUT/rcpbridge $OUT/otbr-agent $OUT/otbr-agent-csl $OUT/ot-ctl $OUT/zigbeed $OUT/gprcp $OUT/mixcap $OUT/mixplay $OUT/pryon_test $(device_kmods) 2>/dev/null || true) $OUT/otatool secrets/update.pub $RELEASE_PUB $DDIR/device.conf
        scripts/system/boot.sh scripts/system/main.sh scripts/system/sysinstall.sh scripts/device/lockdown.sh scripts/device/alexa-off.sh scripts/device/alexa-on.sh scripts/device/artifact-install.sh scripts/device/wifi.sh scripts/device/roam.sh"
 # Android models (the screen shows the light band, Wi-Fi is WifiService's): their dex programs, and the home screen
 [ -n "$ANDROID" ] && FILES="$FILES scripts/device/wifictl.dex ${SCREEN_BAND:+scripts/device/ringbar.dex} ${HOME_APK:+scripts/device/$HOME_APK}"
@@ -147,7 +148,7 @@ echo "sepolicy patched"
 t "rm -rf $MNT/system/hassmic; mkdir -p $MNT/system/hassmic"
 adb push $FILES $MNT/system/hassmic/ >/dev/null
 adb push $DDIR/hassmic.rc $MNT/system/etc/init/hassmic.rc >/dev/null
-t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/update.pub $MNT/system/hassmic/release.pub $MNT/system/hassmic/device.conf $MNT/system/hassmic/*.wa $MNT/system/hassmic/*.was
+t "chown -R 0:2000 $MNT/system/hassmic; chmod 755 $MNT/system/hassmic $MNT/system/hassmic/*; chmod 644 $MNT/system/hassmic/update.pub $MNT/system/hassmic/release.pub $MNT/system/hassmic/device.conf $MNT/system/hassmic/NOTICE $MNT/system/hassmic/*.wa $MNT/system/hassmic/*.was
    chown 0:0 $MNT/system/etc/init/hassmic.rc; chmod 644 $MNT/system/etc/init/hassmic.rc
    chcon -R u:object_r:system_file:s0 $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy.pre-hassmic
    ls -lZ $MNT/system/hassmic $MNT/system/etc/init/hassmic.rc $MNT/sepolicy $MNT/system/etc/init/fosflags.rc

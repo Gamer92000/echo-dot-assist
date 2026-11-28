@@ -1,0 +1,4 @@
+# tools/gp712/xiao-build.sh's own Zephyr module: the XIAO's shell command into its bootloader
+build:
+  cmake: .
+  kconfig: Kconfig

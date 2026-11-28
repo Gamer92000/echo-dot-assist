@@ -1,0 +1,31 @@
+# Laser NS6575 / 8349.  The policy is patched in the ext4 image by laser-os-builder: its own root rules
+# (laser_os/root.rules) first, then this file, then scripts/system/sepolicy-hassmic.rules and sepolicy-mirror.sh's.
+# The root rules are repeated here, word for word, as cannoli's sepolicy.rules repeats cannoli-os-builder's: applied
+# twice they change nothing, and tools/sepolicy-check.sh, which starts from the stock policy and this file, then
+# checks the policy the Echo runs (without them: "no init -> su").  Keep them the builder's.
+permissive su
+allow su * * *
+allow init su process { transition siginh rlimitinh noatsecure }
+allow su shell_exec file { read getattr map execute entrypoint open }
+allow su system_file file { read getattr map execute entrypoint open }
+allow adbd adbd process setcurrent
+allow adbd su process { transition dyntransition }
+allow su su process setcurrent
+allow domain su fd use
+allow wpa su unix_dgram_socket sendto
+# The shell adb spawns: uid 0 once ro.secure=0, in the stock shell domain
+permissive shell
+# (allow domain su fd use, above: 4.9's OverlayFS opens its lower files using the mounting task's creds; the root
+# prepare service mounts /system as su, and stock domains use those backing-file descriptors)
+# Laser's mixer maps the ashmem ring created by its capture/playback client.
+# Give those objects a dedicated label; generic tmpfs is not readable by mixer.
+# hassmic is declared again by scripts/system/sepolicy-hassmic.rules, which runs after this
+# file (the firmware bake): without the declaration here magiskpolicy
+# silently skips the transition and the connectto below, exit 0, and nothing checks for them.
+type hassmic domain
+type hassmic_audio_tmpfs file_type
+type_transition hassmic tmpfs file hassmic_audio_tmpfs
+allow { mixer shmd } hassmic_audio_tmpfs file { read write map getattr open ioctl }
+# These are the stock btmanagerd AIPC clients, each a type of laser's own policy (read off the running Echo,
+# 2026-11-26). hassmic now hosts its UUID 0 socket; the filesystem socket keeps the stock btmanagerd_aipc_tmpfs label.
+allow { amakit_server ace_powerd trackerd PuffinApp provisionerd ace_cloud_pairing_service indoor_localization_service ace_metricd blemeshmgr smarthomed ace_coex_metric gadgetsd oobed mixer } hassmic unix_stream_socket connectto

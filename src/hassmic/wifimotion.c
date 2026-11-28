@@ -25,6 +25,7 @@
  * frames a second from the access point.
  */
 #include "wifimotion.h"
+#include "statefile.h"
 #include <limits.h>
 #include <linux/wireless.h>
 #include <math.h>
@@ -272,6 +273,14 @@ int wifimotion_enable(int set)
     if (set >= 0 && atomic_exchange(&enabled, set != 0) != (set != 0))
         fprintf(stderr, "wifi motion (experimental): switched %s\n", set ? "on" : "off");
     return atomic_load(&enabled);
+}
+
+void wifimotion_switched_on(void)
+{
+    char p[300], t[32]; const char *e = getenv("HASSMIC_STATE");
+    snprintf(p, sizeof p, "%s/wifi-motion-on", e ? e : "/data/local/hassmic/state");
+    int n = snprintf(t, sizeof t, "%lld\n", (long long)time(NULL));
+    if (statefile_write(p, 0644, t, (size_t)n)) fprintf(stderr, "wifi motion: cannot write %s\n", p);
 }
 
 int wifimotion_sensitivity(int set)

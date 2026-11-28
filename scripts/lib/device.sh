@@ -54,6 +54,16 @@ release_load() {
     [ -s "$RELEASE_PUB" ] || die "no $RELEASE_PUB (the release key of $UPDATE_REPO)"
 }
 
+# notice_make: $OUT/NOTICE, what this model's programs and files contain of others' work and the notices their licences
+# ask to go with them (scripts/notice.py, from the repository's NOTICE), which every bundle and install carries beside
+# them.  Made from this checkout, beside a release's binaries too (build.sh prebuilt_fetch leaves the release's out):
+# the same commit's text
+notice_make() {
+    mkdir -p $OUT
+    python3 scripts/notice.py "$DEVICE" "$UPDATE_REPO" > $OUT/NOTICE.new && mv $OUT/NOTICE.new $OUT/NOTICE ||
+        { rm -f $OUT/NOTICE.new; die "cannot write $OUT/NOTICE (scripts/notice.py)"; }
+}
+
 # The binaries link against one firmware's libraries; on another one they may crash or misbehave in the audio path.
 # firmware_same: the stock files of PROBE_FILES on the Echo on adb are byte-identical to the pinned firmware's
 # (scripts/probe.sh against devices/<codename>/probe.md5): the libraries whose interfaces are reverse-engineered or
@@ -123,4 +133,14 @@ device_check_firmware() {
         die "cancelled: hassmic is built for $FIRMWARE_ID ($DDIR/README.md); HASSMIC_FIRMWARE_OK=1 installs anyway"
     fi
     die "this Echo runs firmware '$have', $DEVICE support is built for $FIRMWARE_ID: reflash that one ($DDIR/README.md)"
+}
+
+# The model's own kernel modules (device.mk KMOD, KMOD_RADIO) as built: never every .ko of the build folder, where a
+# test module may lie (src/kmod/hassmic_gp8051.c, built only by hand)
+device_kmods() {
+    local k
+    for k in $(sed -n 's/^KMOD\(_RADIO\)\{0,1\} *:= *//p' "$DDIR/device.mk"); do
+        [ -f "$OUT/$k.ko" ] && echo "$OUT/$k.ko"
+    done
+    return 0
 }

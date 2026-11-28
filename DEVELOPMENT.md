@@ -51,7 +51,12 @@ rules. `DEVICE` picks one (default `donut`). The adb scripts check it against th
 ## Build and test
 
 Device binaries need the NDK and the unpacked firmware in `firmware/<codename>/` (the model's install page, steps 1–2, e.g. `devices/donut/README.md`), or
-`STUBS=1` instead of the firmware (below). Without the NDK only the host targets build. The test references:
+`STUBS=1` instead of the firmware (below). Without the NDK only the host targets build. A model with the Thread radio
+(device.mk `THREAD := 1`, the Echo 4) also builds our border router, upstream's ot-br-posix, with cmake and ninja from
+pinned archives fetched once into `toolchain/src/otbr/` (`scripts/otbr-build.sh`, ~14 MB, ~3 min), and our own radio
+program `gprcp` (`scripts/gprcp-build.sh`: OpenThread's RCP on Qorvo's GP712 library, which is the Raspberry Pi's
+hard-float ARM, so a static musl build by [zig](https://ziglang.org) 0.17.1, the version CI pins; sources into
+`toolchain/src/gp712/`). The test references:
 `uv sync` ([uv](https://docs.astral.sh/uv/)) makes `.venv` from `uv.lock`, every package pinned; to change one, edit
 `pyproject.toml`, run `uv lock` and commit both.
 
@@ -77,6 +82,11 @@ make unit                                         # C unit tests; microWakeWord 
 .venv/bin/python tests/fake_ha_esphome_features.py  # sound detection (3 s windows: HASSMIC_FAKE_SOUND_WINDOW), Wi-Fi motion
 .venv/bin/python tests/fake_ha_esphome_buttons.py   # runs cancelled while HA thinks or streams; the "Button" event entity
 .venv/bin/python tests/fake_ha_esphome_address.py   # a new address: links closed, mDNS announced again (netaddr.c)
+.venv/bin/python tests/fake_zigbee.py             # zigbeed (src/zigbee/) on simulated RCPs (tests/zbair.py) with zigpy-deconz
+.venv/bin/python tests/fake_zigbee_z2m.py         # zigbeed with Zigbee2MQTT's library (npm ci --prefix tests/zigbee-js first)
+.venv/bin/python tests/fake_radio.py              # the Echo 4's Thread and Zigbee radio (radio.c): the real rcpbridge in
+                                                 # front of a stand-in RCP (tests/fake_rcp.py), a stand-in of the border
+                                                 # router's REST; who is let in, one host at a time, the page's actions
                                                  # (the five share their setup: tests/esphome_common.py; one file was 90 s)
 .venv/bin/python tests/fake_ha_arbitration.py     # two Echos + Home Assistant + an unknown device: wake word arbitration: merge, forger,
                                                  # pairing; _join.py (tags, action, crash), _rounds.py, _kiosk.py, _window.py;

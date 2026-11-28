@@ -108,6 +108,13 @@ rm $S/sepolicy
 fresh; mv $S/word-de-DE.wa $S/german.was $Q/; run install 1; [ $r = 0 ] && ! said && cmp -s $S/hassmic $H/hassmic
 ok_ $? "no aligners in it (an older build): nothing said about them"
 
+# NOTICE (scripts/notice.py), new in a bundle beside an installed copy without one: a file of mode 644 like device.conf
+[ ! -e $H/NOTICE ] && echo 'Notices' > $S/NOTICE && run factory 999999 && [ $r = 0 ] && cmp -s $S/NOTICE $H/NOTICE &&
+    [ "$(command stat -c %a $H/NOTICE)" = 644 ] && [ "$(command stat -c %a $H/hassmic)" = 755 ]
+ok_ $? "a NOTICE the installed copy did not have: written, mode 644"
+fresh; run install 1; [ $r = 0 ] && [ "$(command stat -c %a $H/NOTICE)" = 644 ]; ok_ $? "a first install: the same"
+rm $S/NOTICE; run install 1; [ $r = 0 ] && [ ! -e $H/NOTICE ]; ok_ $? "an install without it (an older build): taken off as every file it lacks"
+
 # the installers stage them (nothing here runs those: a tripwire against the lists losing them again)
 : > $Q/out
 grep -q '^FILES="$FILES $(echo wakealign/\*.wa wakealign/\*.was)"$' scripts/install-system.sh

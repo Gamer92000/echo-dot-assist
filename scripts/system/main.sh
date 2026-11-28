@@ -170,18 +170,33 @@ reach_check() {
 # state/config, the daemon's settings, read in place: only on/off and whole numbers come of it.  Never through a link,
 # nor from anything but a plain file (a FIFO would hold the loop reading it): /dev/null then
 cfg() { local c=/data/local/hassmic/state/config; if [ -f $c ] && [ ! -L $c ]; then echo $c; else echo /dev/null; fi; }
+# A load that never came back (the kernel fell in it: an oops, a panic and the reboot) is not tried at every boot after
+# it, which on an Echo without a USB connector (laser) would be a boot loop: KMOD_TRY is written to the flash before
+# insmod and removed once insmod returned, whatever it said.  Found at a look: the last try fell; not tried again
+# until Wi-Fi motion is switched off (the mark goes) and on again.  Off and on within a second falls between two looks
+# (the Echo 4, 2026-11-27): hassmic writes state/wifi-motion-on when a person switches it on (never at its start), and
+# a note newer than the mark is that word too.
+KMOD_TRY=/data/local/hassmic/kmod-try; KMOD_ON=/data/local/hassmic/state/wifi-motion-on; KMOD_SAID=
 kmod() {
     [ -n "$KMOD" ] && [ -f $D/$KMOD ] || return 0
     grep -q "^${KMOD%.ko} " /proc/modules && return 0
     if [ -f /data/local/hassmic/state/config ]; then
-        grep -qx 'wifi_motion=on' $(cfg) || return 0
+        grep -qx 'wifi_motion=on' $(cfg) || { rm -f $KMOD_TRY; KMOD_SAID=; return 0; }
     else
         local o=/data/local/hassmic/state/settings
         [ -f $o ] && [ ! -L $o ] && set -- $(cat $o 2>/dev/null)
-        [ "${13}" = 1 ] || return 0
+        [ "${13}" = 1 ] || { rm -f $KMOD_TRY; KMOD_SAID=; return 0; }
     fi
+    [ -e $KMOD_TRY ] && [ -f $KMOD_ON ] && [ ! -L $KMOD_ON ] && [ $KMOD_ON -nt $KMOD_TRY ] && { rm -f $KMOD_TRY; KMOD_SAID=; echo "kmod: Wi-Fi motion switched on again: $KMOD tried once more"; }
+    if [ -e $KMOD_TRY ]; then
+        [ -n "$KMOD_SAID" ] || echo "kmod: the last load of $KMOD never came back (the kernel fell in it?): not tried again until Wi-Fi motion is switched off and on"
+        KMOD_SAID=1; return 0
+    fi
+    # no mark, no load: without it a load the kernel fell in would be tried at every boot
+    { echo "$KMOD" > $KMOD_TRY && sync; } || { echo "kmod: $KMOD not loaded, its mark ($KMOD_TRY) could not be written"; KMOD=; return 0; }
     if out=$(insmod $D/$KMOD $KMOD_ARGS 2>&1); then echo "kmod: $KMOD loaded (Wi-Fi motion switched on)"
     else echo "kmod: $KMOD not loaded, not tried again until reboot: $out"; KMOD=; fi
+    rm -f $KMOD_TRY
 }
 
 # The time from Home Assistant (src/hassmic/clock.c): hassmic, which may not set the clock, leaves "<epoch> <its
@@ -927,6 +942,7 @@ ota_watch() {
                 for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
                 rm -f $PAGE_PUB                     # (the settings page's Sources: gone with state/sources)
                 rm -f /data/misc/avahi/services/hassmic.service
+                [ -z "$RADIO_RCP" ] || : > $RADIO_FORGET          # radio_watch stops the radio and forgets its network
                 start hassmic
                 say "== factory reset done, the satellite starts again"
                 continue
@@ -1103,28 +1119,309 @@ leds() {
     rm -rf $LEDNEW $LEDLOCK
 }
 
-# The light ring live (ringlive.c): hassmic writes the ring's frame itself.  That one file and nothing else of the LED
+# The light ring live (ringlive.c): hassmic writes the ring's frame itself.  That file and nothing else of the LED
 # driver's: led_current (the chip's current), the calibration, the boot animation and the mute button's PWM stay
 # ledcontroller's and root's.  init chowns it to ledcontroller at every boot (/init.ledcontroller.rc, 0644); its group
 # becomes LED_GID, which no stock process has and hassmic gets beside its others (runas below), and that group may write.
 # ledcontroller still owns it and keeps writing through the descriptor it holds.  sysfs: the next boot has init's again.
-# Only where device.conf names it (a model measured with scripts/led-probe.sh), and only a file in sysfs.  By otatool:
-# toybox's chgrp takes names only, and no stock group is this one (the Dot 3: "chgrp: group '3991': No such file").
+# Only where device.conf names it (a model measured with scripts/led-probe.sh, or read out of its HAL), and only files in
+# sysfs.  LED_FRAME is a list, globs allowed: the Echo 4 has a colour file per LED and the chips' supply switches
+# (board.c ring_led_color, ring_led_power), the Dots one frame file.  By otatool: toybox's chgrp takes names only, and
+# no stock group is this one (the Dot 3: "chgrp: group '3991': No such file").
 LED_GID=3991
 LED_TABLE=/system/etc/led_mute_ring_config.json; LED_TABLE_COPY=/data/local/hassmic/led-table.json
 led_frame() {
-    [ -n "$LED_FRAME" ] && [ -f "$LED_FRAME" ] || return 0
-    case $(readlink -f "$LED_FRAME") in /sys/*) ;; *) echo "light ring live: $LED_FRAME is not in sysfs, left alone"; return 0;; esac
-    # The brightness table hassmic caps its colours by: ledcontroller's 0760 on the Dot 2 (0644 on the Dot 3), so a
-    # copy, 0644, in root's own folder (hassmic may not write there: no link of its can point this elsewhere)
+    [ -n "$LED_FRAME" ] || return 0
+    local f n=0 bad=0
+    for f in $LED_FRAME; do
+        [ -f "$f" ] || { echo "light ring live: $f is not there, left alone"; bad=$((bad + 1)); continue; }
+        case $(readlink -f "$f") in /sys/*) ;; *) echo "light ring live: $f is not in sysfs, left alone"; bad=$((bad + 1)); continue;; esac
+        if $D/otatool chgrp $LED_GID "$f" && chmod 0664 "$f"; then n=$((n + 1))
+        else echo "light ring live: $f could not be given to hassmic"; bad=$((bad + 1)); fi
+    done
+    [ $n -gt 0 ] || return 0
+    # The brightness table hassmic caps its colours by: ledcontroller's 0760 on the Dot 2 (0644 on the Dot 3; on the
+    # Echo 4 a link into ledcontroller's /data/ledcontroller), so a copy, 0644, in root's own folder (hassmic may not
+    # write there: no link of its can point this elsewhere)
     if [ -f $LED_TABLE ] && ! cmp -s $LED_TABLE $LED_TABLE_COPY 2>/dev/null; then
         rm -f $LED_TABLE_COPY.new
         if cp $LED_TABLE $LED_TABLE_COPY.new && chmod 0644 $LED_TABLE_COPY.new && mv -f $LED_TABLE_COPY.new $LED_TABLE_COPY
         then echo "light ring live: the brightness table copied for hassmic"
         else rm -f $LED_TABLE_COPY.new; echo "light ring live: the brightness table could not be copied"; fi
     fi
-    if $D/otatool chgrp $LED_GID "$LED_FRAME" && chmod 0664 "$LED_FRAME"; then echo "light ring live: hassmic may write $LED_FRAME"
-    else echo "light ring live: $LED_FRAME could not be given to hassmic"; fi
+    if [ $bad = 0 ]; then echo "light ring live: hassmic may write $([ $n = 1 ] && echo "$LED_FRAME" || echo "the ring's $n files")"
+    else echo "light ring live: hassmic may write $n of the ring's files, $bad not"; fi
+}
+
+# The 802.15.4 radio (device.conf RADIO_RCP: the Echo 4's GP712 behind Amazon's ot-rcp; hassmic's radio.c,
+# docs/re-thread.md).  Stock's Thread border router (otservice), its Thread service (connthreadsvc) and its Zigbee hub
+# (zigbeeservice) are Amazon's: init starts them again at every wlan.driver.status=ok, so they are stopped again at
+# every look (RADIO_SERVICES).  In their place, as state/config says (hassmic's settings radio, thread_role,
+# zigbee_role):
+#   off                     nothing holds the radio
+#   rcpbridge               always while the radio is on: Amazon's RCP for one client at a time on $RADIO_DIR/rcp.sock
+#                           (src/tools/rcpbridge.c), a fresh one for each, ended with it.  The one holder of the radio:
+#                           whatever else uses it connects there, one after the other (a mode switch waits for the
+#                           last host to leave), and the RCP dies with rcpbridge whatever kills it
+#   zigbeed                 Zigbee as the coordinator or a router: our own stack (src/zigbee/, docs/zigbee.md), a
+#                           client of rcp.sock as otbr-agent is; the coordinator serves the deCONZ protocol on
+#                           $RADIO_DIR/zb.sock for hassmic to forward to Home Assistant (ZHA, Zigbee2MQTT), both answer
+#                           the page on zb.ctl.  Each role keeps its network in a folder of its own (zigbee-<role>):
+#                           a switch to the router and back finds the coordinator's network as it was
+#   otbr-agent              Thread as a border router or a router: our own (scripts/otbr-build.sh), a client of
+#                           rcp.sock, its REST API on $RADIO_DIR/rest.sock for hassmic, which forwards it to Home
+#                           Assistant (radio.c).  As the radio's user with NET_ADMIN and NET_RAW and nothing else of
+#                           root's (stock's otservice: user openthread, those two capabilities), its socket and
+#                           settings in $RADIO_DIR.  A router has no backbone interface: no border routing, no SRP
+#                           server, no border agent
+# The remote roles: rcpbridge alone; hassmic forwards a TCP port to rcp.sock for the host it lets in.
+# $RADIO_DIR is the radio's user's, mode 0750, its group hassmic's too (DAEMON_GROUPS): hassmic reaches the two sockets
+# (0770 by the umask) and nothing else in there.  A process that keeps exiting is started again at most every 10 s.
+RADIO_DIR=/data/local/hassmic/thread
+RADIO_FORGET=/data/local/hassmic/thread-forget     # factory reset: the Thread network goes with state/
+radio_want() {      # off | rcp | br | router | zbc | zbr: what state/config asks for
+    local l m=off t=border_router z=coordinator
+    while IFS= read -r l || [ -n "$l" ]; do
+        case $l in radio=*) m=${l#radio=};; thread_role=*) t=${l#thread_role=};; zigbee_role=*) z=${l#zigbee_role=};; esac
+    done 2>/dev/null < $(cfg)
+    case $m:$t:$z in
+    thread:border_router:*) echo br;;
+    thread:router:*) echo router;;
+    thread:*) echo rcp;;
+    zigbee:*:coordinator) echo zbc;;
+    zigbee:*:router) echo zbr;;
+    zigbee:*) echo rcp;;
+    *) echo off;;
+    esac
+}
+# $1 = name for the log's lines ("" where the program names itself), $2 = pid file, then the command: started in the
+# background through sh, which writes its own pid and execs it (the pid is the program's; $!, the pipe's last part's)
+radio_spawn() {
+    local n=${1:+$1: } pf=$2; shift 2
+    rm -f $pf
+    sh -c 'umask 007; echo $$ > "$0"; exec "$@"' $pf "$@" 2>&1 | while IFS= read -r l; do echo "$(stamp) $n$l"; done >> $LOG &
+    local i=0; while [ ! -s $pf ] && [ $i -lt 20 ]; do sleep 0.1; i=$((i + 1)); done
+}
+# A pid file's process, if it still is the program named (its pid may be anyone's by now): the pid, else nothing.
+# One dd read of cmdline, as the firewall's watcher reads them (a /proc read loop on a process that ends spins)
+radio_pid() {
+    local p c
+    [ -f $1 ] && read -r p < $1 && [ -n "$p" ] && kill -0 $p 2>/dev/null || return 0
+    c=$(dd if=/proc/$p/cmdline bs=4096 count=1 2>/dev/null | tr '\0' ' ')
+    case "$c" in *"$2"*) echo $p;; esac
+}
+radio_alive() { [ -n "$(radio_pid $1 $2)" ]; }
+radio_end() {       # pid file, program: TERM, then KILL after 5 s, only while it is still that program
+    local p i=0
+    p=$(radio_pid $1 $2)
+    if [ -n "$p" ]; then
+        kill $p 2>/dev/null
+        while [ -n "$(radio_pid $1 $2)" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+        [ -z "$(radio_pid $1 $2)" ] || kill -9 $p 2>/dev/null
+    fi
+    rm -f $1
+}
+# The radio program (setting radio_program): ours, gprcp (OpenThread's RCP on Qorvo's library: transmit security and
+# timing in software, scripts/gprcp-build.sh), or Amazon's ot-rcp ($RADIO_RCP).  Ours where it is there and asked for,
+# unless it failed this boot: three starts of zigbeed or otbr-agent on it that did not live 30 s, and Amazon's runs
+# until the next boot (radio_fb), said in RADIO_PROGRAM_FILE (root's folder; hassmic shows it)
+RADIO_PROGRAM_FILE=/data/local/hassmic/radio-program
+radio_program() {
+    local l v=ours
+    while IFS= read -r l || [ -n "$l" ]; do case $l in radio_program=amazon) v=amazon;; radio_program=*) v=ours;; esac; done 2>/dev/null < $(cfg)
+    [ $v = ours ] && [ -x $D/gprcp ] && [ -z "$radio_fb" ] && { echo gprcp; return; }
+    [ $v = ours ] && [ -n "$radio_fb" ] && { echo fallback; return; }
+    echo amazon
+}
+radio_fb=
+# CSL (setting thread_csl, experimental; PLAN.md "Thread 1.4" 2.1): devices that sleep on a schedule of their own need
+# their parent to send at their moments (timed transmit on the chip's clock) and to answer their 802.15.4-2015 frames
+# with Enh-Acks; the GP712 does both only with our module (hassmic_gptime: the clock to gprcp, the filter program
+# patched at every start of the driver), so the border router built with the CSL transmitter (otbr-agent-csl) runs only
+# where the module hooked all of it.  A load is marked on the flash first (RADIO_KMOD_TRY, as kmod() does): one the
+# kernel fell in is not tried again until the setting is switched off and on.  The module cannot be unloaded: with
+# CSL off (or Zigbee) its filter patch is switched off for the next start of the driver (its parameter enhack).
+# RADIO_CSL_FILE: "on" or "unavailable <why>" for hassmic (radio.c csl_now), written when it changes
+# csl_said starts as no state's word: the first look writes or removes the file (one a satellite before left)
+RADIO_CSL_FILE=/data/local/hassmic/radio-csl; RADIO_KMOD_TRY=/data/local/hassmic/radio-kmod-try; csl_said=-; csl_nomod=
+radio_csl() {       # $1 = the role (br, router, ...), $2 = the program; csl=csl where it runs with CSL (no subshell:
+                    # csl_said must outlive the call)
+    local m=$D/hassmic_gptime.ko p=/sys/module/hassmic_gptime/parameters/enhack why= st= out
+    case $1 in
+        br|router) if [ "$(radio_opt thread_csl)" != on ]; then rm -f $RADIO_KMOD_TRY; csl_nomod=; why=-; fi;;
+        *) why=-;;
+    esac
+    if [ "$why" = - ]; then
+        if [ -w $p ]; then echo 0 > $p; fi              # a module from before: no patch at the driver's next start
+    else
+        if [ "$2" != gprcp ]; then why="needs our radio program"
+        elif [ ! -x $D/otbr-agent-csl ] || [ ! -f $m ]; then why="not in this build"
+        elif [ -n "$csl_nomod" ]; then why=$csl_nomod       # a load that failed: not again until switched off and on
+        elif ! grep -q '^hassmic_gptime ' /proc/modules; then
+            if [ -e $RADIO_KMOD_TRY ]; then why="the module's last load never came back (switch it off and on to try again)"
+            elif { echo hassmic_gptime > $RADIO_KMOD_TRY && sync; }; then
+                out=$(insmod $m 2>&1) || { why="the module did not load: $out"; csl_nomod=$why; }
+                rm -f $RADIO_KMOD_TRY
+            else why="the module's mark could not be written"; fi
+        fi
+        if [ -z "$why" ]; then
+            if [ -w $p ]; then echo 1 > $p; fi
+            grep -q '^FILTER_HOOKED = 1' /proc/hassmic_gptime 2>/dev/null && grep -q '^HOOKED = 3' /proc/hassmic_gptime ||
+                why="the module could not hook the radio driver"
+            # a driver start whose filter program was not the one analysed (or a hook's place): left unpatched there
+            [ -n "$why" ] || grep -q '^FILTER_REFUSED = 0 ' /proc/hassmic_gptime ||
+                why="the radio chip's filter program is not the one this build knows"
+        fi
+        st=on; [ -z "$why" ] || st="unavailable $why"
+    fi
+    if [ "$st" != "$csl_said" ]; then
+        csl_said=$st
+        if [ -n "$st" ]; then
+            echo "$st" > $RADIO_CSL_FILE.new && mv -f $RADIO_CSL_FILE.new $RADIO_CSL_FILE
+            echo "radio: CSL $st" >&2
+        else rm -f $RADIO_CSL_FILE; fi
+    fi
+    csl=; [ "$st" != on ] || csl=csl
+}
+radio_opt() {       # $1 = a setting of state/config: on or off (unset: off)
+    local l v=off
+    while IFS= read -r l || [ -n "$l" ]; do case $l in "$1=on") v=on;; "$1="*) v=off;; esac; done 2>/dev/null < $(cfg)
+    echo $v
+}
+# The upstream DNS servers for the Thread devices' names (otbr-agent's resolver, otbr-build.sh): the Wi-Fi's, those on
+# the home network only (otbr-agent runs as the radio's user, whom the egress lock lets reach local addresses alone).
+# In root's own folder (a file in the radio user's, root writing it, could be a link to anywhere); written only when it
+# changes (flash); otbr-agent reads it again within minutes
+RADIO_RESOLV=/data/local/hassmic/thread-resolv.conf
+radio_dns() {
+    local p v out= cur
+    for p in net.dns1 net.dns2 dhcp.$WLAN.dns1 dhcp.$WLAN.dns2 dhcp.$WLAN.dns3 dhcp.$WLAN.dns4; do
+        v=$(getprop $p)
+        case $v in 10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|169.254.*|fd*|FD*|fe80:*|FE80:*) ;; *) continue;; esac
+        case " $out " in *" $v "*) continue;; esac
+        out="$out $v"
+    done
+    cur=$(while read -r l; do echo -n " ${l#nameserver }"; done 2>/dev/null < $RADIO_RESOLV)
+    [ "$cur" = "$out" ] && return 0
+    { for v in $out; do echo "nameserver $v"; done; } > $RADIO_RESOLV.new && chmod 0644 $RADIO_RESOLV.new && mv -f $RADIO_RESOLV.new $RADIO_RESOLV
+    echo "radio: DNS for Thread devices:${out:- none on the home network}"
+}
+# NAT64 (thread_nat64): IPv4 from OpenThread's translator (out of ot0, from OPENTHREAD_POSIX_CONFIG_NAT64_CIDR) goes
+# out as the Echo's own: IPv4 forwarding (FORWARD drops all but ot0's: stock's rules, lockdown.sh's keep) and one
+# MASQUERADE for that range on the Wi-Fi.  $1 = on | off
+RADIO_NAT64_CIDR=192.168.255.0/24
+radio_nat64() {
+    local r="-s $RADIO_NAT64_CIDR -o $WLAN -j MASQUERADE"
+    if [ "$1" = on ]; then
+        iptables -w -t nat -C POSTROUTING $r 2>/dev/null || iptables -w -t nat -A POSTROUTING $r
+        echo 1 > /proc/sys/net/ipv4/ip_forward
+    else
+        while iptables -w -t nat -C POSTROUTING $r 2>/dev/null; do iptables -w -t nat -D POSTROUTING $r; done
+        echo 0 > /proc/sys/net/ipv4/ip_forward
+    fi
+}
+# a border router's switches (ot-ctl to the daemon's socket, as root): $1 = command words, $2 = enable | disable
+radio_ctl() { $D/ot-ctl -I ot0 $1 $2 2>/dev/null | grep -q '^Done' ; }
+radio_sysctl() {    # $1 = 1 while a border router runs: forwarding and router advertisements as stock's rc set them
+    local v=/proc/sys/net/ipv6/conf
+    echo $1 > $v/all/forwarding; echo $1 > $v/$WLAN/forwarding
+    [ $1 = 1 ] || return 0
+    echo 2 > $v/$WLAN/accept_ra; echo 64 > $v/$WLAN/accept_ra_rt_info_max_plen 2>/dev/null
+}
+radio_watch() {
+    # pid files on tmpfs (/dev): a reboot takes them with the processes, so no pid of a boot before is ever killed
+    local want have=off run=/dev/hassmic-radio pb po pz tb=0 to=0 tz=0 now s zr nat=off a64= apd= w prog rcp fails=0
+    [ -n "$RADIO_RCP" ] || return 0
+    pb=$run/bridge.pid; po=$run/otbr.pid; pz=$run/zigbee.pid
+    mkdir -p $run; chmod 0700 $run
+    radio_end $pb rcpbridge; radio_end $po otbr-agent; radio_end $pz zigbeed  # left by a satellite before this one (killed with it, normally)
+    radio_nat64 off                                 # and its NAT64 (rule and IPv4 forwarding): told again where wanted
+    while :; do
+        for s in $RADIO_SERVICES; do [ "$(getprop init.svc.$s)" = running ] && { stop $s; echo "radio: stock's $s stopped"; }; done
+        # factory reset (ota_watch): whatever runs stops and the Thread network is forgotten, whatever was running
+        if [ -f $RADIO_FORGET ]; then
+            radio_end $po otbr-agent; radio_end $pz zigbeed; radio_end $pb rcpbridge; radio_sysctl 0
+            [ "$nat" = on ] && radio_nat64 off; nat=off; a64=; apd=
+            rm -rf $RADIO_DIR; rm -f $RADIO_FORGET $RADIO_RESOLV
+            [ "$have" = off ] || echo "radio: $have ends"
+            echo "radio: the Thread network forgotten (factory reset)"
+            have=off
+        fi
+        want=$(radio_want)
+        now=$(cut -d. -f1 /proc/uptime)
+        prog=$(radio_program); rcp=$RADIO_RCP; [ $prog = gprcp ] && rcp=$D/gprcp
+        radio_csl ${want%%:*} $prog                     # before the radio starts: the driver's start is patched
+        [ "$want" = off ] || want=$want:$prog         # another program: everything on the radio starts anew
+        [ -z "$csl" ] || want=$want:csl                 # CSL on or off: the same
+        if [ "$want" != "$have" ]; then
+            [ "$have" = off ] || echo "radio: $have ends"
+            radio_end $po otbr-agent; radio_end $pz zigbeed; radio_sysctl 0
+            [ "$nat" = on ] && radio_nat64 off; nat=off; a64=; apd=
+            radio_end $pb rcpbridge                         # a fresh radio for the next role (its RCP reset with it)
+            [ "$want" = off ] || echo "radio: $want starts"
+            have=$want; tb=0; to=0; tz=0; fails=0
+            [ "$want" = off ] || { echo "$prog" > $RADIO_PROGRAM_FILE.new && mv -f $RADIO_PROGRAM_FILE.new $RADIO_PROGRAM_FILE; }
+        fi
+        # ours failing: a client of the radio (zigbeed, otbr-agent) that ended within 30 s of its start, three times
+        if [ $prog = gprcp ] && [ "$have" != off ]; then
+            for s in "$pz:zigbeed:$tz" "$po:otbr-agent:$to"; do
+                w=${s##*:}; s=${s%:*}
+                [ "$w" -gt 0 ] && [ $((now - w)) -lt 30 ] && [ -f ${s%%:*} ] && ! radio_alive ${s%%:*} ${s#*:} && {
+                    fails=$((fails + 1)); rm -f ${s%%:*}; echo "radio: ${s#*:} ended on our radio program ($fails)"; }
+            done
+            if [ $fails -ge 3 ]; then
+                radio_fb=1; echo "radio: our radio program keeps failing: Amazon's ot-rcp until the next boot"
+                continue
+            fi
+        fi
+        if [ "$have" != off ]; then
+            if [ ! -d $RADIO_DIR ] || [ -L $RADIO_DIR ]; then rm -rf $RADIO_DIR; mkdir $RADIO_DIR; fi
+            chown $RADIO_USER:$RADIO_USER $RADIO_DIR; chmod 0750 $RADIO_DIR
+            if ! radio_alive $pb rcpbridge && [ $((now - tb)) -ge 10 ]; then
+                tb=$now
+                radio_spawn "" $pb $D/runas $RADIO_USER $RADIO_GROUPS $D/rcpbridge $RADIO_DIR/rcp.sock $rcp
+            fi
+        fi
+        case ${have%%:*} in zbc|zbr)
+            if ! radio_alive $pz zigbeed && [ $((now - tz)) -ge 10 ] && [ -S $RADIO_DIR/rcp.sock ]; then
+                tz=$now
+                zr=coordinator; [ ${have%%:*} = zbr ] && zr=router
+                [ -d $RADIO_DIR/zigbee-$zr ] && [ ! -L $RADIO_DIR/zigbee-$zr ] || { rm -rf $RADIO_DIR/zigbee-$zr; mkdir $RADIO_DIR/zigbee-$zr; }
+                chown $RADIO_USER:$RADIO_USER $RADIO_DIR/zigbee-$zr; chmod 0750 $RADIO_DIR/zigbee-$zr
+                radio_spawn "" $pz $D/runas $RADIO_USER $RADIO_GROUPS $D/zigbeed -r $zr -R $RADIO_DIR/rcp.sock \
+                    -d $RADIO_DIR/zigbee-$zr -C $RADIO_DIR/zb.ctl $([ $zr = coordinator ] && echo "-H $RADIO_DIR/zb.sock")
+            fi;;
+        esac
+        [ ${have%%:*} = br ] && radio_dns               # before otbr-agent's start: its resolver reads it then
+        case ${have%%:*} in br|router)
+            if ! radio_alive $po otbr-agent && [ $((now - to)) -ge 10 ] && [ -S $RADIO_DIR/rcp.sock ]; then
+                to=$now
+                [ ${have%%:*} = br ] && radio_sysctl 1
+                # skip-rcp-compatibility-check on Amazon's RCP only: it has no transmit security or timing, which a
+                # Thread 1.2+ host asks of every RCP (the host does the security itself and has CSL transmit off,
+                # otbr-build.sh); ours has both.  A border router: TREL (Thread over the Wi-Fi to other border
+                # routers) as a second radio link
+                ob=$D/otbr-agent; case $have in *:csl) ob=$D/otbr-agent-csl;; esac
+                radio_spawn otbr $po $D/runas -c NET_ADMIN,NET_RAW $RADIO_USER $RADIO_GROUPS $ob -I ot0 \
+                    $([ ${have%%:*} = br ] && echo "-B $WLAN") -s -d 5 --rest-listen-address $RADIO_DIR/rest.sock \
+                    "spinel+hdlc+unix://$RADIO_DIR/rcp.sock$([ $prog = gprcp ] || echo '?skip-rcp-compatibility-check')" \
+                    $([ ${have%%:*} = br ] && echo "trel://$WLAN")
+                a64=; apd=                                  # a new otbr-agent starts with its defaults: told again
+            fi;;
+        esac
+        # the border router's owner switches, told to each otbr-agent once it answers (it starts with NAT64 and
+        # prefix delegation on: until it is told, nothing of NAT64 leaves, the MASQUERADE and forwarding are ours)
+        if [ ${have%%:*} = br ]; then
+            w=$(radio_opt thread_nat64)
+            [ "$w" = "$nat" ] || { radio_nat64 $w; nat=$w; echo "radio: NAT64 $w"; }
+            if radio_alive $po otbr-agent; then
+                [ "$a64" = "$w" ] || { radio_ctl nat64 $([ $w = on ] && echo enable || echo disable) && a64=$w; }
+                w=$(radio_opt thread_pd)
+                [ "$apd" = "$w" ] || { radio_ctl "br pd" $([ $w = on ] && echo enable || echo disable) && { apd=$w; echo "radio: prefix delegation $w"; }; }
+            fi
+        fi
+        sleep 2
+    done
 }
 
 # A push update runs "firewall" again (exec, same PID) while the previous firewall watcher is still looping: stop it first,
@@ -1184,6 +1481,7 @@ satellite)
     export HASSMIC_RELEASE_PUB=$(release_pub)
     netwatch 2>&1 | stamped >> $LOG &
     kiosk_helper 2>&1 | stamped >> $LOG &
+    radio_watch 2>&1 | stamped >> $LOG &
     kiosk_perm_sync 2>&1 | stamped >> $LOG &
     rm -f /data/local/hassmic/adaptive-colour       # readback from a previous boot is no proof the service is up now
     backlight 2>&1 | stamped >> $LOG &

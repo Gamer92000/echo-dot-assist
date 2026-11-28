@@ -73,13 +73,14 @@ Notes for an implementation:
 
 ## The other models, from their firmware (2026-11-25)
 
-Read from each model's boot image (kernel, device tree) and system image; none of them run here yet.
+Read from each model's boot image (kernel, device tree) and system image (laser: its system image alone); none of them run here yet.
 
 | Model | Path | Why |
 |---|---|---|
 | Echo 2nd gen (radar) | ebc, as biscuit | MT8163 with the integrated Bluetooth behind WMT (`WMT_SOC.cfg`), the same `audio.primary.mt8163_headless.so`, `AudDrv_BTCVSD` in the kernel, `mediatek,audio_bt_cvsd` in the device tree, `/dev/ebc` media:media |
 | Echo Show 5 2nd gen (cronos), Echo Show 8 1st gen (crown) | pcm, as checkers | the same `audio.primary.mt8163.so`; the machine driver's links read out of each kernel (by the pointers to their stream names: the method gives checkers' `/proc/asound/pcm` exactly) are checkers', `VOIP_Call_BT_Playback` / `_Capture` at 10 / 11; MT7668 behind btmtksdio v0.0.1.00: the `0xfc72` setup is ours |
 | Echo Show 8 2nd gen (athena) | pcm, by the legacy front ends' names | MediaTek's MT8183 HAL with its BTSCO path; the kernel has `VOIP_Call_BT_Playback` / `_Capture` (mtk-soc-pcm-bt-dai.c, DAI BT) and the BTCVSD block of an integrated core this board does not have; MT7663 behind btmtksdio v0.0.1.13, which sets the chip's PCM side itself (as cannoli's).  Its link table is in a form the pointer search did not read (a relocatable kernel), so its numbers are not known: the device is found by name |
+| Echo 4th gen (laser) | pcm, as cannoli | cannoli's Fire OS build on an MT8512: the same MT7663 behind btmtksdio v0.0.1.13 (sets the chip's PCM side itself); vendor `mixer_paths.xml`'s `normal-playback bt-sco` / `normal-capture bt-sco` set `O00 I00`, `O01 I01` / `O02 I02`, `O03 I03`, the switches of cannoli's DAPM routes (cannoli's own `mixer_paths.xml` leaves both empty); card 0 has DL6 and UL5.  Its kernel (the FIT's `kernel-1`, a zImage) is packed in a form not read yet, so that its AFE feeds I00/I01 from DL6 and O02/O03 into UL5 is cannoli's MT8519 taken for it (2026-11-27) |
 | Echo Input (cupcake) | pcm, as donut | donut's SoC and chip, donut's `bt-sco` paths, its own kernel's `2ND EXT Codec` link (2ND I2S, `linux_bt_sco_codec`), the same links at 8 / 9.  Its device tree does not mux the 2nd I2S's pins (donut's does), but its bootloader does: LK's `mt_gpio_set_default` tables (decoded from both LKs: the routine's GOT, the mode block 0x10005300..0x10005490, five pins of 3 bits a halfword; donut's gives its device tree's values exactly) set GPIO55-57 to mode 4 and GPIO25 to 6 on both.  It plays the call on its jack or a Bluetooth speaker |
 
 The PCM devices are named on the boards and found in `/proc/asound/pcm` at run time, as MediaTek's HAL does

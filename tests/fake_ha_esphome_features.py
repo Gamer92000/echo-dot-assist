@@ -60,8 +60,11 @@ async def main(e):
     # wobbling one is, and it clears after the hold (3 s in the PC build, 30 s on the Echo)
     check("wifi_motion" not in cby and "wifi_motion_detection" not in cby and pv("wifi_motion") == 0 and pv("wifi_motion_sensitivity") == 5,
           "Wi-Fi motion off by default (sensitivity 5): no entity in Home Assistant")
+    note = os.path.join(e.state, "wifi-motion-on")     # root's word to try the module again after a crash (main.sh kmod)
+    check(not os.path.exists(note), "no note of a person's switch before one (a start never writes it)")
     page.set(wifi_motion="on")
     c, cby, st3 = await relist(c)
+    check(os.path.isfile(note), "switched on by a person: state/wifi-motion-on written for root")
     wbs, wsn = cby.get("wifi_motion"), cby.get("wifi_motion_sensitivity")
     check(isinstance(wbs, BinarySensorInfo) and wbs.device_class == "motion" and "experimental" in wbs.name
           and isinstance(wsn, NumberInfo) and (wsn.min_value, wsn.max_value) == (1, 10) and int(wsn.entity_category) == 1,

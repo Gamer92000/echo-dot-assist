@@ -25,7 +25,7 @@ _bundle_free() {
     for _p; do
         case $_p in
         scripts/device/*|scripts/system/*|scripts/bundle.sh|scripts/content-id.sh|scripts/otatool.py|\
-        scripts/lib/device.sh|scripts/kernel-tools.sh) return 1;;
+        scripts/lib/device.sh|scripts/kernel-tools.sh|scripts/notice.py|wakealign/*) return 1;;
         *.md|docs/*|tests/*|testdata/*|blueprints/*|.github/*|scripts/*|devices/*/setup.sh|devices/*/probe.md5|\
         LICENSE|.gitignore|.gitattributes|pyproject.toml|uv.lock) ;;
         *) return 1;;
@@ -114,7 +114,7 @@ prebuilt_fetch() {
     prebuilt_clear
     _names=
     for _f in $_d/files/*; do
-        case ${_f##*/} in VERSION|device.conf|release.pub|hassmic.rc|*.sh) continue;; esac
+        case ${_f##*/} in VERSION|device.conf|release.pub|hassmic.rc|NOTICE|*.sh) continue;; esac
         cp -p $_f $OUT/ && _names="$_names ${_f##*/}"
     done
     { echo "$1 $(_head) $(cat $_d/files/VERSION)"; printf '%s\n' $_names; } > $OUT/PREBUILT

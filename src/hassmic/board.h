@@ -59,6 +59,12 @@ struct board {
      * gives the daemon that one file, device.conf LED_FRAME).  Only on models measured (scripts/led-probe.sh): its text
      * 12 x RRGGBB, ledcontroller writing it only on a change.  NULL: no live ring */
     const char *ring_frame;
+    /* Where the driver has no frame file but a file per LED (the Echo 4's LP5036, LED class devices): ring_led_color is
+     * each LED's "R G B" file as a pattern with %d (LED 0 first, the animations' order), ring_led_power the files that
+     * switch the chips' supply, "1" while any LED is lit and "0" at dark (ledhven), as the HAL writes them.  Root gives
+     * hassmic those files (device.conf LED_FRAME lists them).  NULL: none */
+    const char *ring_led_color;
+    const char *const *ring_led_power;
     /* The speaker's volume curve: dB under volume 100 at volumes 0..100, each `at` above the last (tests/unit/volcurve_test.c
      * checks it: the same one twice divides by 0), {-1} after the last (volcurve.c: separate volumes turn each kind down
      * by it, even volume steps put the mixer on its points).  Required, never NULL: every model has its own, measured on
@@ -75,7 +81,7 @@ struct board {
      * (call.c), always: no setting (2026-11-26, the maintainer: no reason ever to send the assistant's instead).
      * 0: none, the assistant's micAsr.  Measured: donut (a talker, 2026-11-13), biscuit (a talker and the echo,
      * 2026-11-17), cannoli (a user's phone calls, 2026-11-26); PLAN.md "Calls with Amazon's call microphone"; the
-     * Android models' as stock's (audio_android.c), radar's from the firmware */
+     * Android models' as stock's (audio_android.c), radar's and laser's from the firmware */
     int call_mic;
     /* call.c's echo estimate on that path held this many dB under what plays (after a call's first 2 s): micHfp's AGC
      * puts speech at the playback's level, and an uncapped estimate ducked every quick reply.  Measured: the echo left
@@ -116,6 +122,11 @@ struct board {
     /* other amplifiers the same model is built with (the Echo Show 5 2nd gen: three, by board revision), each with its
      * own control: tried in order where speaker_gain is not on the card.  Fields as above; {NULL}-terminated, or NULL */
     const struct board_gain { const char *name; int stock, steps, db, min_db, limit; } *speaker_gain_alt;
+
+    /* the 802.15.4 radio (radio.c, docs/re-thread.md): the firmware's RCP program, OpenThread's RCP speaking Spinel in
+     * HDLC-lite on its standard input and output (the Echo 4: /system/bin/ot-rcp on Qorvo's GP712), which root runs for
+     * our border router or a remote host (main.sh radio_watch, device.conf RADIO_RCP: the same path).  NULL: none */
+    const char *radio_rcp;
 };
 
 enum { SCO_NONE, SCO_PCM, SCO_EBC, SCO_HCI };     /* board.sco; SCO_HCI: over HCI as the standard has it (the PC's tests) */
@@ -123,6 +134,7 @@ enum { SCO_NONE, SCO_PCM, SCO_EBC, SCO_HCI };     /* board.sco; SCO_HCI: over HC
 extern const struct board board;
 /* volcurve.c: the Echo Dot 2's curve, measured there; the stand-in for a model whose own is not measured yet */
 extern const struct board_vol board_vol_dot2[];
+extern const struct board_vol board_vol_laser[];
 /* volcurve.c: board.volume_curve at volume v (clamped to 0..100): dB under volume 100 */
 float board_vol_db(int v);
 int   board_vol_at(float db);           /* the lowest of the curve's points at least that loud (volcurve.c) */

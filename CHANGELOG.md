@@ -2,6 +2,59 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-27 — Echo 4: Thread and Zigbee for Home Assistant
+
+- **The Echo 4 (4th gen, 2020) as a voice satellite, installed by hand** (like the Echo Dot 5, it works by hand;
+  phone calls and the rollback are not done yet). [Its page](devices/laser/README.md) has the steps,
+  with a diagram of the three test pads the USB wires go on, and `scripts/port-bundle.sh` builds and signs the bundle
+  the OS builder bakes in (taking GitHub's build where there is no Android NDK, and making the update key when there
+  is none).
+- **The Echo 4's Thread and Zigbee radio is Home Assistant's now.** Amazon's Thread border router, its Thread service
+  and its Zigbee hub are stopped. The settings page's new **Thread & Zigbee** page picks what the radio is for:
+  - **Thread, border router**: a Thread border router of its own on the Echo (OpenThread's). Add it in Home
+    Assistant as an **OpenThread Border Router** with the address the page shows; Matter devices on Thread then
+    commission through it. The page can start a new Thread network, join one (paste its dataset from Home
+    Assistant's Thread settings) or leave it.
+  - **Thread, router**: one more router for a Thread network another border router runs.
+  - **Zigbee, coordinator**: a Zigbee network of the Echo's own, for **ZHA** (which finds it by itself) or
+    **Zigbee2MQTT**: a Zigbee stack written for the Echo, which they use as they use a ConBee.
+  - **Zigbee, router**: the Echo joins your existing Zigbee network (one you pick from those it heard, or the first
+    that lets it) and extends it, also for battery-less **Green Power** switches (Friends of Hue, Hue Tap) in its
+    range.
+  - **Zigbee, remote radio**: the radio for Zigbee2MQTT's experimental zoh adapter: `tcp://<echo>:28934`.
+  - **Thread, remote radio**: the radio for a border router of your own elsewhere.
+- Only Home Assistant's own address (and one more you name on the page) may connect to the border router's API and
+  the radio.
+- The coordinator's page can give the Zigbee network a new key; ZHA's backup restores onto the Echo.
+- Thread's border router now has Thread 1.4's features: Thread over Wi-Fi to other border routers (TREL), multicast
+  across your network for Matter groups, **Share the network…** (a code for a phone's Thread app, 2 minutes), and,
+  off until you switch them on, IPv4 for Thread devices (NAT64) and your router's IPv6 prefix for the network.
+  Phone apps can now reach the Echo's border agent at all (its port was one the Echo's firewall drops).
+- The Echo 4's radio now runs a radio program of our own (OpenThread's, on Qorvo's library for the chip) instead of
+  Amazon's: it has the transmit security and timing newer Thread asks of a radio, so our border router no longer
+  works around their absence. **Radio program** on the Thread & Zigbee page switches back to Amazon's; the Echo does
+  that by itself, until the next restart, where ours keeps failing.  Its energy scan, which picks the quietest
+  channel for a new network, now reports the levels the chip measured; Amazon's program reports nonsense there.
+- **Sleepy devices on a schedule (CSL)** (experimental, off): Thread devices that sleep and wake at moments of their own
+  can use the Echo 4 as their parent. The radio chip cannot do it as Amazon set it up; with the switch on the Echo
+  loads a kernel module of its own that gives the chip the timing and the acknowledgements those devices need
+  (measured against a second radio), and its border router sends at their moments. Tried with a real sleepy device (a
+  Seeed XIAO nRF52840 on Nordic's OpenThread, a 500 ms schedule): it stays in step with the Echo and every message to it
+  arrives. The chip also lets the device's acknowledgements, which are longer than the ones it was built for, arrive
+  in time now.
+- The Zigbee stack is new and has not yet had other manufacturers' devices join it. Home Assistant's OpenThread Border
+  Router add-on refuses the radio with Amazon's program; with ours it has not been tried yet. Details in the
+  [guide](docs/GUIDE.md#thread-and-zigbee-echo-4).
+- **Every update and install now brings a `NOTICE` file** beside hassmic, on every model: the code of others in the
+  Echo's programs (and on the Echo 4 in its radio programs) with the notices and licences that have to go with it.
+
+## 2026-11-27 — Wi-Fi motion: no boot loop from its module
+
+- **Should loading Wi-Fi motion's kernel module ever bring an Echo down, it is not loaded again at every start
+  after.** The Echo writes down that it is loading the module and crosses it out once the load came back; a start that
+  finds it not crossed out leaves the module out, says so in the log, and tries again only once you switch Wi-Fi
+  motion off and on. Nothing changes where the module loads as it always did.
+
 ## 2026-11-26 — Calls: Amazon's call processing on every Echo, quick replies, the phone before a TV box
 
 - **A phone gets the calls when a TV box connected first** (issue #233). An Android TV box paired for music also

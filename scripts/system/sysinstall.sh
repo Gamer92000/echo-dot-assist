@@ -72,16 +72,17 @@ fi
 # (athena: /vendor/etc/selinux/precompiled_sepolicy, a partition of its own).  The installed device.conf serves where SRC
 # has none (uninstall); tested before it is sourced: a missing file ends the subshell with ".", the fallback never ran.
 conf_get() { c=$SRC/device.conf; [ -f "$c" ] || c=$H/device.conf; [ -f "$c" ] && (. "$c"; eval "echo \"\${$1}\""); }
-# Cannoli's root is immutable SquashFS; only /system has a writable overlay.
-# Its init imports /init.hassmic.rc before that overlay exists. A factory update
+# Cannoli's root is immutable SquashFS and laser's is the ext4 image as flashed; only /system has a writable overlay.
+# Their init imports /init.hassmic.rc before that overlay exists. A factory update
 # must retain this boot contract, not install a second rc in the auto-scan path.
 KEEP_INIT=
-if [ "$(conf_get INSTALL)" = cannoli-ubi ]; then
-    case "$MODE" in factory|leds) ;; *) say "Cannoli firmware changes require the TWRP ZIP"; exit 1;; esac
+case "$(conf_get INSTALL)" in cannoli-ubi|laser-emmc)
+    reflash() { say "$1 (devices/$(conf_get PRODUCT)/README.md)"; }
+    case "$MODE" in factory|leds) ;; *) reflash "Firmware changes on this model need a new firmware image"; exit 1;; esac
     [ "$MODE" = leds ] || cmp -s "$SRC/hassmic.rc" /init.hassmic.rc ||
-        { say "Cannoli boot integration changed; install a matching TWRP ZIP first"; exit 1; }
+        { reflash "The boot integration changed: flash a matching firmware image first"; exit 1; }
     KEEP_INIT=1
-fi
+esac
 POLICY=$(conf_get SEPOLICY_FILE); POLICY=${POLICY:-/sepolicy}
 PVOL=; case "$POLICY" in /vendor/*) PVOL=/vendor;; esac       # the partition the policy is on, when it is not /system's
 # that partition writable only when the policy is written: a factory copy (every promoted update) or leds never touch it
@@ -126,7 +127,11 @@ if [ "$MODE" = leds ]; then
     # writes the whole set again (with the old one it would take the set for installed)
     rm -f /system/etc/hassmic-leds.digest; sync
     new_files=$(ours_in "$L")
-    [ -n "$new_files" ] && cp $new_files $LR/ && (cd $LR && for f in $new_files; do chmod 644 "${f##*/}" && chcon $SYSLABEL "${f##*/}" || exit 1; done) ||
+    # mode and label in batches too (toybox's xargs, every model's): one chmod and one chcon a file were two processes
+    # each, ~8400 for the Echo 4's 4221 files through its overlay, 228 s of a first boot (2026-11-26).  The names are
+    # ours (hassmic_*), no blanks; xargs fails when any of its commands did
+    names() { for f in $new_files; do echo "${f##*/}"; done; }
+    [ -n "$new_files" ] && cp $new_files $LR/ && (cd $LR && names | xargs chmod 644 && names | xargs chcon $SYSLABEL) ||
         { say "cannot write the animations"; exit 1; }
     new $LR/layer_config_common.json "$L/layer_config_common.json" 644 0:0 $SYSLABEL
     for f in $ACSIDX; do [ -z "$ACS" ] || new $LR/$f "$L/$f" 644 0:0 $SYSLABEL; done
@@ -224,7 +229,7 @@ for f in "$SRC"/*; do
     hassmic.rc|sepolicy) continue;;
     update.pub) [ "$MODE" = install ] || continue; m=644;;
     *.wa|*.was) [ $wa_fit = 1 ] || continue; m=644;;
-    device.conf|VERSION|*.ko|release.pub|*.dex|*.apk|*.so) m=644;;
+    device.conf|VERSION|NOTICE|*.ko|release.pub|*.dex|*.apk|*.so) m=644;;
     *) m=755;;
     esac
     new $H/$n "$f" $m 0:2000 $SYSLABEL

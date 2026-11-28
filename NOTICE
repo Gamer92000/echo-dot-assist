@@ -1,0 +1,473 @@
+Notices
+=======
+
+What the programs and files this repository builds for the Echos contain of
+others' work, and the notices their licences ask to go with them.
+
+Every update bundle carries this file as NOTICE beside the programs, and so
+does every install from the PC (scripts/bundle.sh, deploy.sh,
+install-system.sh, install-boot.sh): with the opening, the part "Every model"
+and the parts that name the model, and each "Full text:" line replaced by the
+whole of that file of the repository (scripts/notice.py).
+
+This project's own code is under the MIT licence (LICENSE in the repository).
+Its source, and everything needed to build each model's programs from it
+(make DEVICE=<codename> STUBS=1, with no files of Amazon's), is at
+https://github.com/Gamer92000/echo-dot-assist, the release of the bundle's
+version (VERSION beside this file) under the tag v<version>.
+
+Nothing of Amazon's is in the bundles: firmware, libraries and wake word models
+come from the Echo itself and stay Amazon's.
+
+
+Every model
+===========
+
+hassmic
+-------
+
+Links, statically, besides this project's own code:
+
+- Mbed TLS 3.6 (src/third_party/mbedtls): Copyright The Mbed TLS Contributors.
+  Apache-2.0 OR GPL-2.0-or-later; used under Apache-2.0. Its licence file, with
+  both texts, is under "Mbed TLS" below.
+- RNNoise (src/third_party/rnnoise): BSD-3-Clause, its notice under "RNNoise"
+  below.
+- Monocypher (src/third_party/monocypher.c): BSD-2-Clause OR CC0-1.0, its
+  notice under "Monocypher" below.
+- libfreeaptx 0.2.2 (src/third_party/freeaptx.c), the aptX codecs:
+  Copyright (C) 2017 Aurelien Jacobs, Copyright (C) 2018-2020 Pali Rohár,
+  Copyright (C) 2025 Hunter Wardlaw. LGPL-2.1-or-later, its text under
+  "GNU Lesser General Public License" below. Its source, the rest of hassmic's
+  and the build that relinks hassmic with a changed libfreeaptx are in the
+  repository named above, at the release's tag.
+- dr_flac (src/third_party/dr_flac.h): public domain or MIT-0, and minimp3
+  (src/third_party/minimp3.h): CC0-1.0. Neither asks for a notice.
+
+And as data: the borders of the countries (geo/borders.bin), made from
+Natural Earth's (public domain) by tools/geo/build.py.
+
+otatool
+-------
+
+Links Monocypher (above).
+
+The wake word aligners (*.wa, *.was)
+------------------------------------
+
+Derived from the Montreal Forced Aligner's pretrained models, CC BY 4.0; who
+made them, which were used and what was changed is under "The wake word
+aligners' licence" below.
+
+The kernel modules (*.ko)
+-------------------------
+
+This project's code (src/kmod/), built against each model's Linux kernel and
+declared GPL to it: they are distributed under the GNU General Public License,
+version 2, whose text follows Apache's under "Mbed TLS" below. Their source is
+src/kmod/ of the repository named above, at the release's tag.
+
+Mbed TLS
+--------
+
+Full text: src/third_party/mbedtls/LICENSE
+
+RNNoise
+-------
+
+Full text: src/third_party/rnnoise/COPYING
+
+Monocypher
+----------
+
+Copyright (c) 2017-2019, Loup Vaillant
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the
+   distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+Written in 2017-2019 by Loup Vaillant: dedicated to the public domain under
+CC0-1.0 (https://creativecommons.org/publicdomain/zero/1.0/) as well.
+
+GNU Lesser General Public License
+---------------------------------
+
+Full text: src/third_party/COPYING.LGPL-2.1
+
+The wake word aligners' licence
+-------------------------------
+
+Full text: wakealign/README.md
+
+
+The Echo 4 (laser)
+==================
+
+The Echo 4's bundles also carry the programs of its Thread and Zigbee radio:
+gprcp (scripts/gprcp-build.sh), otbr-agent, otbr-agent-csl and ot-ctl
+(scripts/otbr-build.sh), and this project's own rcpbridge and zigbeed. zigbeed
+links Mbed TLS (above).
+
+gprcp
+-----
+
+OpenThread's RCP on ot-qorvo's GP712 platform. src/gprcp/ is that platform:
+its files keep their OpenThread headers (BSD-3-Clause, below); timed.c and
+glibc_shim.c are this project's, and so are the edits to radio.c, system.c,
+openthread-core-gp712-config.h and CMakeLists.txt.
+
+It links Qorvo's libQorvoGP712_ftd.a statically (Qorvo/qpg-openthread,
+commit 2762d55db1d218be57f251a8c8eafbb1938c36a7, gp712/lib), which is fetched
+at build time and is not in this repository. It is licensed under Qorvo's
+EULA (Qorvo_EULA.txt in that repository at that commit), which allows its use
+only in combination with Qorvo silicon (the Echo 4's GP712 is) and requires
+this notice:
+
+    Copyright (c) 2017-2021, Qorvo Inc.
+
+gprcp carries that line in itself too: `gprcp --notice` prints it on stderr.
+
+gprcp also contains:
+
+- OpenThread and ot-qorvo: BSD-3-Clause, under "OpenThread" below.
+- Mbed TLS: Apache-2.0 (above).
+- musl, the C library, and Zig's compiler_rt, linked statically by Zig: MIT,
+  under "musl" and "Zig" below.
+
+otbr-agent, otbr-agent-csl, ot-ctl
+----------------------------------
+
+ot-br-posix (https://github.com/openthread/ot-br-posix) with the options and
+patches of scripts/otbr-build.sh. They contain:
+
+- ot-br-posix and OpenThread: BSD-3-Clause, under "OpenThread" below.
+- tcplp, OpenThread's TCP, much of it FreeBSD's: under "tcplp" below.
+- Mbed TLS: Apache-2.0 (above).
+- cJSON and cpp-httplib: MIT, under "cJSON" and "cpp-httplib" below.
+- libc++ and libc++abi of the Android NDK r21e, linked statically: under
+  "libc++" below.
+
+OpenThread
+----------
+
+Copyright (c) 2016, The OpenThread Authors.
+All rights reserved.
+
+(The files of ot-br-posix, OpenThread and ot-qorvo carry this notice with the
+year each was written.)
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. Neither the name of the copyright holder nor the
+   names of its contributors may be used to endorse or promote products
+   derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+tcplp
+-----
+
+OpenThread's third_party/tcplp. Its files carry four forms of notice.
+
+(1) The terms of OpenThread's notice above, for:
+
+Copyright (c) 2018, Sam Kumar <samkumar@cs.berkeley.edu>
+Copyright (c) 2018, University of California, Berkeley
+All rights reserved.
+
+(2) For:
+
+Copyright (c) 1982, 1986, 1988, 1990, 1993, 1994, 1995
+Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
+Copyright (c) 1982, 1986, 1988, 1993
+Copyright (c) 1982, 1986, 1991, 1993, 1994
+Copyright (c) 1982, 1986, 1993
+Copyright (c) 1982, 1986, 1993, 1994, 1995
+Copyright (c) 1982, 1986, 1993, 1995
+Copyright (c) 1991, 1993
+	The Regents of the University of California.  All rights reserved.
+(c) UNIX System Laboratories, Inc.
+All or some portions of this file are derived from material licensed
+to the University of California by American Telephone and Telegraph
+Co. or Unix System Laboratories, Inc. and are reproduced herein with
+the permission of UNIX System Laboratories, Inc.
+Copyright (c) 2007-2008,2010
+	Swinburne University of Technology, Melbourne, Australia.
+Copyright (c) 2009-2010 Lawrence Stewart <lstewart@freebsd.org>
+Copyright (c) 2010 The FreeBSD Foundation
+Copyright (c) 2006-2007 Robert N. M. Watson
+Copyright (c) 2010-2011 Juniper Networks, Inc.
+All rights reserved.
+
+Portions of this software were developed at the Centre for Advanced Internet
+Architectures, Swinburne University of Technology, by Lawrence Stewart,
+James Healy and David Hayes, made possible in part by a grant from the Cisco
+University Research Program Fund at Community Foundation Silicon Valley.
+
+Portions of this software were developed at the Centre for Advanced
+Internet Architectures, Swinburne University of Technology, Melbourne,
+Australia by David Hayes under sponsorship from the FreeBSD Foundation.
+
+Portions of this software were developed by Robert N. M. Watson under
+contract to Juniper Networks, Inc.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+4. Neither the name of the University nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+(3) For:
+
+Copyright (c) 1982, 1986, 1988, 1990, 1993, 1994, 1995
+	The Regents of the University of California.
+Copyright (c) 2007-2008
+Copyright (c) 2007-2008,2010
+	Swinburne University of Technology, Melbourne, Australia.
+Copyright (c) 2009-2010 Lawrence Stewart <lstewart@freebsd.org>
+Copyright (c) 2010 The FreeBSD Foundation
+Copyright (c) 2015-2017 Patrick Kelsey
+All rights reserved.
+
+This software was developed at the Centre for Advanced Internet
+Architectures, Swinburne University of Technology, by Lawrence Stewart, James
+Healy and David Hayes, made possible in part by a grant from the Cisco
+University Research Program Fund at Community Foundation Silicon Valley.
+
+This software was developed by Lawrence Stewart while studying at the Centre
+for Advanced Internet Architectures, Swinburne University of Technology, made
+possible in part by a grant from the Cisco University Research Program Fund
+at Community Foundation Silicon Valley.
+
+Portions of this software were developed at the Centre for Advanced
+Internet Architectures, Swinburne University of Technology, Melbourne,
+Australia by David Hayes under sponsorship from the FreeBSD Foundation.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+(4) For:
+
+Copyright (C) 1995, 1996, 1997, and 1998 WIDE Project.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+3. Neither the name of the project nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.
+
+cJSON
+-----
+
+Copyright (c) 2009-2017 Dave Gamble and cJSON contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+cpp-httplib
+-----------
+
+Copyright (c) 2017 yhirose
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+libc++
+------
+
+The LLVM Project's libc++ and libc++abi, as the Android NDK r21e ships them:
+Apache-2.0 with LLVM Exceptions (the Apache text under "Mbed TLS" above; the
+exception: "if, as a result of your compiling your source code, portions of
+this Software are embedded into an Object form of such source code, you may
+redistribute such embedded portions in such Object form without complying with
+the conditions of Sections 4(a), 4(b) and 4(d) of the License"), and their
+code from before that licence under the Legacy LLVM License, the University
+of Illinois/NCSA licence or, as taken here, MIT:
+
+Copyright (c) 2009-2014 by the contributors listed in CREDITS.TXT
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+musl
+----
+
+Copyright © 2005-2020 Rich Felker, et al.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Zig
+---
+
+Copyright (c) Zig contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
