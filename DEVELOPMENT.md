@@ -206,7 +206,10 @@ kernel is Android's common kernel: its `struct module` has `init` 36 bytes furth
 `tools/kmod-init.py` puts right after the build (device.mk `KMOD_INIT`), and it exports no `kallsyms_lookup_name`
 (`HM_DRIVER_SYMS` in `hassmic_rcpi4m.c`).
 
-Trial runs on the device: `scripts/deploy.sh`, then `adb shell sh /data/local/hassmic/run.sh`.
+Trial runs on the device: `scripts/deploy.sh`, then `adb shell sh /data/local/hassmic/run.sh`.  On an installed Echo
+the satellite then runs `/data/local/hassmic/hassmic` in place of the installed copy, until the next update's install
+removes it (or a start finds it older than the copy installed: `main.sh` "trial", issue #251); `adb shell rm
+/data/local/hassmic/hassmic` goes back by hand.
 
 **The release build instead** (`scripts/lib/build.sh`): the scripts that need the Echo's binaries (`deploy.sh`,
 `install-system.sh`, `ota-push.sh`, the guided setup) take the bundle CI published of the checked-out commit when

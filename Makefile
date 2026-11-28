@@ -494,7 +494,7 @@ host: $(HOST_TESTS) $(OUT)/hassmic-qemu
 UNIT := $(MBEDTLS_INC) src/hassmic/hash.c src/hassmic/ws.c src/hassmic/tls.c src/hassmic/net.c src/hassmic/logread.c src/hassmic/noise.c src/third_party/monocypher.c build/libmbedtls-host.a
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
 UNIT_TESTS := hash http ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs cvsd msbc scoaudio \
-	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff \
+	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff trial \
 	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall netio \
 	zb_crypto notice
 unit: $(addprefix unit-,$(UNIT_TESTS))
@@ -681,6 +681,9 @@ unit-backlight:
 	.venv/bin/python tests/unit/backlight_test.py
 unit-alexaoff:
 	.venv/bin/python tests/unit/alexaoff_test.py
+# main.sh's test binary in /data: only until something newer is installed (issue #251)
+unit-trial:
+	python3 tests/unit/trial_test.py
 unit-web_soundpack:
 	if command -v node >/dev/null; then .venv/bin/python tests/unit/web_soundpack_test.py; else echo "web sound pack: node missing, skipped"; fi
 

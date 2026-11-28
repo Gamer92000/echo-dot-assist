@@ -308,6 +308,8 @@ stops and names the sysctl, which the setup's `qemu_arm` asks to set).
   on the push port with `secrets/update.key`; no HA needed), or kept open by `ADB_WIFI=1` in `hassmic.conf`. Then
   `adb connect <echo-ip>:5555`. USB always works.
 - `scripts/deploy.sh`: build + push to `/data/local/hassmic` for trial runs (`adb shell sh /data/local/hassmic/run.sh`).
+  Its `hassmic` there runs in place of the installed copy (main.sh "trial") until an update's install removes it, or a
+  start finds it older than the copy that would run (its change time against that copy's VERSION; issue #251).
 - `DEVICE=laser scripts/port-bundle.sh`: the signed `build/<codename>/hassmic.bundle` an OS builder's `--port` bakes in
   (laser-os-builder), binaries as `ota-push.sh` takes them (`build_binaries`), the update key pair made when missing.
 - `scripts/ota-push.sh [--plugin <file.hmp>]... [host]`: build, sign with `secrets/update.key`, push bundle to TCP 28929 on an installed Echo

@@ -14,3 +14,6 @@ adb push wakealign/*.wa wakealign/*.was $D/ >/dev/null
 [ -f $OUT/libhmui.so ] && adb push $OUT/libhmui.so scripts/device/screen.dex $D/ >/dev/null
 adb shell "chmod 755 $D/*; chmod 644 $D/NOTICE"
 echo "pushed $DEVICE build to $D"
+# main.sh runs $D/hassmic in place of an installed copy until an update or install-system.sh replaces it (issue #251)
+adb shell "[ -f /system/hassmic/boot.sh ]" 2>/dev/null &&
+    echo "this Echo is installed: $D/hassmic now runs in place of the installed hassmic, until the next update or install (or: adb shell rm $D/hassmic)"

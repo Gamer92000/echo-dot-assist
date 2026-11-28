@@ -3075,6 +3075,19 @@ Run in this order. Each step says what it proves.
       the blueprint with real Echos (it ran in a real HA against PC Echos, above), and whether 2 s is enough over a
       busy Wi-Fi for "calling" to reach HA (the blueprint then tries the second action name only where it differs:
       never on an Echo with its own name).
+- [x] Updates that installed and never ran (issues #251, #258, 2026-11-28; an Echo Dot 2): hassmic 2026.11.18.004106
+      (d712099) ran under main.sh of the update 2026.11.26.214508, `== factory copy: the self test that passed was
+      another build's than the installed update`, and an online update to the same beta again installed ("OK") and
+      came back as 2026.11.18.  Cause: a test binary in `/data/local/hassmic/hassmic` (scripts/deploy.sh; the guided
+      setup's network step, whose install step removes it: a setup left after that step, or deploy.sh run on an
+      installed Echo), which main.sh runs in place of any installed copy, for good.  Now (main.sh "trial") an update's
+      install removes it (ota_watch, `trial_drop`), and every start of either service removes it where its change time
+      is older than the VERSION of the copy that would run (adb push sets the modification time from the PC, never
+      the change time; no stat or no VERSION: kept as before); the factory copy's messages name it while it runs;
+      deploy.sh says it on an installed Echo.  An Echo in that state heals at the first update that brings this: the
+      old main.sh installs it, the new one's starts drop the binary.  `make unit-trial` (a stand-in stat); the block
+      under the Dot 2's own mksh and toybox (removed when older, kept when newer, removed by an install).
+
 - [~] Servers that stop listening (issue #241, 2026-11-26; an Echo Dot 2 on 2026.11.18): the satellite went
       unavailable ~7 times a day at the same wall-clock times (05:15, 14:21, 14:30 local: something on the network or
       Fire OS's side, not uptime), Home Assistant's reconnect refused (`[Errno 111]`) in the same millisecond, and

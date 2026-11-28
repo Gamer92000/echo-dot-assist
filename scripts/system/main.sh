@@ -821,7 +821,7 @@ factory() {
     running=
     for p in $(pidof hassmic); do [ "$(readlink /proc/$p/exe)" = "$cur/hassmic" ] && running=1; done
     if [ -z "$cur" ] || [ "$have" != "$want" ]; then echo "FAILED $want is not the installed update (that is ${have:-none}); nothing written"
-    elif [ -z "$running" ]; then echo "FAILED $want is installed but not what runs now (fell back to the factory copy?); nothing written"
+    elif [ -z "$running" ]; then echo "FAILED $want is installed but not what runs now ($([ -x $TRIAL ] && echo "the test binary $TRIAL runs" || echo "fell back to the factory copy?")); nothing written"
     elif cmp -s $cur/VERSION $SYS/VERSION; then echo "OK $want is the factory copy already"
     elif out=$(sh $cur/sysinstall.sh factory $cur 2>&1); then echo "$out" | stamped >&2; echo "OK $want is now the factory copy"
     else echo "$out" | stamped >&2; echo "FAILED $(echo "$out" | tail -1)"
@@ -848,7 +848,7 @@ healthy() {
     [ -n "$cur" ] && [ -f $cur/VERSION ] && ! cmp -s $cur/VERSION $SYS/VERSION || return 0
     cv=$(dd if=$cur/VERSION bs=128 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9.+-')
     if [ -n "$hv" ] && [ "$hv" = "$cv" ]; then say "== factory copy: $(factory "$(cat $cur/VERSION)")"       # its stderr: the log
-    else say "== factory copy: the self test that passed was another build's than the installed update ${cv:-?}; nothing written"
+    else say "== factory copy: the self test that passed was another build's than the installed update ${cv:-?}; nothing written$([ -x $TRIAL ] && echo " (the test binary $TRIAL runs in its place)")"
     fi
 }
 # The request's nonce (ota.c stage: "1 <32 hex digits>"), printed for the answer's second line, "nonce <hex>":
@@ -1008,6 +1008,7 @@ ota_watch() {
             echo 0 > $OTA/tries
             for d in $OTA/v*; do [ "$d" = "$new" ] || [ "$d" = "$old" ] || rm -rf "$d"; done        # keep the previous one
             say "== update $ver installed (signed with ${key##*/}), restarting"
+            trial_drop "the update $ver installed after it runs in its place"        # else it would (issue #251)
             echo "OK $ver" > $RES
         fi
         rm -rf $INB
@@ -1032,8 +1033,34 @@ ota_watch() {
 # what came of it: ok (installed, ledcontroller restarted), same (nothing to do) or failed (LEDWHY: why).
 # Each LED's own layer (the fill, issue #57) takes 9.7 MB of the partition: without room for it, the set without them
 # (HASSMIC_RING_LEDS=0), which counts as installed from then on; Home Assistant then has the light but no fill.
-# A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP.
-BIN=$D/hassmic; [ -x /data/local/hassmic/hassmic ] && BIN=/data/local/hassmic/hassmic
+# >>> trial
+# A binary in /data wins over the installed one: lets a new build be tried without a trip through TWRP
+# (scripts/deploy.sh; the guided setup's network step too, whose install step removes it again).  Only until something
+# newer is installed: one left behind ran on for good (issue #251, an Echo Dot 2: hassmic of 2026-11-18 under the
+# update of 2026-11-26, every later update installed and never run, its self test "another build's", never promoted).
+# So an update's install removes it (ota_watch), and so does every start of either service where it is older than the
+# copy that would run, which heals an Echo left so once a main.sh with this runs: the binary's change time (adb push
+# sets the PC's modification time, never this one) against that copy's VERSION's, written as the copy was.  No stat,
+# or a time missing: kept, as before.  Both services get here at a start: the mv lets one of them say so.  32-bit
+# mksh: the times fit until 2038.
+TRIAL=/data/local/hassmic/hassmic
+trial_drop() {
+    [ -e $TRIAL ] || [ -L $TRIAL ] || return 0
+    mv -f $TRIAL $TRIAL.stale 2>/dev/null || return 0
+    rm -rf $TRIAL.stale
+    say "== test binary $TRIAL removed: $1"
+}
+trial_check() {
+    local t v
+    [ -e $TRIAL ] || return 0
+    t=$(stat -c %Z $TRIAL 2>/dev/null) v=$(stat -c %Z $D/VERSION 2>/dev/null)
+    case "$t$v" in ''|*[!0-9]*) return 0;; esac
+    [ -n "$t" ] && [ -n "$v" ] && [ "$t" -lt "$v" ] &&
+        trial_drop "older than the copy installed after it, $(dd if=$D/VERSION bs=64 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9.+-'), which runs now"
+}
+trial_check >> $LOG 2>&1
+BIN=$D/hassmic; [ -x $TRIAL ] && BIN=$TRIAL
+# <<< trial
 # ledcontroller with libhmled.so (the Echo Dot 5, where the build brings it: src/ledshim/ledshim.c says why): root runs
 # ledcontroller itself in place of init's service, with the shim preloaded.  Its binary carries a file capability
 # (CAP_WAKE_ALARM), and exec of such a file marks the process secure: the linker then ignores LD_PRELOAD.  So a copy
