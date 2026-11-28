@@ -46,7 +46,7 @@ if [ "$1" != --uninstall ]; then
         adb pull $BASEF device-logs/backup/sepolicy.boot-root >/dev/null
         printf 'ARGS="%s"\n' "$DEFAULT_ARGS" > $OUT/hassmic.conf
         t "mkdir -p /data/local/hassmic"; adb push $OUT/hassmic.conf /data/local/hassmic/hassmic.conf >/dev/null
-        t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
+        t "rm -rf /data/local/hassmic/ota; rm -f /data/local/hassmic/hassmic /data/local/hassmic/hassmic.over"      # boot.sh prefers a binary here (scripts/deploy.sh test builds); the fresh install wins
         # Patch the policy here, not in TWRP: magiskpolicy is dynamically linked and aborts in the recovery environment.
         # The model's rules, then hassmic's own domain (scripts/system/sepolicy-hassmic.rules) with what other domains
         # may do to su copied over to it, from the policy as it is by then (sepolicy-mirror.sh).  magiskpolicy exits 0

@@ -3081,12 +3081,18 @@ Run in this order. Each step says what it proves.
       came back as 2026.11.18.  Cause: a test binary in `/data/local/hassmic/hassmic` (scripts/deploy.sh; the guided
       setup's network step, whose install step removes it: a setup left after that step, or deploy.sh run on an
       installed Echo), which main.sh runs in place of any installed copy, for good.  Now (main.sh "trial") an update's
-      install removes it (ota_watch, `trial_drop`), and every start of either service removes it where its change time
-      is older than the VERSION of the copy that would run (adb push sets the modification time from the PC, never
-      the change time; no stat or no VERSION: kept as before); the factory copy's messages name it while it runs;
-      deploy.sh says it on an installed Echo.  An Echo in that state heals at the first update that brings this: the
+      install removes it (ota_watch, `trial_drop`), and every start of either service removes it once the installed
+      update is another than the one deploy.sh wrote into `hassmic.over` beside it (no clock: a Dot's is the PC's or
+      a default until Home Assistant sets it; a review of 88818d2 found the first version, by change times alone,
+      removing a fresh test build pushed before that); without the mark (the Echos left so) its change time against
+      the VERSION of the copy that would run (adb push sets the modification time from the PC, never the change time;
+      no stat or no VERSION: kept).  The satellite loop moves one that exits 5 times within 20 s each to `hassmic.failed`
+      (the factory copy fallback ran it too) and falls back to the copy when an install took it away under it; the factory copy's
+      messages name it while it runs; deploy.sh says it on an installed Echo, by adb's output (Fire OS 5's adbd
+      answers 0 whatever the status; the first version also ended deploy.sh with 1 on an Echo not installed yet,
+      which failed the setup's network step).  An Echo in that state heals at the first update that brings this: the
       old main.sh installs it, the new one's starts drop the binary.  `make unit-trial` (a stand-in stat); the block
-      under the Dot 2's own mksh and toybox (removed when older, kept when newer, removed by an install).
+      and deploy.sh's adb line on the Dot 2's own mksh, toybox and adbd.
 
 - [~] Servers that stop listening (issue #241, 2026-11-26; an Echo Dot 2 on 2026.11.18): the satellite went
       unavailable ~7 times a day at the same wall-clock times (05:15, 14:21, 14:30 local: something on the network or

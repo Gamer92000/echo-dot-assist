@@ -208,8 +208,9 @@ kernel is Android's common kernel: its `struct module` has `init` 36 bytes furth
 
 Trial runs on the device: `scripts/deploy.sh`, then `adb shell sh /data/local/hassmic/run.sh`.  On an installed Echo
 the satellite then runs `/data/local/hassmic/hassmic` in place of the installed copy, until the next update's install
-removes it (or a start finds it older than the copy installed: `main.sh` "trial", issue #251); `adb shell rm
-/data/local/hassmic/hassmic` goes back by hand.
+removes it, a start finds another update installed than the one it was pushed over (`hassmic.over` beside it), or it
+exits 5 times within 20 s each (moved to `hassmic.failed`; `main.sh` "trial", issue #251); `adb shell rm /data/local/hassmic/hassmic` goes back
+by hand.
 
 **The release build instead** (`scripts/lib/build.sh`): the scripts that need the Echo's binaries (`deploy.sh`,
 `install-system.sh`, `ota-push.sh`, the guided setup) take the bundle CI published of the checked-out commit when

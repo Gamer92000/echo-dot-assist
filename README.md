@@ -204,6 +204,15 @@ failed (`net: cannot ...`). No button sounds either? Check the volume.
 </details>
 
 <details>
+<summary><b>An update installs, but the old version comes back</b></summary>
+
+The log says `== update ... installed`, then `hassmic <old version>` and `the self test that passed was another
+build's`: a test build from the setup or `scripts/deploy.sh` is left in `/data/local/hassmic/hassmic` and runs in place
+of the installed one. Since 2026-11-28 the Echo removes it by itself at the next update. Before that:
+`adb shell rm /data/local/hassmic/hassmic`, then `adb shell reboot`.
+</details>
+
+<details>
 <summary><b>"Invalid encryption key" in Home Assistant</b></summary>
 
 After a reset of the Echo, or when something else set a key first:

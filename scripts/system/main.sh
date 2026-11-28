@@ -1038,25 +1038,40 @@ ota_watch() {
 # (scripts/deploy.sh; the guided setup's network step too, whose install step removes it again).  Only until something
 # newer is installed: one left behind ran on for good (issue #251, an Echo Dot 2: hassmic of 2026-11-18 under the
 # update of 2026-11-26, every later update installed and never run, its self test "another build's", never promoted).
-# So an update's install removes it (ota_watch), and so does every start of either service where it is older than the
-# copy that would run, which heals an Echo left so once a main.sh with this runs: the binary's change time (adb push
-# sets the PC's modification time, never this one) against that copy's VERSION's, written as the copy was.  No stat,
-# or a time missing: kept, as before.  Both services get here at a start: the mv lets one of them say so.  32-bit
-# mksh: the times fit until 2038.
+# So an update's install removes it (ota_watch), and every start of either service removes it once the installed
+# update is no longer the one it was pushed over: deploy.sh writes that one's VERSION (or "-", none) into $TRIAL.over
+# beside it.  No clock in that: a Dot has no battery for its clock, which is the PC's or a default until Home Assistant
+# sets it.  Without the mark (deploy.sh before it: the Echos left so), the binary's change time (adb push sets the
+# PC's modification time, never this one) against the VERSION of the copy that would run, written as that copy was:
+# older, removed; no stat or no time: kept, as before (a clock wrong at either write can mistake it once).  32-bit
+# mksh: those times fit until 2038.  Both services get here at a start: the mv lets one of them say so.
+# A test binary that keeps exiting is moved aside too (the satellite's loop: hassmic.failed), else the factory copy
+# ran it as well.
 TRIAL=/data/local/hassmic/hassmic
+# The binary first, its mark after: the other service's look in between must not find the binary without its mark
+# (it would go by the clock).  $2: where it is kept instead of removed (the loop's, for its developer to look at)
 trial_drop() {
-    [ -e $TRIAL ] || [ -L $TRIAL ] || return 0
-    mv -f $TRIAL $TRIAL.stale 2>/dev/null || return 0
-    rm -rf $TRIAL.stale
-    say "== test binary $TRIAL removed: $1"
+    if [ -e $TRIAL ] || [ -L $TRIAL ]; then
+        mv -f $TRIAL ${2:-$TRIAL.stale} 2>/dev/null || return 0
+        [ -n "$2" ] || rm -rf $TRIAL.stale
+        rm -f $TRIAL.over
+        if [ -n "$2" ]; then say "== test binary $TRIAL moved to $2: $1"; else say "== test binary $TRIAL removed: $1"; fi
+    else rm -f $TRIAL.over
+    fi
 }
+vers() { dd if=$1 bs=64 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9.+-'; }      # a VERSION as one word, or nothing
 trial_check() {
-    local t v
+    local t v over cur
     [ -e $TRIAL ] || return 0
+    if [ -f $TRIAL.over ]; then
+        over=$(vers $TRIAL.over) cur=$(vers $OTA/current/VERSION)
+        [ "$over" = "${cur:--}" ] || trial_drop "it was pushed over ${over:-?}, and ${cur:-no update} is installed since"
+        return 0
+    fi
     t=$(stat -c %Z $TRIAL 2>/dev/null) v=$(stat -c %Z $D/VERSION 2>/dev/null)
-    case "$t$v" in ''|*[!0-9]*) return 0;; esac
-    [ -n "$t" ] && [ -n "$v" ] && [ "$t" -lt "$v" ] &&
-        trial_drop "older than the copy installed after it, $(dd if=$D/VERSION bs=64 count=1 2>/dev/null | tr -cd 'a-zA-Z0-9.+-'), which runs now"
+    case "$t" in ''|*[!0-9]*) return 0;; esac
+    case "$v" in ''|*[!0-9]*) return 0;; esac
+    [ "$t" -lt "$v" ] && trial_drop "older than the copy installed after it, $(vers $D/VERSION), which runs now"
 }
 trial_check >> $LOG 2>&1
 BIN=$D/hassmic; [ -x $TRIAL ] && BIN=$TRIAL
@@ -1543,6 +1558,7 @@ satellite)
         # behind that starts plugins in their sandbox, and becomes runas: hassmic's pid and exit code stay what they
         # are.  Root opens no file of hassmic's for it: programs and sockets arrive as descriptors.  Without it (a
         # bundle from before plugins, PLUGINS=0) the line as it always was, and hassmic has no plugins
+        [ "$BIN" = $TRIAL ] && [ ! -x $TRIAL ] && BIN=$D/hassmic      # an update's install took it away (ota_watch)
         PLUG=; [ "${PLUGINS:-1}" = 0 ] || [ ! -x $D/plugrun ] || PLUG="$D/plugrun -L --"
         HASSMIC_PLUGINS=${PLUGINS:-1} $PLUG $D/runas -r 3990 -Z u:r:hassmic:s0 $DAEMON_USER $DAEMON_GROUPS${LED_FRAME:+,$LED_GID} \
             $BIN -P ${PROTO:-esphome} $ARGS >> $LOG 2>&1
@@ -1550,7 +1566,10 @@ satellite)
         # An update whose daemon does not stay up is worse than no update: with hassmic down there is no push port either.
         # Five exits within 20 s each -> back to the factory copy right now, without waiting for three reboots.
         if [ $(( $(cut -d. -f1 /proc/uptime) - t0 )) -lt 20 ]; then fast=$((fast + 1)); else fast=0; fi
-        if [ $fast -ge 5 ] && [ "$D" != "$SYS" ]; then
+        if [ $fast -ge 5 ] && [ "$BIN" = $TRIAL ]; then
+            v=$(vers $D/VERSION); trial_drop "it exited 5 times within 20 s each; ${v:-the factory copy} runs" $TRIAL.failed >> $LOG
+            BIN=$D/hassmic fast=0
+        elif [ $fast -ge 5 ] && [ "$D" != "$SYS" ]; then
             say "== update $(cat $D/VERSION 2>/dev/null) keeps exiting: running the factory copy" >> $LOG
             echo 3 > $OTA/tries
             exec sh $SYS/boot.sh satellite

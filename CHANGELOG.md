@@ -7,8 +7,9 @@ What changed for people using the Echo, newest first. Details and measurements a
 - **An Echo that kept running an old hassmic after updates now runs the update** (issue #251). The guided setup and
   `scripts/deploy.sh` copy a test build to `/data/local/hassmic/hassmic`, which runs in place of the installed one.
   Where it was left behind, every later update installed but never ran (the log said "the self test that passed was
-  another build's"). Now an update's install removes it, and so does a start that finds it older than the copy
-  installed after it. An Echo in that state heals itself with the first update that brings this.
+  another build's"). Now an update's install removes it, and so does a start that finds an update installed after
+  it, or a test build that keeps crashing. An Echo in that state heals itself with the first update that brings
+  this.
 
 ## 2026-11-27 — Echo 4: Thread and Zigbee for Home Assistant
 

@@ -3,7 +3,7 @@
 installed copy only until something newer is installed.  The block between "# >>> trial" and "# <<< trial" is cut out
 of the script, its paths under /data moved to a temporary folder, and run with a stand-in `stat` that reports the
 change times this test sets (the PC cannot set a file's change time), as backlight_test.py does with its tools."""
-import os, stat, subprocess, sys, tempfile
+import os, shutil, stat, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 fails = 0
@@ -28,15 +28,20 @@ text = open(ROOT + "/scripts/system/main.sh").read()
 block = text[text.index("# >>> trial"):text.index("# <<< trial")]
 
 
-def run(tmp, trial=None, version=None, call="", no_stat=False, link=None):
+def run(tmp, trial=None, version=None, call="", no_stat=False, link=None, over=None, current="2026.11.26.214508"):
     """the block sourced with D=$tmp/cur, then `call`, then BIN printed; TRIAL/VERSION: their change times (None: the
-    file is not there); LINK: the test binary is a symbolic link to that path.  Returns (BIN, log, trial still there)"""
+    file is not there); LINK: the test binary is a symbolic link to that path; OVER: deploy.sh's mark (None: none);
+    CURRENT: the installed update's VERSION (None: no update).  Returns (BIN, log, trial still there)"""
     d = os.path.join(tmp, "cur"); h = os.path.join(tmp, "hassmic")
     for x in (d, h, tmp + "/bin", tmp + "/ctime"):
         os.makedirs(x, exist_ok=True)
     for f in os.listdir(tmp + "/ctime"): os.remove(os.path.join(tmp, "ctime", f))
-    for p in (h + "/hassmic", h + "/boot.log", d + "/VERSION", tmp + "/no-stat"):
+    for p in (h + "/hassmic", h + "/hassmic.over", h + "/boot.log", d + "/VERSION", tmp + "/no-stat"):
         if os.path.lexists(p): os.remove(p)
+    if os.path.exists(h + "/ota"): shutil.rmtree(h + "/ota")
+    if current is not None:
+        os.makedirs(h + "/ota/current"); open(h + "/ota/current/VERSION", "w").write(current + "\n")
+    if over is not None: open(h + "/hassmic.over", "w").write(over + "\n")
     if no_stat: open(tmp + "/no-stat", "w").close()
 
     def at(path, t):
@@ -54,7 +59,7 @@ def run(tmp, trial=None, version=None, call="", no_stat=False, link=None):
     os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
     sh = block.replace("/data/local/hassmic", h)
     with open(tmp + "/t.sh", "w") as f:
-        f.write(f'D={d}\nLOG={h}/boot.log\nsay() {{ echo "@ $*"; }}\n' + sh + "\n" + (call + ' >> $LOG 2>&1' if call else '') + '\necho "BIN=$BIN"\n')      # ota_watch's stdout is the log
+        f.write(f'D={d}\nOTA={h}/ota\nLOG={h}/boot.log\nsay() {{ echo "@ $*"; }}\n' + sh + "\n" + (call + ' >> $LOG 2>&1' if call else '') + '\necho "BIN=$BIN"\n')      # ota_watch's stdout is the log
     env = dict(os.environ, T=tmp, PATH=tmp + "/bin:" + os.environ["PATH"])
     o = subprocess.run(["sh", tmp + "/t.sh"], capture_output=True, text=True, env=env)
     if o.returncode or o.stderr: print(o.stdout, o.stderr, file=sys.stderr)
@@ -105,6 +110,29 @@ check("a dangling link is not run", b == "$T/cur/hassmic" and there, (b, log))
 open(tmp + "/target", "w").close()
 b, log, there = run(tmp, version=1795600000, link=tmp + "/target", call='trial_drop "x"')
 check("an install removes a link, not what it points to", not there and os.path.exists(tmp + "/target"), log)
+
+# deploy.sh's mark: the update it was pushed over, whatever the clocks said
+b, log, there = run(tmp, trial=1795000000, version=1795600000, over="2026.11.26.214508")
+check("marked over the installed update: kept, though its time is older (a clock not set yet)", there and b == TRIAL, (b, log))
+b, log, there = run(tmp, trial=1795600001, version=1795600000, over="2026.11.18.004106")
+check("marked over another update than the installed one: removed, though its time is newer", not there and b == "$T/cur/hassmic", (b, log))
+check("... and the log says over which", f"== test binary {TRIAL} removed: it was pushed over 2026.11.18.004106, and 2026.11.26.214508 is installed since" in log, log)
+check("... the mark goes with it", not os.path.exists(tmp + "/hassmic/hassmic.over"))
+b, log, there = run(tmp, trial=1795600001, version=1795600000, over="-", current=None)
+check("marked over no update, none installed: kept", there and b == TRIAL, (b, log))
+b, log, there = run(tmp, trial=1795600001, version=1795600000, over="-")
+check("marked over no update, one installed since: removed", not there and "and 2026.11.26.214508 is installed since" in log, log)
+b, log, there = run(tmp, trial=1795600001, version=1795600000, over="2026.11.26.214508", current=None)
+check("marked over an update that is gone: removed", not there and "and no update is installed since" in log, log)
+b, log, there = run(tmp, trial=1795600001, version=1795600000, over="2026.11.26.214508+abc;rm -rf /")
+check("a mark is read as one word", not there and "pushed over 2026.11.26.214508+abcrm-rf, and" in log, log)
+
+b, log, there = run(tmp, trial=1795600001, version=1795600000, over="2026.11.26.214508",
+                    call=f'trial_drop "it exited 5 times within 20 s each; x runs" {tmp}/hassmic/hassmic.failed')
+check("the loop's drop keeps it aside, the mark gone", not there and os.path.exists(tmp + "/hassmic/hassmic.failed")
+      and not os.path.exists(tmp + "/hassmic/hassmic.over"), log)
+check("... and says where", f"== test binary {TRIAL} moved to $T/hassmic/hassmic.failed: it exited" in log, log)
+os.remove(tmp + "/hassmic/hassmic.failed")
 
 print("trial: " + ("all passed" if not fails else f"{fails} failed"))
 sys.exit(1 if fails else 0)
