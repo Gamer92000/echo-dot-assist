@@ -29,3 +29,7 @@ int  screen_keep_on(void) { return 0; }
 int  screen_clock(int set) { (void)set; return -1; }
 int  screen_sleep_min(int set) { (void)set; return -1; }
 int  screen_saver(void) { return 0; }
+int  screen_motion_keep(int set) { (void)set; return -1; }
+int  screen_motion_wake(int set) { (void)set; return -1; }
+int  screen_motion(void) { return 0; }
+int  screen_slept(void) { return 0; }

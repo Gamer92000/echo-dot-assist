@@ -76,6 +76,11 @@ const struct board board = {
     .light_sensor = { "tcs3400:/sys/devices/virtual/input" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
     /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    /* Amazon's call processing (audio_android.c "a call as stock's calls have it"): stock's calls record
+     * VOICE_COMMUNICATION, which this HAL gives libasp's "Voice" pipeline (getAspPipelineType: 7 -> 1), in
+     * MODE_IN_COMMUNICATION, beside the wake word's HOTWORD (2026-11-26: the Show 5 ran it, the others by the same
+     * firmware code) */
+    .call_mic = 1,
     .volume_curve = board_vol_dot2,
     /* TI TAS5805m amplifier: its "Master TAS5805m Playback Volume" is a digital volume, 0..158, 100 at boot, no dB table
      * (0.5 dB steps assumed: the chip's own).  Listened to with music at full volume, 2026-10-15: 115 and 120 clean, 122
@@ -85,4 +90,10 @@ const struct board board = {
     .speaker_gain_stock = 100,
     .speaker_gain_steps = 2,
     .speaker_gain_limit = 118,
+    /* phone calls (docs/re-hfp.md): from the firmware, not run here.  MediaTek's MT8183 HAL with its BTSCO path and the
+     * kernel's legacy front ends VOIP_Call_BT_Playback / _Capture (mtk-soc-pcm-bt-dai.c, the DAI BT interface); an
+     * MT7663 behind the newer btmtksdio (v0.0.1.13), which sets the chip's PCM side itself after every reset, as on
+     * cannoli.  Its BTCVSD block is the integrated core's, which this board does not use */
+    .sco = SCO_PCM, .sco_play = "VOIP_Call_BT_Playback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .sco_msbc_chip = 1,             /* not run here: an MT7663 as cannoli's, measured there (2026-11-25) */
 };

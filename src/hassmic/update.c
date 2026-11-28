@@ -9,9 +9,9 @@
  * (keys/release.conf names it; a fork's own: secrets/fork.conf) comes with every build and install; root checks the
  * signature against it from the copy that runs or the system partition (scripts/system/main.sh) before anything is
  * installed, and falls back to the factory copy if the new one does not stay up, as for a push.  So the download itself
- * needs no trust: GitHub over HTTPS, through the firmware's own libcurl 7.50.1 (dlopen'ed: OpenSSL and the system CA
- * store, /system/etc/security/cacerts, have GitHub's roots).  Its sockets are opened by us, as the group the egress
- * lock lets out (net_socket); libcurl's own would only reach the LAN.
+ * needs no trust: GitHub over HTTPS, through http.c on hassmic's own TLS (tls.c: the system CA store,
+ * /system/etc/security/cacerts, has GitHub's roots).  Its sockets are opened as the group the egress lock lets out
+ * (net_socket); a plain one would only reach the LAN.
  *
  * Looked at a minute after start, then every 6 hours, on a change of channel and when Home Assistant asks (the
  * entity's "check").  Release: /releases/latest, the newest that is not a prerelease.  Beta: the highest version among
@@ -32,7 +32,7 @@
 #include <time.h>
 #include "board.h"
 #include "core.h"
-#include "fwcurl.h"
+#include "http.h"
 #include "net.h"
 #include "ota.h"
 #include "plugin.h"
@@ -74,120 +74,83 @@ static struct update_state st = { .current = CURRENT, .latest = CURRENT };      
 static char tag[64];                                    /* ulock: tag of st.latest; "" until a look found one */
 static void (*notify)(void);
 
-/* ---------------------------------------------------------------- libcurl, from the firmware */
+/* ---------------------------------------------------------------- the fetch (http.c) */
 
-enum { OPT_WRITEDATA = 10001, OPT_URL = 10002, OPT_USERAGENT = 10018, OPT_TIMEOUT = 13, OPT_LOW_SPEED_LIMIT = 19,
-       OPT_LOW_SPEED_TIME = 20, OPT_NOPROGRESS = 43, OPT_FAILONERROR = 45, OPT_FOLLOWLOCATION = 52, OPT_XFERINFODATA = 10057,
-       OPT_MAXREDIRS = 68, OPT_CONNECTTIMEOUT = 78, OPT_NOSIGNAL = 99, OPT_OPENSOCKETFUNCTION = 20163,
-       OPT_OPENSOCKETDATA = 10164, OPT_PROTOCOLS = 181, OPT_REDIR_PROTOCOLS = 182, OPT_WRITEFUNCTION = 20011,
-       OPT_XFERINFOFUNCTION = 20219, OPT_HTTPHEADER = 10023, INFO_RESPONSE_CODE = 0x200002, PROTO_HTTP = 1, PROTO_HTTP_S = 1 | 2, PROTO_HTTPS = 2,
-       CURLE_HTTP_RETURNED_ERROR = 22 };
-struct curl_sockaddr { int family, socktype, protocol; unsigned addrlen; };     /* followed by the address; unused here */
-
-#define curl fwcurl()                   /* fwcurl.c: loaded once, for update.c, https.c and davs.c alike */
-
-struct buf { unsigned char *p; size_t n, cap, max; int progress, over; const volatile int *stop;
+struct buf { unsigned char *p; size_t n, cap, max; int progress, over, code; long long total;
              const char *const *hdrs; int lan; };      /* update_fetch_lan's: headers to send; plain HTTP, no redirect, 200 only */
 
-static size_t on_data(char *d, size_t size, size_t n, void *arg)
+/* The final answer's head: 4xx and 5xx end it (libcurl's FAILONERROR, as before), and another Echo's port answers 200
+ * or nothing (a redirect's own answer is none) */
+static int on_head(void *arg, int status, long long length)
 {
-    struct buf *b = arg; size_t len = size * n;
-    if (b->stop && *b->stop) return 0;                  /* as on_progress: not another piece taken for nobody */
-    if (b->n + len > b->max) { b->over = 1; return 0; } /* aborts the transfer */
-    if (b->n + len + 1 > b->cap) {
-        size_t cap = (b->n + len + 1) * 2; unsigned char *p = realloc(b->p, cap);
-        if (!p) return 0;
-        b->p = p; b->cap = cap;
-    }
-    memcpy(b->p + b->n, d, len); b->n += len; b->p[b->n] = 0;
-    return len;
-}
-
-static int on_progress(void *arg, int64_t total, int64_t now, int64_t ut, int64_t un)
-{
-    struct buf *b = arg; (void)ut; (void)un;
-    if (b->stop && *b->stop) return 1;                  /* whoever asked no longer wants it: libcurl ends the transfer */
-    if (!b->progress || total <= 0) return 0;
-    float pct = 100.0f * (float)now / (float)total; int tell;
-    pthread_mutex_lock(&ulock);
-    tell = pct - st.progress >= 5 || (pct >= 100 && st.progress < 100);
-    if (tell) st.progress = pct;
-    pthread_mutex_unlock(&ulock);
-    if (tell && notify) notify();
+    struct buf *b = arg;
+    b->total = length;
+    if (status >= 400 || (b->lan && status != 200)) { b->code = status; return 1; }
     return 0;
 }
 
-/* (-1, libcurl's CURL_SOCKET_BAD, once nobody wants the answer: no connection is begun for it, nor the next of a
- * redirect or of a name's several addresses) */
-static int on_socket(void *arg, int purpose, struct curl_sockaddr *a)
+static int on_data(void *arg, const void *d, size_t len)
 {
-    struct buf *b = arg; (void)purpose;
-    if (b && b->stop && *b->stop) return -1;
-    /* another Echo's settings port (update_fetch_lan): a plain socket, which the egress lock lets reach the local
-     * network only, whatever address a member's word named (a review of 6631974, 6) */
-    if (b && b->lan) return socket(a->family, a->socktype, a->protocol);
-    return net_socket(a->family, a->socktype, a->protocol);
+    struct buf *b = arg;
+    if (b->n + len > b->max) { b->over = 1; return 1; } /* ends the transfer */
+    if (b->n + len + 1 > b->cap) {
+        size_t cap = (b->n + len + 1) * 2; unsigned char *p = realloc(b->p, cap);
+        if (!p) return 1;
+        b->p = p; b->cap = cap;
+    }
+    memcpy(b->p + b->n, d, len); b->n += len; b->p[b->n] = 0;
+    if (b->progress && b->total > 0) {
+        float pct = 100.0f * (float)b->n / (float)b->total; int tell;
+        pthread_mutex_lock(&ulock);
+        tell = pct - st.progress >= 5 || (pct >= 100 && st.progress < 100);
+        if (tell) st.progress = pct;
+        pthread_mutex_unlock(&ulock);
+        if (tell && notify) notify();
+    }
+    return 0;
 }
 
 /* GET URL into B (at most MAX bytes); 0, or -1 with the reason in ERR.  SECS: all the time the transfer has, from
- * the name lookup to the last byte (15: the page waits for the answer; LONG_S: a bundle over a slow link).  b->stop
- * set by another thread ends it at libcurl's next callback: within a second while it connects or transfers (its
- * progress callback), at once between a redirect's or an address's connections (on_socket); only a name lookup in
- * this libcurl's own resolver is not interrupted, and that ends with the resolver's timeouts */
+ * the name lookup to the last byte (15: the page waits for the answer; LONG_S: a bundle over a slow link).  STOP set
+ * by another thread ends it within 250 ms (http.c), but for a name lookup (getaddrinfo), which ends with the
+ * resolver's timeouts */
 #define LONG_S 900
 /* UA: what the request says it is.  hassmic's own looks at GitHub's API name the version (GitHub refuses a request
  * without one, and the version is what an update is about); update_fetch's, the plugin index's site, only "hassmic"
  * (GitHub Pages needs none, and the index learns nothing of the Echo but its address and the file) */
-static int fetch(const char *url, struct buf *b, size_t max, int progress, long secs, const char *ua, char *err, size_t cap)
+static int fetch(const char *url, struct buf *b, size_t max, int progress, long secs, const volatile int *stop, const char *ua, char *err, size_t cap)
 {
-    void *h; int rc; long code = 0;
-    b->n = 0; b->max = max; b->progress = progress; b->over = 0;
+    char why[300];
+    b->n = 0; b->max = max; b->progress = progress; b->over = 0; b->code = 0; b->total = -1;
     if (secs < 1) secs = 1;
-    if (!curl || !(h = curl->init())) { snprintf(err, cap, "no libcurl on this device"); return -1; }
-    struct curl_slist *hl = NULL;
-    curl->setopt(h, OPT_URL, url);
-    curl->setopt(h, OPT_USERAGENT, ua);
     /* The first address may be plain HTTP (the tests' stand-ins; a site a fork names), a redirect only HTTPS: one to
      * HTTP took whatever answered there for GitHub's (a review, 2026-11-21; the lists and the bundles are signed, but
      * a package's bytes, the API's answer and what the page shows were not to come from anyone on the way).  GitHub's
      * own redirects, the release assets' to their CDN, are HTTPS.  Another Echo's settings port (b->lan): plain HTTP
-     * and no redirect at all; a member that answers one is sent nowhere else (a review, 2026-11-21: it was followed to
-     * any HTTPS address a member named) */
-    if (b->lan) { curl->setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP); curl->setopt(h, OPT_FOLLOWLOCATION, 0L); }
-    else {
-        curl->setopt(h, OPT_PROTOCOLS, (long)PROTO_HTTP_S); curl->setopt(h, OPT_REDIR_PROTOCOLS, (long)PROTO_HTTPS);
-        curl->setopt(h, OPT_FOLLOWLOCATION, 1L); curl->setopt(h, OPT_MAXREDIRS, 5L);     /* downloads redirect to a CDN */
-    }
-    for (const char *const *x = b->hdrs; x && *x; x++) hl = curl->slist_append(hl, *x);
-    if (hl) curl->setopt(h, OPT_HTTPHEADER, hl);
-    curl->setopt(h, OPT_FAILONERROR, 1L); curl->setopt(h, OPT_NOSIGNAL, 1L);
-    curl->setopt(h, OPT_CONNECTTIMEOUT, secs <= 15 ? (secs < 10 ? secs : 10L) : 20L); curl->setopt(h, OPT_TIMEOUT, secs);
-    curl->setopt(h, OPT_LOW_SPEED_LIMIT, 512L); curl->setopt(h, OPT_LOW_SPEED_TIME, 60L);
-    curl->setopt(h, OPT_WRITEFUNCTION, on_data); curl->setopt(h, OPT_WRITEDATA, b);
-    curl->setopt(h, OPT_XFERINFOFUNCTION, on_progress); curl->setopt(h, OPT_XFERINFODATA, b); curl->setopt(h, OPT_NOPROGRESS, 0L);
-    curl->setopt(h, OPT_OPENSOCKETFUNCTION, on_socket); curl->setopt(h, OPT_OPENSOCKETDATA, b);
-    rc = curl->perform(h);
-    curl->getinfo(h, INFO_RESPONSE_CODE, &code);
-    curl->cleanup(h);
-    if (hl) curl->slist_free_all(hl);
-    if (!rc && b->lan && code != 200) { snprintf(err, cap, "HTTP %ld from %s", code, url); return -1; }   /* (a redirect's own answer is none) */
-    if (rc == CURLE_HTTP_RETURNED_ERROR) snprintf(err, cap, "HTTP %ld from %s", code, url);
-    else if (rc && b->stop && *b->stop) snprintf(err, cap, "cancelled");
+     * and no redirect at all, through a plain socket, which the egress lock lets reach the local network only,
+     * whatever address a member's word named (a review of 6631974, 6; and 2026-11-21: a redirect was followed to any
+     * HTTPS address a member named) */
+    struct http r = { .url = url, .agent = ua, .headers = b->hdrs, .verify = 1, .stop = stop,
+                      .plain = b->lan, .lan = b->lan, .redirects = b->lan ? 0 : 5, .redirect_https = 1,
+                      .connect_s = secs <= 15 ? (secs < 10 ? (int)secs : 10) : 20, .total_s = (int)secs,
+                      .low_s = 60, .low_bytes = 512, .head = on_head, .data = on_data, .arg = b };
+    int rc = http_run(&r, why, sizeof why);
+    if (b->code) snprintf(err, cap, "HTTP %d from %s", b->code, url);
+    else if (rc == HTTP_CANCELLED) snprintf(err, cap, "cancelled");
     else if (rc && b->over) snprintf(err, cap, "%s: more than %zu bytes", url, max);
-    else if (rc) snprintf(err, cap, "%s: %s", url, curl->strerror(rc));
+    else if (rc) snprintf(err, cap, "%s: %s", url, why);
     return rc ? -1 : 0;
 }
 
 /* The same fetch for plugin_fetch.c (docs/plugins.md 5.6 has the two share it), as "hassmic" with no version: URL into *DATA (the caller's to
  * free, a NUL after its *LEN bytes), at most MAX bytes; 0, or -1 with why in ERR ("HTTP <code> from ..." when the
  * server answered: reached, as update_probe counts it).  SECS: all the time it has (fetch).
- * STOP (may be NULL): set by another thread, the transfer ends at libcurl's next callback (fetch says when that is).
+ * STOP (may be NULL): set by another thread, the transfer ends within 250 ms (fetch says when it does not).
  * Blocks; no lock held. */
 int update_fetch(const char *url, size_t max, long secs, const volatile int *stop, unsigned char **data, size_t *len, char *err, size_t cap)
 {
     struct buf b = { 0 }; int rc;
-    b.stop = stop;
-    rc = fetch(url, &b, max, 0, secs, "hassmic", err, cap);
+    rc = fetch(url, &b, max, 0, secs, stop, "hassmic", err, cap);
     if (rc || !b.p) { free(b.p); *data = NULL; *len = 0; if (!rc) snprintf(err, cap, "%s: an empty answer", url); return -1; }
     *data = b.p; *len = b.n;
     return 0;
@@ -197,7 +160,7 @@ int update_fetch_lan(const char *url, const char *const *hdrs, size_t max, long 
 {
     struct buf b = { 0 }; int rc;
     b.hdrs = hdrs; b.lan = 1;
-    rc = fetch(url, &b, max, 0, secs, "hassmic", err, cap);
+    rc = fetch(url, &b, max, 0, secs, NULL, "hassmic", err, cap);
     if (rc || !b.p) { free(b.p); *data = NULL; *len = 0; if (!rc) snprintf(err, cap, "%s: an empty answer", url); return -1; }
     *data = b.p; *len = b.n;
     return 0;
@@ -315,7 +278,7 @@ static int look(int ch)
 {
     char url[400], err[300], t[64], page[192], body[1024], *notes = body, ab[300]; struct buf b = { 0 }; int found;
     snprintf(url, sizeof url, ch == UPDATE_RELEASE ? "%s/releases/latest" : "%s/releases?per_page=10", api_base(ab, sizeof ab));
-    if (fetch(url, &b, 1u << 20, 0, LONG_S, "hassmic/" CURRENT, err, sizeof err)) {
+    if (fetch(url, &b, 1u << 20, 0, LONG_S, NULL, "hassmic/" CURRENT, err, sizeof err)) {
         set_failed("could not look for updates", strstr(err, "HTTP 404") && ch == UPDATE_RELEASE ? "no release published yet" : err);
         free(b.p); return -1;
     }
@@ -366,7 +329,7 @@ static void install(int ch)
     if (notify) notify();
     fprintf(stderr, "update: downloading %s for %s\n", t, board.codename);
     snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle", dl_base(db, sizeof db), t, board.codename);
-    if (fetch(url, &b, MAX_BUNDLE, 1, LONG_S, "hassmic/" CURRENT, err, sizeof err)) { set_failed("download failed", err); goto out; }
+    if (fetch(url, &b, MAX_BUNDLE, 1, LONG_S, NULL, "hassmic/" CURRENT, err, sizeof err)) { set_failed("download failed", err); goto out; }
     if (unchecked) {
         /* No signature check (Sources, the owner's word with the action button): none is fetched, whatever the
          * server has; hassmic's own key signs what came, the key root was told to trust (sources.c) */
@@ -375,7 +338,7 @@ static void install(int ch)
         fprintf(stderr, "update: %s downloaded and NOT CHECKED (Sources: no signature check), signed with hassmic's own key for root\n", t);
     } else {
         snprintf(url, sizeof url, "%s/%s/hassmic-%s.bundle.sig", dl_base(db, sizeof db), t, board.codename);
-        if (fetch(url, &s, 64, 0, LONG_S, "hassmic/" CURRENT, err, sizeof err)) { set_failed("download failed", err); goto out; }
+        if (fetch(url, &s, 64, 0, LONG_S, NULL, "hassmic/" CURRENT, err, sizeof err)) { set_failed("download failed", err); goto out; }
         if (s.n != 64) { set_failed("download failed", "the signature is not 64 bytes"); goto out; }
     }
     /* (nothing of the plugins' to do first: a hassmic update never breaks a plugin, sdk/PROTOCOL.md "Versions") */
@@ -441,7 +404,7 @@ int update_probe(char *err, size_t cap)
 {
     char url[400], why[300], ab[300]; struct buf b = { 0 }; int rc;
     snprintf(url, sizeof url, "%s/releases?per_page=1", api_base(ab, sizeof ab));
-    rc = fetch(url, &b, 1u << 20, 0, 15, "hassmic/" CURRENT, why, sizeof why);
+    rc = fetch(url, &b, 1u << 20, 0, 15, NULL, "hassmic/" CURRENT, why, sizeof why);
     free(b.p);
     if (rc && strstr(why, "HTTP ") == why) rc = 0;
     if (rc) { size_t ul = strlen(url); snprintf(err, cap, "%s", strncmp(why, url, ul) ? why : why + ul + 2); fprintf(stderr, "update: %s not reachable: %s\n", server_name(), why); }

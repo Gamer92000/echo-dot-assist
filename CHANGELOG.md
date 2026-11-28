@@ -2,6 +2,135 @@
 
 What changed for people using the Echo, newest first. Details and measurements are in [PLAN.md](PLAN.md).
 
+## 2026-11-26 — Calls: Amazon's call processing on every Echo, quick replies, the phone before a TV box
+
+- **A phone gets the calls when a TV box connected first** (issue #233). An Android TV box paired for music also
+  connects for calls, at once and with no setting to stop it, and the phone that connected after it got music only.
+  Now a phone takes the place from a device that is not a phone and has no call.
+- **Calls from an Echo Dot 5 are clear from across the room** (issue #233). It now sends Amazon's call processing
+  (noise reduction, an even level, the echo canceller for calls), as the Dot 2 and Dot 3 do, in place of the
+  assistant's microphone, which came out quiet and full of the room. Measured by a user with a phone: the same level
+  at 30 cm, 1.5 m and 3 m, and on WhatsApp "a huge difference".
+- **The first words of a quick reply are no longer quiet** in a Drop In or phone call.
+  The Echo's own echo check, on top of Amazon's echo canceller, took a reply right after the
+  other side spoke for its echo and turned it down for up to 2.5 s.
+- **Every Echo sends Amazon's call processing in calls, the Echo Shows and the Echo Input too**, done as their own
+  calls did it: on the Shows and the Input Android's call mode and the call's own recording beside the wake word's. The setting "Call microphone" is gone: there was no reason to send the assistant's
+  stream instead. Run on an Echo Show 5; on the Echo 2, Echo Show 5 2nd gen, Echo Show 8 and Echo Input taken from
+  their firmware and not tried yet: if a call from one of them sounds wrong, please say so.
+- **The log says what a call sent**: at the end of every call a `call: sent ...` line names the microphone, how much
+  of the call this side talked, at what level in and out, the gain, and how much went out without being turned down.
+
+## 2026-11-26 — HTTPS with TLS 1.3
+
+- **Replies play from a Home Assistant on the "Modern" SSL profile** (issue #236). That profile allows TLS 1.3 only,
+  and the TLS the Echo's firmware has is from 2016 and stops at TLS 1.2: every spoken reply stayed silent with "SSL
+  connect error". hassmic now has a TLS client of its own (mbedTLS, TLS 1.2 and 1.3) for everything it fetches over
+  HTTPS: replies and media, online updates, the plugin index and Amazon's model downloads, so an update server or
+  plugin site of your own may be TLS 1.3 only too. Certificates are checked as before. A failed check now says "the
+  certificate of ... does not check out" in the log.
+- **Music Assistant behind an HTTPS proxy** for the Echo Show's music pages: give its address as `https://...`. The
+  token then goes over TLS, its certificate checked as for Home Assistant's media.
+
+## 2026-11-26 — The Echo keeps listening after a network error
+
+- **A network error no longer stops the Echo from taking connections** (issue #241, likely its cause). When a
+  connection failed just as it arrived, the Echo stopped listening on that port: for Home Assistant's port it then
+  shut its satellite down, and on one Echo Dot 2 Home Assistant could not reach it for hours. Now the Echo notes the
+  error and goes on listening. The settings page, Music Assistant's player and the update port had the same fault;
+  they also try again now when their port is taken at start.
+
+## 2026-11-26 — Answering a call by voice
+
+- **"<wake word>, answer" picks up a call that rings** (issue #240), as "hang up" ends one: also "pick up", "accept",
+  and in German, French, Spanish, Italian, Dutch and Romanian ("abnehmen", "décroche", "contesta", "rispondi",
+  "opnemen", "răspunde"). A phone's call over Bluetooth answers this way at once. A Drop In ("Drop In answers: after
+  the action button") and a plugin's call promise that only someone at the Echo connects them, so for those turn on
+  **Answer calls by voice** (Voice page, off by default): it counts only in a request the Echo's own wake word began,
+  never in one Home Assistant opened. Home Assistant still turns your words into text, so with it on Home Assistant
+  could answer such a call; the guide says what that means.
+
+## 2026-11-26 — Wi-Fi: moving to a stronger access point
+
+- **Echo Dots and the Echo 2 now move between the access points of a mesh** (issue #234). Before, an Echo stayed on
+  the access point it joined first, however weak, until the link broke: replies cut off, the light red when spoken
+  to. Now, when the signal stays under -70 dBm for half a minute, the Echo looks for a stronger access point of the
+  same network and moves there in about a quarter of a second, keeping its address. Where the access point offers
+  it (802.11v), it asks the access point first. On by default: **Move to a stronger access point** (System) switches
+  it off.
+- **The Wi-Fi row (System) shows the access point** the Echo is on, its band and signal, and the last move between
+  access points. Every move is in the log too.
+- **Phone calls and plugins' calls have sound without Drop In** (issue #239). Where Drop In did not run (Wyoming, Home
+  Assistant's wake word, wake word arbitration off), a phone call over Bluetooth or a plugin's call connected but was
+  silent both ways.
+
+## 2026-11-25 — Phone calls over Bluetooth
+
+- **The Echo as your phone's speakerphone** (issue #233; Echo Dot 2, Echo Dot 3, Echo Dot 5, Echo Show 5, and from
+  their firmware also the Echo 2nd gen, Echo Show 5 2nd gen, Echo Show 8 1st and 2nd gen and Echo Input (its jack or
+  a Bluetooth speaker), not tried on those yet). Turn on
+  **Phone calls over Bluetooth** (Features), pair the phone with Home Assistant's "Bluetooth pairing" switch, and its
+  calls ring on the Echo: the action button answers and ends them, "stop" and "hang up" end them, and the call talks
+  through the Echo's speaker and call microphone. In Home Assistant: "Phone call", "Phone caller", "Phone", buttons to
+  answer, end and take a call here, and an action that has the phone call a number. Off by default. A phone paired
+  before must be paired again.
+- **The phone's volume keys work during a call**, and the Echo's volume buttons (or Home Assistant) move the phone's
+  call volume too.
+- **A second call**: a call that comes in during a call shows in Home Assistant's "Phone call waiting"; the action
+  button answers it and puts the first one on hold, "Switch phone call" goes back and forth, and ending one brings the
+  held one back.
+- **Wideband (HD voice) calls** where the phone offers it (mSBC): measured on the Echo Dot 2, Dot 3, Dot 5 and Echo
+  Show 5, and on by the same chips on the Echo 2nd gen, Echo Input, Echo Show 5 2nd gen and Echo Show 8.
+- **Echo Dot 5: Bluetooth now uses the Echo's own address.** Every Echo Dot 5 had the same Bluetooth address (the
+  chip's default, 00:0C:43:29:50:01), so phones and Home Assistant could mix two of them up. A phone paired with an
+  Echo Dot 5 before must be paired again.
+
+## 2026-11-25 — Echo Show: Screen off stays off, motion with Wyoming too
+
+- **Screen off from the drawer now stays off** with **Motion wakes the screen** on: someone moving no longer turns it
+  back on. It stays dark until you touch it or the Echo wakes it itself (a request, a timer). An update forgets that
+  the screen was put out this way, and the next motion wakes it again.
+- **The screen's motion switches work with Wyoming too**, and from the moment the Echo starts rather than once Home
+  Assistant first connected.
+
+## 2026-11-24 — Echo Show: the screen follows Wi-Fi motion
+
+- **Echo Show: the screen can follow Wi-Fi motion.** Two new switches on the Screen page under **When idle**, shown
+  while Wi-Fi motion is on (Features). **Motion keeps the screen on**: the screen goes dark, or shows the clock, only
+  once nobody has moved for "Screen sleeps after". **Motion wakes the screen**: a dark screen comes on when someone
+  moves, and the clock gives way to the face. Neither in Do not disturb. Both experimental and off by default: Wi-Fi
+  motion also sees people in the next room.
+
+## 2026-11-24 — Music in sync through a busy moment
+
+- **A late answer no longer pulls Sendspin's clock off** (Music Assistant's multi-room sync). The Echo asked the server
+  for the time every 3 s as soon as its clock looked right, before it knew how fast the two clocks drift apart; an
+  answer read late (the Echo busy for a moment) was then believed nearly as much as the clock, and moved it by up to
+  tens of ms: a skip in the music, or the drift learnt the wrong way. Now it asks again before the clock could be more
+  than 1 ms off by then, a few more questions in the first seconds of a stream. And two answers that arrive at once
+  (a server busy for a moment as the Echo connects) no longer set a drift between the clocks of thousands of percent,
+  which made the music jump by most of a second.
+
+## 2026-11-24 — Joining Wi-Fi over USB keeps one network
+
+- **`scripts/wifi-join.sh` no longer piles up saved Wi-Fi networks on the Dots** (issue #213). Every run used to add
+  the network again and keep the ones before, so an Echo joined a few times had several, and moved between them. Now it
+  saves the network only once the Echo is on it, and then removes the ones saved before, as the settings page's
+  "Switch network…" does; a join that fails leaves the saved networks as they were. One more run clears an Echo that
+  has several already. Also: a `wifi.conf` written on Windows works, and a missing password line is named as such.
+
+## 2026-11-24 — Echo Dot 5: clearer install steps
+
+- **Every step of the Echo Dot 5's install says where it runs** (`devices/cannoli/README.md`, thanks to PR #212): each
+  block of commands starts by changing into the checkout it belongs to, so no step depends on where the one before
+  left you.
+- **Unpacking Amazon's update for the Dot 5 works as written** (issue #221). `tools/payload_dump.py` now takes the
+  update file as downloaded (a zip with `payload.bin` inside), and the README unpacks the copy the OS builder already
+  downloaded; before, the command failed with an `AssertionError`.
+- **The "Unsupported firmware prerequisite" fix is for any firmware older than 8349**, not factory-fresh Dots only
+  (issue #216: a Dot from June 2026 needed it too). The light ring fix is a separate one, needed only where the ring
+  stays dark after the install.
+
 ## 2026-11-24 — A fixed network address
 
 - **The Echo can keep a fixed IP address** (issue #191), set on the settings page: System, "Network address",

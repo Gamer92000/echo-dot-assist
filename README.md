@@ -55,6 +55,7 @@ with a clock (36EBT3) is another model, and not supported. Every other Echo, and
 | Only the nearest Echo answers           | ✅ decided in the cloud        | ✅ decided on your network                            |
 | Timers, announcements, follow-ups       | ✅                             | ✅                                                    |
 | Drop In between Echos                   | ✅ through Amazon              | ✅ [on your network](docs/GUIDE.md#drop-in)           |
+| Hands-free for your phone's calls       | –                              | ✅ [over Bluetooth](docs/GUIDE.md#phone-calls-over-bluetooth) |
 | Multiroom music                         | Amazon speaker groups          | [Music Assistant](docs/GUIDE.md#music) (Sendspin)     |
 | Bluetooth speaker for your phone        | SBC                            | SBC, AAC, aptX, aptX HD                               |
 | Plays on a Bluetooth speaker            | ✅                             | ✅                                                    |
@@ -240,7 +241,7 @@ install only with a valid signature. The whole model, including what it does not
 [MIT](LICENSE), for everything written here. `src/third_party/` keeps its own licences, stated in each file: monocypher
 (BSD-2-Clause OR CC0-1.0), `dr_flac.h` (public domain or MIT-0), `minimp3.h` (CC0-1.0), `rnnoise/` (BSD-3-Clause,
 `COPYING` beside it), `freeaptx.c`/`.h` (LGPL-2.1-or-later; linked statically, and everything needed to rebuild and
-relink it is in this repository). `wakealign/` is CC BY 4.0 (its README); `geo/` is made from Natural Earth's public
+relink it is in this repository), `mbedtls/` (Apache-2.0 OR GPL-2.0-or-later, `LICENSE` beside it). `wakealign/` is CC BY 4.0 (its README); `geo/` is made from Natural Earth's public
 domain borders.
 
 Nothing of Amazon's is in this repository or covered by this licence: firmware, libraries and wake word models come

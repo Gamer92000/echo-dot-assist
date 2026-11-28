@@ -75,15 +75,22 @@ int       voip_open(unsigned rate, unsigned channels);
  * front end is in call mode (a Voip stream open; AFE.cfg: VoIP echo canceller, residual echo suppressor, noise
  * reduction, comfort noise, AGC to -22 dBFS, a presence EQ, a limiter; no beamformer) and the bare mic otherwise
  * (2026-11-13, donut: speech -20 dBFS against -43 in its pauses, where micAsr had -48 and -65; little left over 4 kHz).
- * 16 kHz mono s16 in 50 ms blocks.  callmic_present: the backend has one (Android's HAL has no such stream: 0).
- * callmic_read: bytes, 0 nothing yet, -1 the stream is gone */
+ * 16 kHz mono s16 in 50 ms blocks.  callmic_present: the backend has one (board.call_mic; Android's: its HAL's call
+ * pipeline as stock's calls record it).  callmic_read: bytes, 0 nothing yet, -1 the stream is gone */
 int       callmic_present(void);
+/* the echo estimate's cap on that path (call.c), dB under what plays (board.call_echo_cap_db: measured, -30 on the
+ * Dots); 0: none, the estimate learns up to 0 dB as on micAsr */
+float     callmic_echo_cap(void);
 int       callmic_open(void);
 int       callmic_read(const void **data);
 void      callmic_close(void);
 int       voip_write(const void *data, size_t len);
 long long voip_queued_us(void);
 void      voip_close(void);
+
+/* Phone calls over Bluetooth (scoaudio.c): 1 where the model's own audio devices are this backend's (the Echo: its
+ * board.sco path), 0 on the PC (audio_file.c: only SCO over HCI, which the tests ask for) */
+int  audio_sco_native(void);
 
 /* Volume, 0..100.  VOL_MAIN: music, sounds and calls (what the keys move); VOL_TTS: the assistant's replies; VOL_MUTE:
  * a global mute the backend keeps (1 = set; nothing of ours sets it, main.c clears it).  vol_read gives fallback when

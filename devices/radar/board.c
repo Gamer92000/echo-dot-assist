@@ -43,4 +43,13 @@ const struct board board = {
      * (from the firmware only, not tried on an Echo 2) */
     .speaker_gain = "HP Driver Gain Volume",
     .speaker_gain_stock = 6,
+    /* micHfp, from the firmware only (2026-11-26): stock's own calls (libpjmedia-audiodev.so) play on Voip and record
+     * micHfp, and AFE.cfg has the "Voice" path (VAEC, Frequency Masking Lite RES, NR, CNG, FB AGC -26 dBFS, +17
+     * constant, +12 at most).  The Dot 5's, taken from its firmware the same way, worked once measured; not measured
+     * here.  The call path wherever a model has one (no setting since 2026-11-26) */
+    .call_mic = 1,
+    /* phone calls (docs/re-hfp.md): biscuit's hardware here (MT8163, Bluetooth integrated behind WMT, WMT_SOC.cfg; the
+     * same audio.primary.mt8163_headless.so, AudDrv_BTCVSD in the kernel and mediatek,audio_bt_cvsd in its device
+     * tree, /dev/ebc media:media): the air's CVSD through /dev/ebc as on biscuit.  From the firmware, not run here */
+    .sco = SCO_EBC,
 };

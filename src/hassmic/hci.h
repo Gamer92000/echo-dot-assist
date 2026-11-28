@@ -2,6 +2,7 @@
 #ifndef HCI_H
 #define HCI_H
 #include <stddef.h>
+#include <stdint.h>
 
 /* ble.c */
 int  hci_cmd(unsigned op, const void *par, unsigned n);    /* waits for Command Complete / Status: HCI status, -1 = gone.
@@ -19,4 +20,28 @@ int  a2dp_upkeep(void);                                     /* HCI commands the 
 int  a2dp_busy(void);                                       /* timers running: upkeep wanted even without events */
 void a2dp_lost(void);                                       /* controller gone: every link with it */
 int  a2dp_streaming(void);                                  /* audio flows: LE scanning pauses, the radio is busy enough */
+
+/* hfp.c, called by a2dp.c: the hands-free unit on a2dp.c's links (LINK: its index of the link) */
+#define HFP_CHANNEL 1                                       /* our RFCOMM server channel, in the SDP record */
+int  hfp_listed(void);                                      /* the feature is on: the SDP record, RFCOMM's PSM, the
+                                                               class of device's telephony bit */
+void hfp_rfcomm_up(int link, uint64_t addr, unsigned cod);  /* an RFCOMM L2CAP channel opened on LINK; COD: the device's
+                                                               class of device, 0 unknown */
+void hfp_rfcomm_rx(int link, const unsigned char *p, size_t n);
+void hfp_rfcomm_down(int link);
+int  hfp_sco_request(uint64_t addr, int esco);              /* a synchronous link asked for: 0 refuse, else the codec
+                                                               to accept it for (scoaudio.h SCO_CVSD, SCO_MSBC) */
+void hfp_sco_up(int status, unsigned handle, uint64_t addr, int air);   /* air: the event's air mode (2 CVSD, 3 transparent) */
+unsigned hfp_sdp_features(void);
+void hfp_sco_unanswered(void);                              /* the accept for the link just asked for was not sent */                            /* the Hands-Free record's SupportedFeatures */
+int  hfp_sco_down(unsigned handle);                         /* 1: it was the call's */
+int  hfp_upkeep(void);                                      /* -1 = controller gone */
+int  hfp_busy(void);
+void hfp_lost(void);
+/* a2dp.c, for hfp.c */
+void a2dp_rfcomm_send(int link, const void *frame, size_t n);    /* on LINK's RFCOMM channel */
+void a2dp_later(unsigned op, const void *par, unsigned n);       /* an HCI command, sent in upkeep */
+unsigned a2dp_link_handle(int link);
+const char *a2dp_link_name(int link);                       /* the device's name, "" until known */
+unsigned a2dp_link_cod(int link);                           /* its class of device, 0 unknown (hfp.c) */
 #endif

@@ -30,6 +30,8 @@ int    wifi_join_result(unsigned id, char *ip, size_t cap, char *why, size_t wca
  *  "address":{"mode":"auto"}|{"mode":"fixed","ip","prefix","gateway","dns":[],"ssid","here"},
  *  "address_result":{"id","state","ip","reason"}|null}: see wifi.c */
 size_t wifi_status_json(char *out, size_t cap);
-/* {"ssid","ip"} of the network the Echo is on, or null: for the settings page's state */
+/* {"ssid","ip","fixed","ap":{"bssid","freq","since","signal"}|null,"moves":[{"at","how","from","from_freq","from_signal",
+ *  "to","to_freq","to_signal","ms"}]} of the network the Echo is on, or null: for the settings page's state.  The access
+ * point and the moves are root's record (scripts/device/roam.sh, issue #234), the signal /proc/net/wireless's */
 size_t wifi_current_json(char *out, size_t cap);
 #endif

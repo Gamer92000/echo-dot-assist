@@ -377,7 +377,7 @@ static inline void pm_put_action(struct pm_w *w, uint32_t id, const struct pm_ac
 struct pm_call_incoming { struct pm_str who; };
 static inline int pm_get_call_incoming(const uint8_t *body, size_t len, struct pm_call_incoming *m) { struct pm_r r_ = { body, body + len, 0 }, *r = &r_; m->who = pm_rstr(r, 64); return r->bad || r->p != r->end ? -1 : 0; }
 static inline void pm_put_call_incoming(struct pm_w *w, uint32_t id, const struct pm_call_incoming *m) { pm_whead(w, PM_CALL_INCOMING, id); pm_wstr(w, m->who, 64); }
-/* CALL_ANSWER (<; call 1): A person here answered the ringing call (the action button, the Show's screen): answer it on the far side, then CALL_LIVE. */
+/* CALL_ANSWER (<; call 1): A person here answered the ringing call (the action button, the Show's screen, or \"<wake word>, answer\" where the owner turned on answer_by_voice): answer it on the far side, then CALL_LIVE. */
 static inline void pm_put_call_answer(struct pm_w *w, uint32_t id) { pm_whead(w, PM_CALL_ANSWER, id); }
 /* CALL_HANGUP (<; call 1): hassmic ended the call (any state): end it on the far side.  No CALL_END is needed after it. */
 struct pm_call_hangup { uint8_t why; };

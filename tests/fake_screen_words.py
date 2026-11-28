@@ -16,10 +16,13 @@ ESPHome API:
   - the screen saver: "Screen sleeps after" and "Clock when idle" told as "ck"; with the clock on and the UI's
     "front 1" (its face in front) the screen is held on (the UI shows the clock when the timeout is up), with an app
     in front it sleeps as before, 0 minutes never
+  - Wi-Fi motion for it: "Motion keeps the screen on", "Motion wakes the screen" told as "mo" with the motion, also
+    under Wyoming; the band wakes a dark screen as motion starts and holds it while it lasts,
+    neither in Do not disturb, nor wakes one the drawer put out (the UI's "slept") until the UI says it is on again
 """
-import asyncio, os, re, sys, tempfile
+import asyncio, os, random, re, subprocess, sys, tempfile
 from aioesphomeapi import VoiceAssistantEventType as Ev, VoiceAssistantTimerEventType as Tm
-from esphome_common import check, until, sync, home_assistant, run, ROOT
+from esphome_common import check, until, sync, home_assistant, run, rx_stat_file, ROOT
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 17201, 17202, 17203, 17204, 17205
 
@@ -29,9 +32,9 @@ runner = os.path.join(ui_dir, "ui.sh")
 open(runner, "w").write(f"#!/bin/sh\nexec {sys.executable} {ROOT}/tests/fake_screen.py --ui {ui_dir}\n"); os.chmod(runner, 0o755)
 
 
-def lines():
+def lines(path=None):
     """the text lines the UI got, the band's rows cut out (band <w> + 4 w bytes)"""
-    try: b = open(UI_LOG, "rb").read()
+    try: b = open(path or UI_LOG, "rb").read()
     except OSError: return []
     out, i = [], 0
     while i < len(b):
@@ -49,6 +52,40 @@ def lines():
 def since(n): return lines()[n:]
 def sleeps(e): return ([int(x) for x in re.findall(r"band: the screen sleeps after (\d+) s", e.log())] or [None])[-1]
 def last(prefix, ls=None): return ([l for l in (ls if ls is not None else lines()) if l.startswith(prefix)] or [None])[-1]
+
+
+async def wyoming_motion(e):
+    """Wi-Fi motion reaches the screen under Wyoming, where no ESPHome link ever comes: main.c starts the poller, which
+    only Home Assistant's first ESPHome link did before (in an Echo of its own: the harness's port probe is such a link)"""
+    st = tempfile.mkdtemp(); ulog = os.path.join(st, "ui.log"); ufifo = os.path.join(st, "ui.fifo"); os.mkfifo(ufifo)
+    rx, logp = os.path.join(st, "rx_stat"), os.path.join(st, "hassmic.log"); rx_stat_file(rx, 112)
+    open(os.path.join(st, "config"), "w").write("wifi_motion=on\n")
+    play = os.path.join(st, "play.raw"); open(play, "wb").close()
+    own = {k: os.path.join(st, n) for k, n in (("HASSMIC_SETTINGS", "settings"), ("HASSMIC_MDNS_FILE", "mdns"), ("HASSMIC_MODELS", "models"),
+                                               ("HASSMIC_ADB_OPEN", "adb-open.root"), ("HASSMIC_LUX", "calibrated_lux"), ("HASSMIC_FAKE_ADDRS", "addrs"),
+                                               ("HASSMIC_FAKE_COUNTRY", "country"))}
+    open(own["HASSMIC_FAKE_ADDRS"], "w").write("127.0.0.1\n"); open(own["HASSMIC_LUX"], "w").write("67\n")
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host-screen", "-P", "wyoming", "-p", "17206", "-z", "17207", "-L", "-W", "0",
+                             "-o", "0", "-a", "0", "-i", "0"],
+                            env=dict(e.env, **own, HASSMIC_STATE=st, HASSMIC_PLAY=play, HASSMIC_FAKE_WIFI=rx, FAKE_UI_LOG=ulog, FAKE_UI_FIFO=ufifo),
+                            stderr=open(logp, "w"))
+    def told(): return last("mo ", lines(ulog))
+    try:
+        ok = await until(lambda: told() == "mo 0 0 0", 10)
+        check(ok, f"Wyoming: the UI told: {told()}")
+        if ok:
+            await asyncio.sleep(1)
+            for _ in range(60):
+                rx_stat_file(rx, random.randint(106, 118)); await asyncio.sleep(0.1)
+                if told() == "mo 1 0 0": break
+            rx_stat_file(rx, 112)
+            ok = told() == "mo 1 0 0"
+            check(ok, f"Wyoming: motion told to the UI: {told()}")
+        if not ok: print("     the Wyoming Echo's log, last lines:\n" + "".join("       " + l for l in open(logp, errors="replace").readlines()[-30:]))
+    finally:
+        proc.terminate()
+        try: proc.wait(5)
+        except subprocess.TimeoutExpired: proc.kill(); proc.wait()
 
 
 async def request(e, ha, heard, reply):
@@ -177,6 +214,58 @@ async def main(e):
     check(await until(lambda: last("ck ") == "ck 0 0" and sleeps(e) == NEVER, 5), f"0 min: never: {sleeps(e)} s")
     e.page.set(screen_sleep_minutes=5)
     check(await until(lambda: sleeps(e) == 300, 5), f"5 min again: {sleeps(e)} s")
+
+    # Wi-Fi motion for the idle screen: "Motion keeps the screen on" and "Motion wakes the screen", off by default, told
+    # as "mo" with whether it moves; motion starting wakes a dark screen (the band), while it lasts the screen is held
+    # (userActivity), and its end starts the timeout; neither in Do not disturb
+    check(e.pv("screen_motion_keep") == 0 and e.pv("screen_motion_wake") == 0, "the motion settings: off by default")
+    e.page.set(wifi_motion="on", screen_motion_keep="on", screen_motion_wake="on")
+    check(await until(lambda: last("mo ") == "mo 0 1 1", 5), f"told: {last('mo ')}")
+    async def walk():
+        for _ in range(60):                                       # someone walking through the path: 6 s at most
+            e.rx_stat(random.randint(106, 118)); await asyncio.sleep(0.1)
+            if last("mo ") == "mo 1 1 1": break
+        e.rx_stat(112)
+    e.rx_stat(112); await asyncio.sleep(1)
+    await walk()
+    check(last("mo ") == "mo 1 1 1", f"motion told to the UI: {last('mo ')}")
+    check(await until(lambda: "band: motion wakes the screen" in e.log() and "band: motion keeps the screen on" in e.log(), 3),
+          "the band wakes the screen and holds it while it moves")
+    check(await until(lambda: last("mo ") == "mo 0 1 1" and "band: motion no more: the timeout from now" in e.log(), 10),
+          f"still again (3 s on the PC): told, the timeout from now: {last('mo ')}")
+    n = e.log().count("band: motion wakes the screen")
+    e.page.set(do_not_disturb="on")
+    await walk()
+    check(last("mo ") == "mo 1 1 1", f"in Do not disturb the UI still hears it: {last('mo ')}")
+    await asyncio.sleep(1.5)
+    check(e.log().count("band: motion wakes the screen") == n and e.log().count("band: motion keeps the screen on") == 1,
+          "in Do not disturb: no wake, nothing held")
+    await until(lambda: last("mo ") == "mo 0 1 1", 10)
+    e.page.set(do_not_disturb="off")
+    # the drawer's Screen off (the UI's "slept 1"): motion leaves that screen dark until the UI says it is on again
+    with open(fifo, "wb") as q: q.write(b"slept 1\n")
+    check(await until(lambda: "screen: put out from the drawer" in e.log(), 5), "the drawer's Screen off heard")
+    n = e.log().count("band: motion wakes the screen")
+    await walk()
+    check(await until(lambda: "band: motion, the screen left dark (put out from the drawer)" in e.log(), 3)
+          and e.log().count("band: motion wakes the screen") == n, "put out from the drawer: motion leaves it dark")
+    await until(lambda: last("mo ") == "mo 0 1 1", 10)
+    with open(fifo, "wb") as q: q.write(b"slept 0\n")
+    check(await until(lambda: "screen: on again after the drawer's Screen off" in e.log(), 5), "the screen on again: heard")
+    await walk()
+    check(await until(lambda: e.log().count("band: motion wakes the screen") == n + 1, 3), "on again since: motion wakes it")
+    await until(lambda: last("mo ") == "mo 0 1 1", 10)
+    await walk()
+    check(last("mo ") == "mo 1 1 1", f"moving again: {last('mo ')}")
+    wobbling = True
+    async def wobble():                                          # on moving while Wi-Fi motion is switched off
+        while wobbling:
+            e.rx_stat(random.randint(106, 118)); await asyncio.sleep(0.1)
+    task = asyncio.ensure_future(wobble())
+    e.page.set(wifi_motion="off")
+    check(await until(lambda: last("mo ") == "mo 0 1 1", 5), f"Wi-Fi motion off while it moves: not moving: {last('mo ')}")
+    wobbling = False; await task; e.rx_stat(112)
+    await wyoming_motion(e)
 
     # the date's language: "Language you speak", told as "lg"; Automatic: the zone's, else none ("-": English)
     e.page.set(speech_language="ro")

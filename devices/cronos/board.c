@@ -87,6 +87,11 @@ const struct board board = {
     .light_sensor = { "/sys/bus/platform/drivers/als_ps/lux" },
     .volume_steps = 100,                                            /* the light band (ring_band.c) shows the level in % */
     /* volume curve not measured on this model yet: the Echo Dot 2's stands in (devices/README.md: how to measure) */
+    /* Amazon's call processing (audio_android.c "a call as stock's calls have it"): stock's calls record
+     * VOICE_COMMUNICATION, which this HAL gives libasp's "Voice" pipeline (getAspPipelineType: 7 -> 1), in
+     * MODE_IN_COMMUNICATION, beside the wake word's HOTWORD (2026-11-26: the Show 5 ran it, the others by the same
+     * firmware code) */
+    .call_mic = 1,
     .volume_curve = board_vol_dot2,
     /* RT5616 / RT5616E boards: checkers' control and stock (audio_device.xml and audio_device_rt5616.xml both set 29,
      * -3 dB, 1.5 dB a step); other amplifiers in speaker_gains above */
@@ -95,4 +100,10 @@ const struct board board = {
     .speaker_gain_steps = 2,
     .speaker_gain_db = 3,
     .speaker_gain_alt = speaker_gains,
+    /* phone calls (docs/re-hfp.md): checkers' path, from the firmware, not run here: the same MT8163 HAL, the same
+     * machine driver links (VOIP_Call_BT_Playback / _Capture: 10 / 11, as checkers'), an MT7668 behind the old
+     * btmtksdio (v0.0.1.00), which leaves the chip's PCM side to us (0xfc72, as on checkers and donut) */
+    .sco = SCO_PCM, .sco_play = "VOIP_Call_BT_Playback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .bt_sco_cmd = (const unsigned char[]){ 0x72, 0xfc, 4, 0x03, 0x10, 0x00, 0x4a },
+    .sco_msbc_chip = 1,             /* not run here: checkers' MT7668 and links, measured there (2026-11-25) */
 };

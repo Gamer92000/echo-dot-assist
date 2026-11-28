@@ -61,6 +61,8 @@
  *   wo <words 0|1> <timers 0|1> <hold s>     the settings "Speech on screen", "Timers on screen", "Speech stays for"
  *   ck <on 0|1> <minutes>          the settings "Clock when idle" and "Screen sleeps after" (0 never): the clock across
  *                                  the screen in place of dark, once nothing happened that long (face.c)
+ *   mo <moving 0|1> <keeps 0|1> <wakes 0|1>   Wi-Fi motion and "Motion keeps the screen on", "Motion wakes the screen":
+ *                                  while it moves no clock (keeps), its start ends the clock (wakes); not in DND
  *   wh <text>, wr <text>, ws <ms|-1>   what was said, the reply, and how long ago the satellite was idle again (-1: not
  *                                  yet); sent together, in that order, whenever one changes
  *   tl <n> <seq>\t<left ms> <total s> <active 0|1> <name>...   the running timers (the name: its length where it has none)
@@ -72,6 +74,8 @@
  *                                  they change
  *   front <0|1>                    1: our own face in front and waiting (no music page, drawer, request, setup): the
  *                                  screen saver's timeout is the UI's, ring_band.c holds the screen on; 0: the screen's own
+ *   slept <0|1>                    1: the drawer's Screen off put the screen out; 0: it is on again (a touch, the power
+ *                                  button, a pattern's wake): until then Wi-Fi motion does not wake it (ring_band.c)
  *   app <package>\t<label>\t<system 0|1> ... apps.    every launchable app, as listed at start (the page's home app choice)
  *   ml <req> <what> <offset> [<arg>]   a list: artists albums playlists tracks radios podcasts audiobooks recent queue,
  *                                  album_tracks artist_albums artist_tracks playlist_tracks podcast_episodes <uri>,
@@ -103,7 +107,7 @@ struct ui_platform {
     /* an image of a list (scene.h "img") at px x px, cut square from its middle: scene_image follows, maybe much later */
     void (*image)(void *ctx, const char *key, int px);
     void (*screenshot)(void *ctx);                                 /* what shows now: scene_backdrop follows, or not */
-    void (*sleep)(void *ctx);                                      /* the screen off */
+    int  (*sleep)(void *ctx);                                      /* the screen off; 1: asked of the system, 0: could not */
     /* the width text would have, uncut (as text draws it; NULL: text's own width stands in, by drawing it) */
     int  (*measure)(void *ctx, const char *s, int px, int bold);
 };

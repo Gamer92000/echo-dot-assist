@@ -8,7 +8,7 @@ bits the front end's records (afemeta.h) as the Echo's micAsr carries them: its 
 again.  This Home Assistant never ends a run by itself (no VAD): what ends one is the Echo."""
 import asyncio, math, os, random, struct, tempfile
 from aioesphomeapi import VoiceAssistantEventType as Ev
-from esphome_common import check, until, sync, home_assistant, run
+from esphome_common import check, until, sync, home_assistant, run, LEAD_IN
 
 PORT, HTTP_PORT, WEB, HTTPS_PORT, SELF_PORT = 17181, 17182, 17183, 17184, 17185
 TALKER, DISHES, OTHERS = 1.5, 1.5, 4.5
@@ -60,6 +60,9 @@ async def main(e):
     e.wake()
     await asyncio.wait_for(va.started.wait(), 5)
     await asyncio.sleep(TALKER + DISHES + OTHERS + 1)
+    # and the audio of that long, not the wall clock's: the PC's capture reads a block, then sleeps 50 ms, so a busy
+    # machine sends less in the time (CI 2026-11-24: the others' frames cut short, their median still on the rise)
+    await until(lambda: len(va.mic) >= LEAD_IN + int((TALKER + DISHES + OTHERS + 1) * 32000), 30)
     check(not va.stopped, f"off: the Echo leaves the end to Home Assistant: {va.stopped}")
     fr = frames(bytes(va.mic)); gap = median([f[0] for f in fr if talker(f)]) - median([f[1] for f in fr if others(f)])
     check(gap < 17, f"off: the gain brings the others up while they are alone, {gap:.1f} dB under the talker (20 in the room)")

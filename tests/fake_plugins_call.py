@@ -13,7 +13,9 @@ says it.  Ended by the action button.  A call coming in rings (the ringtone, the
 live until a person at the Echo answers: the plugin's early CALL_LIVE refused, no room audio; Home Assistant's and
 the card's Answer (actions marked "calls": a token, which only a call going out takes) refused; answered by the
 action button (the ringtone stops at the press, before the far side is in), by the screen; ended by the plugin, by
-"<wake word>, stop", by "hang up" said in a request (Home Assistant never gets that run), by the screen.  After the
+"<wake word>, stop", by "hang up" said in a request (Home Assistant never gets that run), by the screen.  "<wake word>,
+answer": nothing with answer_by_voice off, nothing in a follow-up Home Assistant opened, answered in a run the wake
+word began.  After the
 end the plugin's own copy of the room's socket (a dup() it kept) gets nothing more and reads its end closed.  Busy
 both ways against Drop In, and a Drop In that ends here with a plugin's ring or call right behind it (no wait between)
 never leaves the plugin's call unshown; with Drop In's end in the order before that was fixed
@@ -284,6 +286,45 @@ async def main():
         check(await says("live: 0 (0)", n0), "the screen's Answer answers it")
         ui_say("dropin hangup")
         check(await says("hung up by hassmic: 3", n0), "the screen's End ends it")
+
+        # ---- 5b. "<wake word>, answer" (issue #240).  answer_by_voice off (the default): the words go on to Home
+        # Assistant, it rings on.  On: a follow-up Home Assistant asked for (continue_conversation) answers nothing,
+        # since Home Assistant opens such a run itself; a run this Echo's own wake word began answers it
+        def heard(t):
+            for e, d in ((Ev.VOICE_ASSISTANT_RUN_START, None), (Ev.VOICE_ASSISTANT_STT_START, None), (Ev.VOICE_ASSISTANT_STT_END, {"text": t})):
+                ha.send_voice_assistant_event(e, d)
+        async def wake():
+            k0 = len(starts); proc.send_signal(signal.SIGUSR1)
+            return await until(lambda: len(starts) > k0, 3)
+        check(not any("answer" in k and "voice" in k for k in by), f"answer_by_voice has no entity in Home Assistant: {sorted(k for k in by if 'answer' in k)}")
+        n0, l0 = len(plog()), len(text())
+        await act("ring", who="Una"); check(await says("ring: 0 (0)", n0), "rings again")
+        check(await wake(), "the wake word starts a request while it rings")
+        heard("Answer.")
+        check(await logged("said answer: the call not answered: answering by voice is off", l0), "answer_by_voice off: \"answer\" answers nothing, the log says why")
+        ha.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.5)
+        check((fp.plug(b, "testcall") or {}).get("call") == "ringing" and not any("answered here" in l for l in plog()[n0:]), "... it rings on")
+        b.set(answer_by_voice="on")
+        check(await wake(), "(a request again, the setting on)")
+        k1 = len(starts); heard("What is on today?")
+        ha.send_voice_assistant_event(Ev.VOICE_ASSISTANT_INTENT_END, {"conversation_id": "x", "continue_conversation": "1"})
+        ha.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None)
+        check(await until(lambda: len(starts) > k1, 3), "(Home Assistant's question back: a follow-up run)")
+        l1 = len(text()); heard("Answer.")
+        check(await logged("said answer: the call not answered: this run did not begin with this Echo's own wake word", l1),
+              "on: \"answer\" in a follow-up Home Assistant opened answers nothing")
+        ha.send_voice_assistant_event(Ev.VOICE_ASSISTANT_RUN_END, None); await asyncio.sleep(0.5)
+        check((fp.plug(b, "testcall") or {}).get("call") == "ringing" and not any("answered here" in l for l in plog()[n0:]), "... it rings on")
+        await act("hang_up"); await says("hang up: 0", n0)
+        n0, l0 = len(plog()), len(text())
+        await act("ring", who="Ida"); check(await says("ring: 0 (0)", n0), "rings again")
+        check(await wake(), "(the wake word)")
+        heard("Pick up!")
+        check(await says("answered here", n0) and await logged("testcall: the call answered here (said answer)", l0)
+              and await logged("said answer: the call answered, run cancelled", l0), "on: \"<wake word>, pick up\" answers it, the run cancelled")
+        check(await says("live: 0 (0)", n0), "then live")
+        await act("hang_up"); await says("hang up: 0", n0)
+        b.set(answer_by_voice="off")
 
         # ---- 6. busy the other way: Drop In has the call
         bb.call("POST", "/api/dropin", b"echo-plug")

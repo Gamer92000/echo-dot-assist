@@ -133,10 +133,13 @@ endif
 # How the model's system install writes its SELinux policy (device.conf INSTALL): the Plugins page's warning names the
 # way to run it again (web.c /api/plugins "install_method", docs/plugins.md 2.7)
 INSTALL_METHOD := $(shell sed -n 's/^INSTALL=\([a-z0-9-]*\).*/\1/p' devices/$(DEVICE)/device.conf 2>/dev/null)
+# Whether root's netwatch roams between access points (scripts/device/roam.sh): where it stops the model's wifisvc
+# (device.conf WIFI_SERVICE); the settings page lists the switch there only
+WIFI_ROAMING := $(if $(shell sed -n 's/^WIFI_SERVICE=\([a-z]\)/\1/p' devices/$(DEVICE)/device.conf 2>/dev/null),1,0)
 DEFS    := -DVERSION='"$(VERSION)"' -DBUILD='"$(BUILD)"' -DBUILD_TIME='"$(BUILD_TIME)"' -DREPO='"$(UPDATE_REPO)"' \
            -DPLUGIN_INDEX='"$(PLUGIN_INDEX)"' -DPLUGINS_PUB='"$(PLUGINS_PUB_HEX)"' -DPLUGINS_PUB2='"$(PLUGINS_PUB2_HEX)"' -DPLUGINS_LEAST_INDEX=$(PLUGINS_LEAST_INDEX)LL \
            -DPLUGINS_LEAST_REVOKED=$(PLUGINS_LEAST_REVOKED)LL -DBUILD_EPOCH=$(BUILD_EPOCH)LL $(if $(RELEASE),-DRELEASE) \
-           -DINSTALL_METHOD='"$(INSTALL_METHOD)"'
+           -DINSTALL_METHOD='"$(INSTALL_METHOD)"' -DWIFI_ROAMING=$(WIFI_ROAMING)
 # sdk/: the plugins' wire format (plugmsg.h), the same file their client library has
 CFLAGS  := -O2 -Wall -Wextra -fPIE -Isrc/include -Isdk $(DEFS)
 LDFLAGS := -pie -fuse-ld=lld -Wl,--allow-shlib-undefined -Wl,--unresolved-symbols=ignore-in-shared-libs
@@ -306,6 +309,16 @@ $(OUT)/hciscan: src/tools/hciscan.c
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
 
+# not part of "all": SCO/eSCO over HCI between two Echos (issue #233, see the file)
+$(OUT)/scoprobe: src/tools/scoprobe.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld -lm
+
+# not part of "all": BTCVSD's air bitstream on /dev/ebc (the Dot 2's integrated Bluetooth, issue #233, see the file)
+$(OUT)/ebcprobe: src/tools/ebcprobe.c
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $< -o $@ -pie -fuse-ld=lld
+
 # not part of "all": stands in for the Bluetooth stack on the mixer's A2DP output sockets (see the file)
 $(OUT)/a2dpprobe: src/tools/a2dpprobe.c src/include/aipc_api.h
 	@mkdir -p $(OUT)
@@ -340,8 +353,28 @@ SOUND := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/sound_pryon.c,src/hass
 WHISPER := $(if $(filter %wake_pryon.c,$(WAKE)),src/hassmic/whisper_pryon.c,src/hassmic/whisper_none.c)
 
 RNNOISE := $(addprefix src/third_party/rnnoise/,denoise.c rnn.c rnn_data.c pitch.c kiss_fft.c celt_lpc.c)
+
+# mbedTLS (src/third_party/mbedtls, tools/mbedtls-vendor.sh; issue #236): hassmic's TLS client (tls.c), a library of
+# its own per target, so that its 55 files are compiled once and not with every link of hassmic (each target here
+# compiles all of hassmic's own files in one cc).  AR is the NDK's for the Echo; D: no timestamps (reproducible).
+MBEDTLS_DIR   := src/third_party/mbedtls
+MBEDTLS_C     := $(sort $(wildcard $(MBEDTLS_DIR)/library/*.c))     # (sorted: make before 4.3 does not)
+MBEDTLS_H     := $(wildcard $(MBEDTLS_DIR)/*.h $(MBEDTLS_DIR)/include/*/*.h $(MBEDTLS_DIR)/library/*.h)
+MBEDTLS_INC   := -I$(MBEDTLS_DIR)/include -I$(MBEDTLS_DIR) -DMBEDTLS_CONFIG_FILE='"hassmic_config.h"'
+MBEDTLS_FLAGS := -O2 -fPIE $(MBEDTLS_INC) -I$(MBEDTLS_DIR)/library
+AR_ARM        := $(NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+$(OUT)/mbedtls/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_H)
+	@mkdir -p $(@D)
+	$(CC) $(MBEDTLS_FLAGS) -c $< -o $@
+build/mbedtls-host/%.o: $(MBEDTLS_DIR)/library/%.c $(MBEDTLS_H)
+	@mkdir -p $(@D)
+	cc $(MBEDTLS_FLAGS) -c $< -o $@
+$(OUT)/libmbedtls.a: $(patsubst $(MBEDTLS_DIR)/library/%.c,$(OUT)/mbedtls/%.o,$(MBEDTLS_C))
+	rm -f $@; $(AR_ARM) rcsD $@ $^
+build/libmbedtls-host.a: $(patsubst $(MBEDTLS_DIR)/library/%.c,build/mbedtls-host/%.o,$(MBEDTLS_C))
+	rm -f $@; ar rcsD $@ $^
 HASSMIC := src/hassmic/main.c src/hassmic/wyoming.c src/hassmic/proto_wyoming.c src/hassmic/proto_esphome.c src/hassmic/buttons.c $(RING) $(SCREEN) src/hassmic/ringdesign.c src/hassmic/ringlive.c src/hassmic/musiclight.c src/hassmic/ledq.c \
-           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/sources.c src/hassmic/fwcurl.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
+           src/hassmic/sendspin.c src/hassmic/mass.c src/hassmic/json.c src/hassmic/arb.c src/hassmic/dropin.c src/hassmic/call.c src/hassmic/duck.c src/hassmic/ringstop.c src/hassmic/ble.c src/hassmic/ble_crypto.c src/hassmic/a2dp.c src/hassmic/a2dp_codecs.c src/hassmic/hfp.c src/hassmic/scoaudio.c src/hassmic/cvsd.c src/hassmic/msbc.c src/hassmic/sbc.c src/hassmic/btout.c src/hassmic/ota.c src/hassmic/update.c src/hassmic/sources.c src/hassmic/tls.c src/hassmic/http.c src/hassmic/https.c src/hassmic/adbwifi.c src/hassmic/wifi.c src/hassmic/netaddr.c src/hassmic/improv.c src/hassmic/wifimotion.c src/hassmic/spkgain.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/noise.c src/hassmic/hash.c src/hassmic/sounds.c src/hassmic/soundpack.c src/hassmic/micgain.c src/hassmic/micend.c src/hassmic/afemeta.c src/hassmic/wordtail.c src/hassmic/wakealign.c src/hassmic/micdenoise.c src/hassmic/earsup.c src/hassmic/settings.c src/hassmic/web.c src/hassmic/artifacts.c src/hassmic/dha.c src/hassmic/afe_parcel.c src/hassmic/davs.c src/hassmic/diag.c src/hassmic/clock.c src/hassmic/tz.c src/hassmic/apcountry.c src/hassmic/geo.c build/geo_data.c src/hassmic/statefile.c src/hassmic/volcurve.c src/hassmic/resample.c build/web_assets.c \
            src/hassmic/wake.c src/hassmic/wake_mww.c src/hassmic/mww_features.c src/hassmic/mww_model.c src/hassmic/mww_store.c \
            src/hassmic/plugin.c src/hassmic/plugin_store.c src/hassmic/plugin_fetch.c src/hassmic/plugin_index.c src/hassmic/plugin_net.c src/hassmic/logread.c \
            src/third_party/monocypher.c src/third_party/freeaptx.c $(RNNOISE)
@@ -360,24 +393,24 @@ build/web_assets.c: tools/embed.py $(foreach w,$(WEB),$(firstword $(subst :, ,$(
 
 # SYSLIBS (device.mk): NDK system libraries a backend needs beside the stock ones (-lOpenSLES on checkers): they come
 # with the NDK, so no stubs are needed for them.
-$(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(addprefix $(STOCK)/,$(LIBS))
+$(OUT)/hassmic: $(HASSMIC) $(BOARD) $(AUDIO) $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(OUT)/libmbedtls.a $(addprefix $(STOCK)/,$(LIBS))
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(SYSLIBS) $(addprefix $(STOCK)/,$(LIBS))
+	$(CC) $(CFLAGS) $(MBEDTLS_INC) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) $(OUT)/libmbedtls.a -lm -ldl $(SYSLIBS) $(addprefix $(STOCK)/,$(LIBS))
 
 # PC build for protocol tests: file audio backend, no wake word (SIGUSR1 triggers), fake sound and whisper detection, identity of $(DEVICE).
-build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
+build/hassmic-host: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device build/libmbedtls-host.a
 	@mkdir -p build
-	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isdk -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
+	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isdk -Isrc/hassmic $(MBEDTLS_INC) $(filter %.c,$^) -o $@ build/libmbedtls-host.a -lpthread -lm -ldl -lopus -lz
 
 # The same with a screen whatever $(DEVICE) has (screen.c, the band): tests/fake_screen.py, with a stand-in UI.
-build/hassmic-host-screen: $(filter-out $(RING) $(SCREEN),$(HASSMIC)) src/hassmic/ring_band.c src/hassmic/screen.c $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device
+build/hassmic-host-screen: $(filter-out $(RING) $(SCREEN),$(HASSMIC)) src/hassmic/ring_band.c src/hassmic/screen.c $(BOARD) src/hassmic/audio_file.c src/hassmic/wake_none.c src/hassmic/sound_none.c src/hassmic/whisper_none.c $(HASSMIC_H) build/.device build/libmbedtls-host.a
 	@mkdir -p build
-	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isdk -Isrc/hassmic $(filter %.c,$^) -o $@ -lpthread -lm -ldl -lopus -lz
+	cc -O2 -Wall -Wextra $(DEFS) -Isrc/include -Isdk -Isrc/hassmic $(MBEDTLS_INC) $(filter %.c,$^) -o $@ build/libmbedtls-host.a -lpthread -lm -ldl -lopus -lz
 
 # ARM build with file audio but the device's wake word engine, for running under qemu-arm (tools/qrun.sh).
-$(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
+$(OUT)/hassmic-qemu: $(HASSMIC) $(BOARD) src/hassmic/audio_file.c $(WAKE) $(SOUND) $(WHISPER) $(HASSMIC_H) $(OUT)/libmbedtls.a $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) -lm -ldl $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
+	$(CC) $(CFLAGS) $(MBEDTLS_INC) -Isrc/hassmic $(filter %.c,$^) -o $@ $(LDFLAGS) $(OUT)/libmbedtls.a -lm -ldl $(call STOCK_LIBS,libpryon.so libopus.so libz.so)
 
 # A stand-in wake word plugin for tests/fake_plugins.py, built for the PC as a plugin is built for an Echo: static,
 # against the SDK's client (sdk/hmplugin.c)
@@ -417,11 +450,11 @@ host-tests: $(HOST_TESTS)
 host: $(HOST_TESTS) $(OUT)/hassmic-qemu
 
 # Building blocks of the Sendspin client, checked against reference implementations (aiohttp, python noiseprotocol).
-UNIT := src/hassmic/hash.c src/hassmic/ws.c src/hassmic/net.c src/hassmic/logread.c src/hassmic/noise.c src/third_party/monocypher.c
+UNIT := $(MBEDTLS_INC) src/hassmic/hash.c src/hassmic/ws.c src/hassmic/tls.c src/hassmic/net.c src/hassmic/logread.c src/hassmic/noise.c src/third_party/monocypher.c build/libmbedtls-host.a
 # One target per test, so make -j unit runs them side by side (tests/run.py does: most of them wait or compile).
-UNIT_TESTS := hash ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs \
+UNIT_TESTS := hash http ws noise ble_crypto micgain micend afemeta wordtail wakealign wifimotion spkgain tz apcountry geo statefile ledq micdenoise earsup dha_jwt a2dp_codecs cvsd msbc scoaudio \
 	sbc web_crypto web_tar web_soundpack web_matrix web_loudness ring_pack mww blueprint_dropin buttons buttons_privacy buttons_grab afe_parcel lux ring_band ringlive ringviz sounds wifictl ringbar volcurve band_map setup_wipe setup_fixed firmware kiosk backlight alexaoff \
-	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall
+	screen ui touch json pb uninstall_boot sysinstall_aligners resample mixsteer fork_release plugrun plugmsg hmplugin plugin_store plugin_broker plugin_index logread ha_names call dropin web_browse web_rows web_wall netio
 unit: $(addprefix unit-,$(UNIT_TESTS))
 # the plugins' launcher on the PC: the protocol, the sandbox as far as x86_64 shows it (a static test program)
 # and both seccomp programs, ARM's too, run in an interpreter against the table they were made from
@@ -512,14 +545,19 @@ unit-plugmsg:
 	python3 tools/mkplugmsg.py --def tests/unit/plugmsg_scopes/demo.def --vectors build/plugmsg_demo/vectors
 	python3 tools/mkplugmsg.py --def tests/unit/plugmsg_scopes/demo.def --c build/plugmsg_demo/vectors.c
 	cc -O0 -g -Wall -Wextra -Ibuild/plugmsg_demo build/plugmsg_demo/vectors.c -o build/plugmsg_demo/vectors_test && build/plugmsg_demo/vectors_test build/plugmsg_demo/vectors
-unit-hash:
+unit-hash: build/libmbedtls-host.a
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/hash_test.c $(UNIT) -lpthread -o build/hash_test && build/hash_test
-unit-ws:
+# http.c and tls.c (issue #236) against Python's servers: TLS 1.3 and 1.2 alone, certificates, bodies, redirects, times
+unit-http: build/libmbedtls-host.a
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic -Isrc/include $(MBEDTLS_INC) tests/unit/http_test.c src/hassmic/http.c src/hassmic/tls.c src/hassmic/net.c src/hassmic/logread.c build/libmbedtls-host.a -lpthread -o build/http_test
+	.venv/bin/python tests/unit/http_test.py build/http_test
+unit-ws: build/libmbedtls-host.a
 	@mkdir -p build
 	cc -O2 -Wall -D_GNU_SOURCE -Isrc/hassmic -Isrc/include -include stdlib.h tests/unit/ws_test.c $(UNIT) -lpthread -o build/ws_test
 	.venv/bin/python tests/unit/ws_ref.py build/ws_test
-unit-noise:
+unit-noise: build/libmbedtls-host.a
 	@mkdir -p build
 	cc -O2 -Wall -Isrc/hassmic -Isrc/include tests/unit/noise_test.c $(UNIT) -lpthread -o build/noise_test
 	.venv/bin/python tests/unit/noise_ref.py build/noise_test
@@ -562,6 +600,10 @@ unit-geo: build/geo_data.c
 unit-statefile:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/statefile_test.c src/hassmic/statefile.c -Wl,--wrap=fsync,--wrap=rename -lpthread -o build/statefile_test && build/statefile_test
+# an accept() error never ends a server: the listener kept, or opened again (issue #241)
+unit-netio:
+	@mkdir -p build
+	cc -O2 -Wall -Wextra -Isrc/include tests/unit/netio_test.c -Wl,--wrap=accept -o build/netio_test && build/netio_test
 unit-ledq:
 	@mkdir -p build
 	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ledq_test.c src/hassmic/ledq.c -lpthread -o build/ledq_test && build/ledq_test
@@ -663,7 +705,7 @@ unit-ringlive:
 	python3 tests/unit/ringlive_conf.py
 unit-ring_band:
 	@mkdir -p build
-	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/afe_parcel.c src/hassmic/screen_none.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
+	cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/ring_band_test.c src/hassmic/ring_band.c src/hassmic/afe_parcel.c src/hassmic/ringdesign.c src/hassmic/statefile.c -lm -lpthread -o build/ring_band_test && build/ring_band_test
 # volcurve.c with each model's board.c: each names its curve, measured on it or the Dot 2's as a stand-in (a todo line)
 unit-volcurve:
 	@mkdir -p build
@@ -671,6 +713,19 @@ unit-volcurve:
 	  cc -O2 -Wall -Wextra -Isrc/hassmic tests/unit/volcurve_test.c src/hassmic/volcurve.c devices/$$d/board.c -lm -o build/volcurve_$$d && build/volcurve_$$d || exit 1; done
 # Sendspin's rate (resample.c): the resampler against the true sine, chunk sizes, its lag; the servo against a model
 # of the Echo Show 5's queue with its clock off
+# CVSD (cvsd.c, the Dot 2's phone calls): tones through the coder, the filters' pass and stop bands, and the
+# bitstream the Echo Dot 5's chip sent of a 500 Hz tone (testdata/hfp/, read off the Dot 2's /dev/ebc) decoding as it
+unit-cvsd:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic tests/unit/cvsd_test.c src/hassmic/cvsd.c -lm -o build/cvsd_test && build/cvsd_test testdata/hfp/ebc-cannoli-500hz.raw
+# mSBC's framing on the air (msbc.c, wideband phone calls): pieces of any length, losses, a broken frame, a late join
+unit-msbc:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic tests/unit/msbc_frame_test.c src/hassmic/msbc.c src/hassmic/sbc.c -lm -o build/msbc_frame_test && build/msbc_frame_test
+# scoaudio.c finds a call's PCM devices by name as each measured Echo lists them (testdata/hfp/asound-pcm-*.txt)
+unit-scoaudio:
+	@mkdir -p build
+	cc -O1 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize-recover=all -Isrc/hassmic -Isrc/include tests/unit/scoaudio_test.c src/hassmic/cvsd.c src/hassmic/msbc.c src/hassmic/sbc.c -lm -lpthread -o build/scoaudio_test && build/scoaudio_test
 # a call's audio (call.c): the claim, and the media without a codec a plugin's call has (CALL_CODEC_PCM): frames out
 # gated and gain-corrected, in by number, a missing one faded, against a Voip stream that plays in real time
 unit-call:

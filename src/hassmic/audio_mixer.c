@@ -183,10 +183,11 @@ long long voip_queued_us(void) { return s_queued_us(&voip); }
 int       voip_write(const void *data, size_t len) { return s_write(&voip, data, len); }
 void      voip_close(void) { s_close(&voip); }
 
-/* micHfp: a stream of its own beside micAsr (the mixer gives each type to one client).  Only where it was measured to
- * carry the call path (board.call_mic): the Echo 2 and the Echo Dot 5 have one in AFE.cfg, untried */
+/* micHfp: a stream of its own beside micAsr (the mixer gives each type to one client), where the board says it carries
+ * the call path (board.call_mic: the Dot 2, 3 and 5 measured, the Echo 2 from its firmware) */
 static MixerHandle callmic; static int callmic_held;
 int callmic_present(void) { return board.call_mic; }
+float callmic_echo_cap(void) { return board.call_echo_cap_db; }
 int callmic_open(void)
 {
     if (callmic) return 0;
@@ -357,3 +358,5 @@ void audio_a2dp_reset(void)
     core_run(get, out, sizeof out);
     if (!strncmp(out, "BT##", 4)) audio_a2dp_route(0, 0, "");
 }
+
+int audio_sco_native(void) { return 1; }

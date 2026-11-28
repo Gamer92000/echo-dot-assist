@@ -356,7 +356,70 @@ static size_t current(char *o, size_t cap, int full)
                             e, h, st, ip, mask, gw, dl);
 }
 
-size_t wifi_current_json(char *out, size_t cap) { size_t n = current(out, cap, 0); return n < cap ? n : cap - 1; }
+/* ---------------------------------------------------------------- roaming (issue #234) */
+
+/* a BSSID as wpa_supplicant prints it: six pairs of lower-case hex digits */
+static int bssid_ok(const char *s)
+{
+    for (int i = 0; i < 17; i++) if (i % 3 == 2 ? s[i] != ':' : !isxdigit((unsigned char)s[i]) || isupper((unsigned char)s[i])) return 0;
+    return s[17] == 0;
+}
+
+/* The signal now, from /proc/net/wireless (anyone may read it): the interface's level in dBm, which the MediaTek drivers
+ * give as an unsigned byte (199. = -57; the Dot 2, 2026-11-25), others signed.  0 when there is none */
+static int signal_now(void)
+{
+    const char *p = getenv("HASSMIC_PROC_WIRELESS");          /* tests */
+    char line[200], ifn[24]; float link, level; unsigned st;
+    FILE *f = fopen(p ? p : "/proc/net/wireless", "r");
+    if (!f) return 0;
+    int dbm = 0;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, " %23[^:]: %x %f %f", ifn, &st, &link, &level) == 4 && !strcmp(ifn, "wlan0")) {
+            int v = (int)level;
+            if (v > 63) v -= 256;
+            if (v < 0 && v > -128) dbm = v;
+            break;
+        }
+    fclose(f);
+    return dbm;
+}
+
+/* root's record (scripts/device/roam.sh): "ap <bssid> <freq> <since>", then "moved <epoch> <how> <from> <freq> <dBm>
+ * <to> <freq> <dBm> <ms|->" lines, newest last.  Only what reads as that goes into the JSON */
+static size_t roam_json(char *o, size_t cap)
+{
+    char line[200], b[24], tb[24], how[8], ms[12]; long long at; int fq, tf, fs, ts; size_t n = 0, moves = 0;
+    FILE *f = out_open("roam");
+    if (!f) return (size_t)snprintf(o, cap, ",\"ap\":null,\"moves\":[]");
+#define PUT(...) do { if (n < cap) n += (size_t)snprintf(o + n, cap - n, __VA_ARGS__); } while (0)
+    PUT(",\"ap\":");
+    if (fgets(line, sizeof line, f) && sscanf(line, "ap %23s %d %lld", b, &fq, &at) == 3 && bssid_ok(b) && fq > 2000 && fq < 8000) {
+        int sig = signal_now();
+        PUT("{\"bssid\":\"%s\",\"freq\":%d,\"since\":%lld", b, fq, at);
+        if (sig) PUT(",\"signal\":%d", sig);
+        PUT("}");
+    } else PUT("null");
+    PUT(",\"moves\":[");
+    while (n < cap && fgets(line, sizeof line, f))
+        if (sscanf(line, "moved %lld %7s %23s %d %d %23s %d %d %11s", &at, how, b, &fq, &fs, tb, &tf, &ts, ms) == 9 && bssid_ok(b) && bssid_ok(tb)
+            && (!strcmp(how, "roam") || !strcmp(how, "ap") || !strcmp(how, "self")) && fs > -128 && fs < 0 && ts > -128 && ts < 0)
+            PUT("%s{\"at\":%lld,\"how\":\"%s\",\"from\":\"%s\",\"from_freq\":%d,\"from_signal\":%d,"
+                                  "\"to\":\"%s\",\"to_freq\":%d,\"to_signal\":%d,\"ms\":%d}", moves++ ? "," : "", at, how, b, fq, fs, tb, tf, ts,
+                                  strcmp(ms, "-") ? atoi(ms) : -1);
+    fclose(f);
+    PUT("]");
+#undef PUT
+    return n;
+}
+
+size_t wifi_current_json(char *out, size_t cap)
+{
+    size_t n = current(out, cap, 0);
+    /* on a network: the access point and the last moves between those of the network, closing the object current() made */
+    if (n < cap && n > 1 && out[n - 1] == '}') { n--; n += roam_json(out + n, cap - n); if (n < cap) n += (size_t)snprintf(out + n, cap - n, "}"); }
+    return n < cap ? n : cap - 1;
+}
 
 
 /* what the network asks of a client, from wpa_supplicant's flags: [WPA2-PSK-CCMP][ESS], [RSN-SAE-CCMP], [WEP], ... */

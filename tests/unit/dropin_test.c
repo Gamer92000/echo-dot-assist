@@ -101,6 +101,7 @@ int voip_open(unsigned rate, unsigned channels) { (void)rate; (void)channels; re
 int voip_write(const void *data, size_t len) { (void)data; (void)len; usleep(20000); return 0; }
 long long voip_queued_us(void) { return 0; }
 void voip_close(void) {}
+float callmic_echo_cap(void) { return -30; }
 int callmic_present(void) { return 0; }
 int callmic_open(void) { return -1; }
 int callmic_read(const void **data) { (void)data; return -1; }

@@ -22,7 +22,7 @@ void update_check(void);                    /* look now */
 void update_install(void);                  /* download and install the newest on the channel, if it is not what runs */
 void update_get(struct update_state *s);
 int  update_probe(char *err, size_t cap);         /* reaches GitHub? 0, or -1 with why; blocks up to 15 s, no locks held */
-/* One GET through the same libcurl and sockets, for plugin_fetch.c (the plugin index, another Echo's revocation
+/* One GET through the same client (http.c) and sockets, for plugin_fetch.c (the plugin index, another Echo's revocation
  * list): update.c says how; "hassmic" as its User-Agent, no version; redirects to HTTPS only.  SECS: all the time it
  * has.  0, or -1 and why */
 int  update_fetch(const char *url, size_t max, long secs, const volatile int *stop, unsigned char **data, size_t *len, char *err, size_t cap);

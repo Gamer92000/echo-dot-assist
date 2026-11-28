@@ -641,6 +641,11 @@ psk_only() {
     echo "netwatch: network$fixed cut back to WPA-PSK, associating again"
 }
 
+# Roaming between the access points of one network (issue #234): scripts/device/roam.sh, roam_look below.  A copy
+# without it (an update brought main.sh alone, never so far) does without
+roam_look() { :; }
+[ -f $D/roam.sh ] && . $D/roam.sh
+
 # Android's framework, told things by broadcast (device.conf ANDROID_BROADCASTS, "action/extra=true|false" each, sent as
 # booleans): what they set lives in system_server's memory only, so they go again whenever it is a new one (its pid,
 # once boot completed).  Checkers: Amazon's WifiDiagsUtil (fosservices) tests the link against Amazon's captive portal
@@ -743,6 +748,7 @@ netwatch() {
                 { start $WIFI_SERVICE; echo "netwatch: no address for 60 s, $WIFI_SERVICE started"; miss=0; }
         fi
         psk_only
+        roam_look
         # a fixed address (issue #191, wifi.sh keep): wifisvc's dhcpcd-wlan0 (a boot, a lost network) gives way to it;
         # the Dots only (Android's framework keeps it with the network), and only where one is set or still runs.  Not
         # while wifisvc runs: it starts its dhcpcd again (Dot 2, 2026-11-24: set at boot+34 s, DHCP again, set once
@@ -912,6 +918,12 @@ ota_watch() {
                 while [ -d $WIFI/lock ] && [ -n "$(cat $WIFI/lock/pid 2>/dev/null)" ] && kill -0 "$(cat $WIFI/lock/pid)" 2>/dev/null; do sleep 1; done   # a switch running ends first
                 [ -f $D/wifi.sh ] && sh $D/wifi.sh forget 2>&1 | stamped
                 st=/data/local/hassmic/state
+                # a call the stopped hassmic left in Android's call mode (audio_android.c's state/call-mode): back to
+                # MODE_NORMAL before its mark goes with state/ (media.audio_policy setPhoneState: 3 on Android 7, 4 on 9)
+                if [ -n "$ANDROID" ] && [ -f $st/call-mode ]; then
+                    [ "$(getprop ro.build.version.sdk)" -ge 28 ] 2>/dev/null && tx=4 || tx=3
+                    service call media.audio_policy $tx i32 0 > /dev/null 2>&1 && say "factory reset: Android's call mode left by a call set back"
+                fi
                 for f in $st/* $st/.[!.]*; do [ -e "$f" ] || [ -L "$f" ] && rm -rf "$f"; done
                 rm -f $PAGE_PUB                     # (the settings page's Sources: gone with state/sources)
                 rm -f /data/misc/avahi/services/hassmic.service

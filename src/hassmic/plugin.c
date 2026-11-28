@@ -3032,14 +3032,16 @@ int plugin_call_button(void)
     return r;
 }
 
-int plugin_call_answer(void)
+int plugin_call_answer_by(const char *how)
 {
     int r = 0;
     pthread_mutex_lock(&bl);
-    if (pc.state == C_RINGING) { answer_here("the screen"); r = 1; }
+    if (pc.state == C_RINGING) { answer_here(how); r = 1; }
     pthread_mutex_unlock(&bl);
     return r;
 }
+
+int plugin_call_answer(void) { return plugin_call_answer_by("the screen"); }
 
 int plugin_call_hangup(int why)
 {

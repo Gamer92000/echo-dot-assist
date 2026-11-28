@@ -40,16 +40,37 @@ long long voip_queued_us(void)
     return q > 0 ? q : 0;
 }
 void voip_close(void) {}
-int callmic_present(void) { return 0; }
-int callmic_open(void) { return -1; }
-int callmic_read(const void **data) { (void)data; return -1; }
+static void tone(int16_t *out, int n, double hz, double dbfs, long *phase);
+/* The call microphone: none, but for H1 (hfp_on): micHfp as a Dot's call path gives it, in 50 ms blocks at its pace,
+ * the far end already taken out by Amazon's canceller: this side's voice (a 500 Hz tone at -25 dBFS) while near_at()
+ * says it talks, the room at -85 otherwise */
+static atomic_int hfp_on;
+static long long hfp_t0;                              /* H1's start (now_us) */
+static int (*near_at)(long long ms), (*echo_at)(long long ms);
+static long long hfp_next;
+float callmic_echo_cap(void) { return -30; }
+int callmic_present(void) { return atomic_load(&hfp_on); }
+int callmic_open(void) { if (!atomic_load(&hfp_on)) return -1; hfp_next = now_us(); return 0; }
+int callmic_read(const void **data)
+{
+    static int16_t b[800]; static long ph;
+    if (!atomic_load(&hfp_on)) return -1;
+    hfp_next += 50000;
+    long long w = hfp_next - now_us(); if (w > 0) usleep((useconds_t)w);
+    long long ms = (now_us() - hfp_t0) / 1000;
+    if (near_at && near_at(ms)) tone(b, 800, 500, -25, &ph);
+    else if (echo_at && echo_at(ms)) tone(b, 800, 300, -36, &ph);   /* what the canceller left of the far end: 28 dB under */
+    else for (int i = 0; i < 800; i++) b[i] = (int16_t)(rand() % 3 - 1);
+    *data = b;
+    return (int)sizeof b;
+}
 void callmic_close(void) {}
 void core_call_listen(int on) { (void)on; }
 int core_own_sound(void) { return 0; }
 int core_muted(void) { return 0; }
 
 /* ---- what the media sends */
-#define SENT_MAX 400
+#define SENT_MAX 800
 static struct { uint32_t seq; size_t len; int16_t pcm[CALL_FRAME]; } sent[SENT_MAX];
 static atomic_int nsent;
 static void on_send(const uint8_t *frame, size_t len, uint32_t seq, void *arg)
@@ -78,6 +99,24 @@ static void tone(int16_t *out, int n, double hz, double dbfs, long *phase)
 /* a frame of one value, and whether one such frame played */
 static void fill(int16_t *f, int v) { for (int i = 0; i < CALL_FRAME; i++) f[i] = (int16_t)v; }
 static int has(int v) { int n = atomic_load(&nplayed), c = 0; for (int i = 0; i < n; i++) c += played[i] == v; return c >= CALL_FRAME; }
+
+/* H1's script: rounds of H1_ROUND_MS, the far end from their start for H1_FAR_MS, this side from H1_GAP_MS after that */
+#define H1_ROUNDS 4
+#define H1_ROUND_MS 2500
+#define H1_FAR_MS 1000
+#define H1_GAP_MS 300
+#define H1_NEAR_MS 1000
+static int h1_near(long long ms)
+{
+    long long t = ms % H1_ROUND_MS;
+    return ms / H1_ROUND_MS < H1_ROUNDS && t >= H1_FAR_MS + H1_GAP_MS && t < H1_FAR_MS + H1_GAP_MS + H1_NEAR_MS;
+}
+
+static int h2_echo(long long ms)
+{
+    long long t = ms % H1_ROUND_MS;
+    return ms / H1_ROUND_MS < 2 && t >= 100 && t < H1_FAR_MS + 300;
+}
 
 int main(void)
 {
@@ -253,6 +292,52 @@ int main(void)
       for (int i = 0; n && i < CALL_FRAME; i++) neg += sent[0].pcm[i] < 0;
       CHECK(n == 1 && neg == 0, "W5: the next call's first frame is its own room only (%d frames, %d samples of the call before)", n, neg);
       call_end(g); call_release(CALL_DROPIN); }
+    /* ---- H1 (issue #233): micHfp, a far end that plays loud (-8 dBFS, as a phone's on a Dot 5) and this side
+     * answering 300 ms after each of its sentences.  micHfp's AGC puts this side near the playback's level, and the
+     * echo estimate of micAsr's kind took each reply's first frames for echo, rose to its cap and kept every quick
+     * reply ducked by SUPPRESS_HFP_DB (a user's traces: 7..36 % passed within 1 s of the far end).  Now: capped well
+     * under what plays, and a reply passes from its third frame on */
+    { int16_t f[CALL_FRAME]; long ph = 0; int g, talk = 0, full = 0, late = 0;
+      atomic_store(&nsent, 0); atomic_store(&hfp_on, 1);
+      near_at = h1_near;
+      call_claim(CALL_PLUGIN); hfp_t0 = now_us(); g = call_begin(CALL_PLUGIN, CALL_CODEC_PCM, on_send, NULL);
+      for (int r = 0; r < H1_ROUNDS; r++) {
+          for (int k = 0; k < H1_FAR_MS / 20; k++) {         /* the far end's sentence, at the call's pace */
+              tone(f, CALL_FRAME, 300, -8, &ph); call_rx(g, (uint32_t)(r * 1000 + k), (const uint8_t *)f, CALL_PCM_BYTES);
+              long long w = hfp_t0 + ((long long)r * H1_ROUND_MS + (k + 1) * 20) * 1000 - now_us(); if (w > 0) usleep((useconds_t)w);
+          }
+          long long w = hfp_t0 + (long long)(r + 1) * H1_ROUND_MS * 1000 - now_us(); if (w > 0) usleep((useconds_t)w);
+      }
+      call_end(g); call_release(CALL_PLUGIN); atomic_store(&hfp_on, 0);
+      /* the frames of this side's voice (the room and the far end's echo are 40 dB under), past the first round, whose
+       * estimate starts empty: at full level (-25 dBFS) or ducked by 12 dB */
+      int n = atomic_load(&nsent), seen = 0;
+      for (int i = 0; i < n; i++) {
+          double l = db(sent[i].pcm, CALL_FRAME);
+          if (l < -45) continue;
+          if (++seen <= H1_NEAR_MS / 20) continue;          /* the first reply */
+          talk++; full += l > -27; late += l > -27 ? 0 : 1;
+      }
+      CHECK(talk > 100 && full >= talk * 85 / 100, "H1: micHfp, a loud far end, replies 300 ms after it: %d of %d frames of them at full level (%d ducked)", full, talk, late);
+      usleep(100000);
+      /* H2: no reply, but what the canceller left of the far end in micHfp (28 dB under its playback, from 100 ms after
+       * it plays until 300 ms after it stopped): still not this side talking, ducked */
+      int leaked = 0, echoed = 0;
+      atomic_store(&nsent, 0); near_at = NULL; echo_at = h2_echo; atomic_store(&hfp_on, 1);
+      call_claim(CALL_PLUGIN); hfp_t0 = now_us(); g = call_begin(CALL_PLUGIN, CALL_CODEC_PCM, on_send, NULL);
+      for (int r = 0; r < 2; r++) {
+          for (int k = 0; k < H1_FAR_MS / 20; k++) {
+              tone(f, CALL_FRAME, 300, -8, &ph); call_rx(g, (uint32_t)(r * 1000 + k), (const uint8_t *)f, CALL_PCM_BYTES);
+              long long w = hfp_t0 + ((long long)r * H1_ROUND_MS + (k + 1) * 20) * 1000 - now_us(); if (w > 0) usleep((useconds_t)w);
+          }
+          long long w = hfp_t0 + (long long)(r + 1) * H1_ROUND_MS * 1000 - now_us(); if (w > 0) usleep((useconds_t)w);
+      }
+      call_end(g); call_release(CALL_PLUGIN); atomic_store(&hfp_on, 0); echo_at = NULL;
+      n = atomic_load(&nsent);
+      for (int i = 0; i < n; i++) { double l = db(sent[i].pcm, CALL_FRAME); echoed += l > -60; leaked += l > -40; }
+      CHECK(echoed > 50 && leaked <= echoed / 10, "H2: an echo left in micHfp 28 dB under the far end stays ducked (%d of %d frames at its level)", leaked, echoed);
+      usleep(100000); }
+
     printf("call: %s\n", fails ? "FAILED" : "all good");
     return fails != 0;
 }

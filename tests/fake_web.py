@@ -546,6 +546,7 @@ async def one_wait():
               and "withdrawn" not in text(),
               "...the adb wait is as it was: still armed, the ring never went off, and the page is told what the press serves")
         went = await press(); await until(lambda: os.path.exists(adb_req))
+        await until(lambda: "adb over Wi-Fi approved with the button" in text(), 3)     # (the log: through its reader process)
         check(not went and os.path.exists(adb_req) and "adb over Wi-Fi approved with the button" in text() and approved() == 1 and out(o),
               "the press opens adb and approves nobody")
         a = o.ask(); went = await press()
@@ -568,6 +569,7 @@ async def one_wait():
         check(r == {"adb": "waiting", "holds": "adb"} and o.ask().get("why") == "busy", "...so the approved browser's next ask (the page asks by itself then) is armed, and the stranger cannot take the button before it")
         # "off": only the browser that armed the wait withdraws it
         r = json.loads(x.call("POST", "/api/adb", b"off")[2])
+        await until(lambda: text().count("adb request withdrawn") >= 1, 3)    # (the log comes through its reader process: after the answer)
         check(r["adb"] == "closed" and text().count("adb request withdrawn") == 1 and o.ask().get("why") == "busy",
               "its owner's own \"off\" ends that wait (and strangers are kept back after it)")
         await asyncio.sleep(max(0, ta + 6.2 - time.monotonic()))            # (a wait withdrawn: its whole time and the quiet time, as its page promised)
@@ -586,6 +588,7 @@ async def one_wait():
         await asyncio.sleep(0.5)
         proc.kill(); proc.wait(); proc = subprocess.Popen(proc.args, env=env, stderr=open(log, "a")); wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
         n0 = approved(); st = Browser(WEB2); a = st.ask(); went = await press()
+        await until(lambda: "something waited for the action button when hassmic last ended" in text(), 3)
         check(a["login"] == "refused" and a.get("why") == "busy" and 3 <= a.get("retry_s", 0) <= 6 and went and approved() == n0 and out(st) and "something waited for the action button when hassmic last ended" in text(),
               f"hassmic restarted while it waited: a stranger's first ask is not armed, and the press on its way lets nobody in ({a})")
         got = await asking(st, 1.0)
@@ -605,6 +608,7 @@ async def one_wait():
         noid = dict(env, HASSMIC_BOOT_ID=os.path.join(state, "no-such-file"))
         proc.kill(); proc.wait(); proc = subprocess.Popen(proc.args, env=noid, stderr=open(log, "a")); wait_port(PORT2, WEB2); await asyncio.sleep(0.3)
         own = Browser(WEB2); t5 = time.monotonic()
+        await until(lambda: "this boot's id cannot be read" in text(), 3)
         check(own.login() == "waiting" and text().count("this boot's id cannot be read") == 1 and open(os.path.join(state, "web_wait")).read().startswith("- "),
               "the boot's id cannot be read: said in the log, a login is armed as ever (what the other boot left holds nobody), and the file names no boot")
         await asyncio.sleep(0.5)
@@ -663,6 +667,7 @@ async def ask_rate():
         check(a.ask(src="127.0.0.2")["login"] == "waiting" and not dark(), "once that contest is over the first browser is armed anew")
         n0 = text().count("a second browser asked")
         over = o.ask(src="127.0.0.7"); own = a.ask(src="127.0.0.2")
+        await until(lambda: text().count("a second browser asked") >= n0 + 1, 3)
         check(over.get("why") == "rate" and dark() and own.get("why") == "contested" and text().count("a second browser asked") == n0 + 1,
               f"another browser's ask over the count: refused for the count, and it still contests the login that waits: the ring dark, its browser told ({over}, {own})")
         for _ in range(4): o.ask(src="127.0.0.7")

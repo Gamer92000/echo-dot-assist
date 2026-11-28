@@ -13,7 +13,7 @@ through the reverse-engineered C API of `libmixerAPI.so` and speaks the ESPHome 
 Docs: `README.md` (short user-facing overview with figures; every feature in detail in `docs/GUIDE.md`, security model in
 `docs/SECURITY.md`; `docs/WINDOWS.md` the Echo Dot 2 from Windows for beginners; figures are CeTZ sources in `docs/img/src/`, rendered light+dark by `tools/figures.sh`; install instructions per model in `devices/<codename>/README.md`, guided by
 `scripts/setup.sh`; every Echo on Fire OS or Vega OS and its status in `devices/MODELS.md`), `DEVELOPMENT.md` (architecture, layout, tests, contributing), `PLAN.md` (phases, open issues, every measurement), `CHANGELOG.md`
-(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
+(user-visible changes by date), `docs/` (reverse-engineering findings: `FINDINGS.md`, `re-platform.md`, `re-pryon.md`, `re-aed.md`, `re-whisper.md`, `re-vad.md`, `re-a2dp-source.md`, `re-hfp.md` (phone calls over Bluetooth: where each chip puts a call's audio), `re-davs-login.md`, `wake-word-end.md` (where the request starts after the wake word: measurements on the speech
 corpus, tables generated into `wake-word-end/`), `re-checkers.md`, `re-athena.md`,
 `sendspin-digest.md`, `kiosk-satellite.md`: Kiosk Satellite next to hassmic on the Shows).
 
@@ -68,6 +68,12 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # (_join, _rounds, _kiosk, _window, _afe.py beside it; tests/arbecho.py)
 .venv/bin/python tests/fake_ha_dropin.py      # Drop In between two Echos: call, answer, hang-up paths, refusals, lost peer,
                                              # the ringtone at the sounds volume (HASSMIC_EARCONS: stand-in stock sounds)
+.venv/bin/python tests/fake_hfp.py            # phone calls over Bluetooth (hfp.c): a phone behind a fake controller (pty,
+                                             # HASSMIC_BT_DEV): SDP, RFCOMM, the AT exchange, ring, answer, end, dial, the
+                                             # handset and "take it here", do not disturb, the audio both ways as SCO
+                                             # data over HCI (HASSMIC_SCO=hci); remote volume, a second call (+CCWA,
+                                             # CHLD, +CLCC answered from the fake's call list); codec negotiation and
+                                             # mSBC both ways (sbcenc/sbcdec -m); the feature off
 .venv/bin/python tests/blueprint_dropin.py    # the Drop In voice blueprint against stand-ins of HA's registries, states,
                                              # actions and template engine: renamed ids, other devices, failures, replies
 .venv/bin/python tests/ha_real_end.py         # the Echo's end of audio in a real Home Assistant (stand-in STT and TTS as a
@@ -104,6 +110,8 @@ aioesphomeapi, wyoming, aiosendspin, noiseprotocol, aiohttp):
                                              # the fixed address (issue #191): refusals, tried, kept once reached, back,
                                              # netwatch's keep (WIFI_TCP: a stand-in /proc/net/tcp)
 .venv/bin/python tests/fake_wifi_join.py      # checkers' setup join (wifi-join.sh) through a fake adb and WifiService
+.venv/bin/python tests/fake_wifi_roam.py      # roaming between access points (issue #234): root's roam.sh against a fake
+                                             # wpa_cli (Amazon's picker, a Dot 5's scan_results, BTM), pinned moves
 .venv/bin/python tests/fake_web_mww.py        # microWakeWord: models added/edited/deleted from the page, engine switch,
                                              # real detections on testdata/alexa_espeak.raw, copy as an artifact
 .venv/bin/python tests/fake_plugins.py        # plugins (docs/plugins.md): hassmic under build/plugrun-host with a stand-in
@@ -566,7 +574,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   estimate peak-held against the far end's level held after it stops), listening mode only while this side talks
   (`core_call_listen`); the far end talks when it plays over -55 dBFS and 25 dB over its own floor (`far_voice`). Core side in `main.c` (`core_call`, Drop In one of its
   callers: call LED animations, comms sounds, ringtones via
-  `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; wake word ignored while the far end
+  `play_earcon_while`; action button answers/ends, "stop"/"hang up"/"auflegen" end; "<wake word>, answer" answers (`core_transcript`
+  `answers[]`: a phone's always, a Drop In's or a plugin's only with `answer_by_voice` and in a run this Echo's own
+  wake word began, `run_source`; issue #240); wake word ignored while the far end
   talks; `proto->dropin_changed` for Drop In's calls only).  One call on the Echo at a time: call.c's claim
   (`call_claim`/`call_release`/`call_claimed`, an atomic, taken from calling or ringing on, let go by whoever tells
   the core only after its "idle" went through `core_call`, which shows only the claim's `who`); Drop In refuses "busy"
@@ -590,23 +600,59 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `CALL_CODEC_PCM` (a plugin's: the gated, gain-corrected frame as s16le, in by number, a missing one the last
   faded by `PCM_FADE` a frame; `make unit-call`). Lock order: call.c's `tx_mu` (one sender at a time; `send` and `core_call_listen` run under it) before
   `core_lock`, `dl` and plugin.c's `cml`, `dl` and plugin.c's `bl` before call.c's `ml`; nobody calls `call_mic` holding `core_lock`, `dl` or `bl`.
-  Call microphone (setting `call_mic`, call/assistant; present where `callmic_present()`: the mixer's where
-  `board.call_mic`, measured: donut, biscuit; radar and cannoli have the path in AFE.cfg, unmeasured): `micHfp` is
+  Call microphone (always where `callmic_present()`, no setting since 2026-11-26: `call_mic` is in settings.c's `retired`, an old line read without a word; `board.call_mic`: donut, biscuit, cannoli measured, radar from its firmware (stock's pjmedia records micHfp), the Android five as stock's calls (audio_android.c: for a call the assistant's on HOTWORD (`hot_for_call`, VOICE_RECOGNITION outside calls), libmedia's AudioRecord by dlsym on SDK 25 (a read that does not wait answers WOULD_BLOCK), OpenSL preset 6 on athena; in a call MODE_IN_COMMUNICATION by media.audio_policy setPhoneState 3/4, the music stream (the voice stream's curve differs), a VOICE_COMMUNICATION recorder beside it; `board.call_echo_cap_db` -30 on the Dots, call.c's cap only where measured; HOTWORD failing: VOICE_RECOGNITION and the one recorder switched and tee'd; docs/re-checkers.md "Calls")): `micHfp` is
   Amazon's "Voice" pipeline (AFE.cfg: (V)AEC, RES, NR, CNG, AGC -22/-23 dBFS, Tx EQ, limiter; no beamformer) once the
   front end is in call mode (a Voip stream open; on biscuit opening micHfp alone starts it). `callmic_thread` opens it
-  after the playout has the Voip stream (`voip_gen`), sends it without micgain and with the gate's duck at -12 dB
+  after the playout has the Voip stream (`voip_gen`), sends it without micgain, the gate's duck at -12 dB; where `board.call_echo_cap_db` (measured: -30 on the Dots; `callmic_echo_cap()`) the echo estimate held that far under what plays after `HFP_WARMUP_MS`, the hold falling `FAR_FALL_HFP` and double talk after `DOUBLE_TALK_N_HFP` (its AGC puts speech at the playback's level: uncapped every quick reply was ducked; `make unit-call` H1/H2); unmeasured models keep micAsr's tuning
   (`SUPPRESS_HFP_DB`, `NEAR_MIN_HFP_DB`), `call_mic` (micAsr) stands aside (`src_hfp`) while micHfp came within
   `HFP_STALE_MS` (`hfp_at`; the mixer's read waits 1.5 s for a block that does not come, the far end gives up after
   5 s); no stream, 3 empty reads or the Voip stream failed (`voip_gen` -1): micAsr for the rest of the call. Record
   streams' format getters answer -1 (mixcap.c): never refuse on that. `audio_file.c`: `HASSMIC_CALL_CAP` (tests: the
   hall's 700 Hz tone in `fake_ha_dropin.py`), `HASSMIC_CALL_CAP_STALL` (a file: while it exists reads stall, 7c),
   `HASSMIC_VOIP_FAIL` (a file: the Voip stream fails, 7d), `HASSMIC_FAKE_LISTEN` (the front end's listening mode
-  logged); Android: none.  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
+  logged); Android: none.  `call_end` logs `call: sent ...` (the sender's counts, `tx` under `sl`, a leaf lock:
+  call_end runs under dl, never take `tx_mu` there).  A swap of sources restarts encoder, gain and gate but keeps listening mode's state
   (`listen_on`, `near_until`): reset, the core never heard "off" and kept the front end listening for the call.
+- **Phone calls over Bluetooth** (`hfp.c`, `scoaudio.c`, `cvsd.c`, `msbc.c`; docs/re-hfp.md; issue #233): the Echo as a
+  phone's hands-free unit (HFP 1.7 HF), setting `bluetooth_calls` (Features, off).  CVSD everywhere; mSBC (wideband)
+  where the host codes the link (`sco_wideband()`: ebc, hci): AT+BAC=1,2, +BCS answered, the link's air mode decides
+  (`hfp_sco_up`'s `air`), "take it here" as AT+BCC; `msbc.c` the H2 framing (lost and broken frames), `sbc.c`
+  `msbc_decode`/`msbc_encode` (held to libsbc by `make unit-sbc`; `make unit-msbc` the framing).  On a PCM path the
+  chip codes mSBC itself where `board.sco_msbc_chip` (measured: cannoli's MT7663, donut's and checkers' MT7668; on by those on cupcake, cronos, crown, athena):
+  `sco_accept_params` gives Enhanced Accept (0x043e, data path 1, 16 kHz linear, transport unit 16 (the MT7668 sets
+  up no link with 0), T2; byte for byte what `src/tools/scoprobe.c`'s air `msbc -U 16` measured, held by `make
+  unit-scoaudio`, and through a2dp.c's command queue (72 bytes a command) by fake_hfp.py with `HASSMIC_SCO_CHIP_MSBC`),
+  the PCM devices at 16 kHz; an mSBC link that fails twice (or its Enhanced Accept refused: a2dp.c hands the
+  command's status to `hfp_sco_up`) offers CVSD alone (AT+BAC=1) for the rest of the connection.  Remote volume: `+VGS` sets `core_call_volume` only while a
+  call's audio is here, main.c's `mix_apply` hands the call's volume to `hfp_call_volume` (stored; upkeep sends
+  AT+VGS).  A second call: AT+CHLD=?, AT+CCWA=1, +CLCC where the phone has enhanced call status (the indicators
+  cannot say which call is which after a swap: `ind_moved` guesses, +CLCC corrects), AT+CHLD=2 (`hfp_switch`: HA's
+  "Switch phone call", the action button with one waiting), AT+CHLD=1 ending beside a held one; HA's "Phone call
+  waiting" (`hfp_second`).  On a2dp.c's links (hooks in
+  `hci.h`): a Hands-Free SDP record (RFCOMM channel `HFP_CHANNEL`), PSM 3, the class of device's telephony bit and the
+  EIR's UUID, all only while it is on; RFCOMM as responder (the phone opens it), credit flow, the AT exchange of the
+  service level connection, calls from the phone's indicators.  One gateway at a time: a phone (class of device major 0x02, a2dp.c `cod` from the Connection Request)
+  takes the place from one that is no phone and has no call (`hfp_rfcomm_up`: the old DLC and mux sent DISC; a TV box, issue
+  #233); a refused phone or unknown class waits (`waitq`, its DLCI 0 SABM kept within `SABM_T1_MS` and answered UA when it gets the place: `hfp_rfcomm_down`, `wait_retake` from upkeep once a non-phone holder is idle), one that is no phone is answered DM.  call.c's claim `CALL_HFP`: ringing (not with do not
+  disturb or the mics off: `core_call_refusal`), answered here (`ANSWER_MS` for the audio link), connected (the
+  synchronous link up: call.c's media in `CALL_CODEC_PCM`), on the phone (nothing shown).  `core_call_button` /
+  `_answer` / `_hangup` reach `hfp_*`; Home Assistant's "Phone call", "Phone caller", "Phone", answer / end / take-here
+  buttons and the action `phone_call` (number), answering and dialling over the keyed link only
+  (`core_phone_changed` -> `proto->phone_changed`).  No chip moves SCO data over HCI: `scoaudio.c` takes the audio
+  where `board.sco` says (`sco_play`/`sco_cap`: PCM devices by name, found in /proc/asound/pcm as MediaTek's HAL does,
+  `make unit-scoaudio`; `sco_route` controls, `bt_sco_cmd` the chip's PCM setup after every
+  reset, MT7668: 0xfc72 03 10 00 4a), raw ALSA ioctls at 8 kHz (`pcm`: cannoli, donut, checkers; from the firmware
+  only, never run: cronos, crown, athena, cupcake: its bootloader, not its device tree, muxes the 2nd I2S), or biscuit's (and radar's, from the firmware)
+  BTCVSD `/dev/ebc` with the air's CVSD coded in `cvsd.c` (`ebc`; device.conf group media; the device closed by the
+  last of its two threads: a free under a blocked write was a kernel oops and a reboot), or H4 type 3 on the PC
+  (`hci`, `HASSMIC_SCO=hci`; `audio_sco_native()` 0 in audio_file.c).  Probes: `src/tools/scoprobe.c` (a
+  synchronous link between two Echos on raw HCI), `ebcprobe.c` (`/dev/ebc`).  `make unit-cvsd`, `tests/fake_hfp.py`.
 - **Bluetooth**: `ble.c`/`ble_crypto.c` talk raw HCI (`hci.h`) to the controller for the HA Bluetooth proxy (scan, GATT,
   Just Works pairing); Amazon's `btmanagerd` is stopped. A2DP shares the controller; scanning pauses while a phone plays,
   and for 1 s from a wake word round (`ble_quiet` in `main.c` `wake_heard`): the scan's share of the antenna costs
-  10-30 % of Wi-Fi broadcasts (unicast is retried), i.e. the other Echos' claims.
+  10-30 % of Wi-Fi broadcasts (unicast is retried), i.e. the other Echos' claims.  After every reset the controller's
+  address is checked against the idme's (`board.bt_mac`) and set with MediaTek's 0xfc1a where it differs: cannoli's
+  MT7663 is left at 00:0c:43:29:50:01 by its driver, the same on every Echo Dot 5.
 - **State files** (`statefile.c`, issue #46): every file hassmic keeps or hands to root is written through
   `statefile_open`/`_commit` or `statefile_write` (temp file, fsync, rename, fsync of the folder): `/data` is ext4,
   a rename without them can reach the flash before the data, and a hard reset left empty files (#36). New writers too.
@@ -1138,8 +1184,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   which also measures a look's peak at the bounds).  `plugin_fetch.c`: `pf_look` GETs `revoked.json`, `.sig` (taken
   first, whatever becomes of the index; not taken: the look fails; older than kept: kept, the look goes on),
   `index.json`, `.sig` through `update_fetch`
-  (update.c's one GET: libcurl, `net_socket`, all its time as `secs`; `stop` ends it from the progress, data and
-  socket callbacks; `User-Agent: hassmic` and nothing more; redirects to HTTPS only, as every fetch of update.c's),
+  (update.c's one GET: http.c, `net_socket`, all its time as `secs`; `stop` ends it within 250 ms (not a name
+  lookup); `User-Agent: hassmic` and nothing more; redirects to HTTPS only, as every fetch of update.c's),
   the signature first, a serial under the build's least, from the future or under `state/plugins/.serial`'s floor
   refused, and an index only beside a revocation list at least its `revoked_serial` (a newer list:
   `plugin_withdrawn_changed`, which stops what it names and starts what it no longer names, and the members told);
@@ -1208,9 +1254,9 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   `SEND`, the package; `scripts/ota-push.sh --plugin`, `otatool.py plugin`, the C otatool too).  The engine setting
   at start is read as written first (`settings_peek_raw`): `plugin:<id>` is a value also when that plugin needs
   a newer hassmic.  `HASSMIC_PLUGIN_FRESH`, `HASSMIC_PLUGIN_LEAST`, `HASSMIC_PLUGIN_SLOT=<checked ms>:<upload
-  ms>:<fetch ms>` (the table's times), `HASSMIC_PLUGIN_ASK_DELAY=<ms>` (slept between `/install`'s check and its
+  ms>:<fetch ms>` (the table's times), `HASSMIC_PLUGIN_ASK_DELAY=<ms>[:<file>]` (slept between `/install`'s check and its
   ask), `HASSMIC_PLUGIN_OWN_DELAY=<ms>` (between a push's check and its install) for tests.
-  The push port and libcurl's loader: "Push updates", "Online updates".  Crash marks of the second kind (`core <id>`,
+  The push port and the HTTPS client: "Push updates", "HTTPS".  Crash marks of the second kind (`core <id>`,
   `state/plugins/.cores`, `core_note`, `HASSMIC_PLUGIN_CORE=<count>:<ms>`): hassmic fell in the core's code on a
   plugin's report; the broker's thread by `core_begin`, any other by `plugin_core_enter`/`_leave`, which bracket
   only what is the plugin's own data (main.c `plugin_words_scan`; at start its word opened and its answer waited
@@ -1345,6 +1391,15 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   after DHCP finds it through the other Echos' hello members.  The guided setup asks for one (`scripts/lib/setup.sh`
   `fixed_ask` before the install, `fixed_set` once the satellite runs: the same request as root's, written over adb;
   the PC asks the new address for the page's hello while root waits; `make unit-setup_fixed`).  Improv carries none.
+- **Roaming** (`scripts/device/roam.sh`, issue #234): root's netwatch moves the Echo between the access points of its
+  network where it stops wifisvc (device.conf `WIFI_SERVICE`; the Makefile's `WIFI_ROAMING` lists the setting
+  `wifi_roaming` there only): Amazon's wpa_supplicant has no bgscan module and no CQM, its picker (`adptClntPickBss`)
+  prefers 5 GHz at any signal, the drivers' own roaming is off in wifi.cfg (`DisRoaming 1`), biscuit's and donut's
+  refuse FT AKMs (err=22; cannoli's takes them, FT roams untried), none offers RRM.  signal_poll every round; weak (-70 dBm, 30 s): a BTM query where the AP's Extended Capabilities
+  offer it, then a scan (the network's learnt channels, every channel at most every 10 min); a candidate 8 dB
+  stronger and >= -67 dBm, the move with the target pinned (`set_network bssid`, never left: `wifi/roam-pin`), else
+  the picker goes elsewhere.  `wifi/roam` (AP and last moves) -> wifi.c `wifi_current_json` -> the Wi-Fi row; the
+  signal from /proc/net/wireless (`HASSMIC_PROC_WIRELESS`).  `tests/fake_wifi_roam.py`; measurements in PLAN.md.
 - **Setup (OOBE) and factory reset** (`improv.c`, `main.c`): not set up = from an install or a reset until Home
   Assistant's voice assistant subscribed (`core_link` ready -> `state/adopted`; an existing `state/api_key` counts);
   stock's orange `setup-mode` spinner meanwhile (`core_oobe`).  `improv.c` = Improv Wi-Fi over BLE on `ble.c`'s peripheral role (advertising +
@@ -1463,12 +1518,11 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   or with `PREBUILT=1`;
   `PREBUILT=0` always builds. `scripts/probe.sh` compares with `devices/<codename>/probe.md5`, not the unpacked firmware.
 - **Online updates** (`update.c`): "Online updates" on the settings page (off default / beta / release, `state/config`) and an
-  ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through the firmware's
-  libcurl (`fwcurl.c` `fwcurl()`: the one loader for update.c, https.c and davs.c, dlopen and the library's first init
-  under its lock; a load that failed is tried again 60 s later at the earliest, one that lacks a function never;
-  a new user calls it, never dlopen; sockets via `net_socket` so the egress lock lets them out; `update_fetch` is
-  update.c's one GET, also plugin_fetch.c's; every fetch follows redirects to HTTPS only, the API's and the
-  bundles' say `hassmic/<version>`, update_fetch's only `hassmic`), hands it to root through `ota_handoff`.
+  ESPHome update entity; checks GitHub's releases API, downloads `hassmic-<board.codename>.bundle` through http.c
+  ("HTTPS" below; sockets via `net_socket` so the egress lock lets them out; `update_fetch` is update.c's one GET,
+  also plugin_fetch.c's; every fetch follows redirects to HTTPS only, the API's and the bundles' say
+  `hassmic/<version>`, update_fetch's only `hassmic`; 4xx/5xx fail, "HTTP <code> from <url>"), hands it to root
+  through `ota_handoff`.
   Root (`main.sh` ota_watch) accepts the owner's `update.pub` or the release key (`release.pub` of the running copy, else
   the system partition). Channel only from an approved browser on the page (no HA entity for it), install only over the keyed connection.  The page switches a channel on
   only once `update_probe` reached GitHub (web.c `updates_gate`, before `core_lock`; else `github_unreachable` in the
@@ -1490,9 +1544,27 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   listing never relisted to the owner's); any change restarts hassmic, one of what is trusted also forgets `.serial`,
   `.revoked`, `.revoked-at`, `.listed` at the next start (mark `state/sources-forget`, `sources_load`).  `sources_apply(expect, to)`: only over what the caller judged against.  `/api/state` `sources` (level 0/1/2), `POST /api/sources`; app.js
   `sourcesCallout` on every page (yellow a server, red a key or no check), `sourceDialog`.
+- **HTTPS** (`tls.c`, `http.c`, issue #236): hassmic's own TLS client, never the firmware's libcurl (its BoringSSL,
+  Android 7's, or athena's Android 9 drafts, has no TLS 1.3: a Home Assistant on the "Modern" SSL profile refused every
+  reply).  mbedTLS 3.6 LTS in `src/third_party/mbedtls/`: only what `hassmic_config.h` builds (a TLS 1.2/1.3 client;
+  RSA-PSS on: without it no `rsa_pss_rsae_*` is offered and TLS 1.3 servers with RSA certificates fail), copied from
+  the release tarball unchanged by `tools/mbedtls-vendor.sh <tar> <sha256>` (again after a config change that turns
+  on more; never edit those files), built as a library per target (`$(OUT)/libmbedtls.a`, `build/libmbedtls-host.a`;
+  `MBEDTLS_INC` on every compile that includes tls.h's users).  Randomness: /dev/urandom for TLS and PSA
+  (`MBEDTLS_PSA_CRYPTO_EXTERNAL_RNG`, `mbedtls_psa_external_get_random` in tls.c).  CAs: `/system/etc/security/cacerts`
+  (else the PC's bundle; `HASSMIC_CA_FILE` alone, a file or folder, for tests), parsed once at the first check and
+  kept (~420 kB), read-only after.  A connection: non-blocking socket, every mbedTLS call under its lock and returning
+  at once, the waits poll()s without it (one reader and any writers: ws.c); an address's certificate is checked
+  against its IP entries after the handshake (no SNI for an address).  `http.c` `http_run` (struct http): GET/POST,
+  the caller's headers (none to another origin after a redirect), redirects (`redirect_https`), Content-Length,
+  chunks or the end, `connect_s`/`total_s`/`low_s`+`low_bytes` (a moving window, as libcurl's low speed limit), `stop`
+  within 250 ms (not getaddrinfo), `.local` by `mdns_resolve4`, `net_socket` or with `lan` a plain socket, `plain`
+  http:// only; head/data callbacks; HTTP_OK whatever the status (callers fail 4xx themselves).  Users: https.c,
+  update.c (and plugin_fetch.c through it), davs.c, mass.c's images; ws.c `ws_connect_tls`.  `make unit-http`
+  (tests/unit/http_test.py: Python's servers, TLS 1.3 and 1.2 alone, certificates, bodies, redirects, times).
 - **Media over HTTPS** (`https.c`, issue #30): `proto_esphome.c` `http_get` hands `https://` to `https_open`, which
-  runs the firmware's libcurl (`fwcurl()`, as update.c; BoringSSL, system CAs) in a thread writing the body into a socketpair: the
-  decoders and the cancel's `shutdown()` work as on a plain fetch.  Setting `https_verify` (default on; off takes any
+  runs http.c in a thread writing the body into a socketpair: the decoders and the cancel's `shutdown()` work as on a
+  plain fetch.  Setting `https_verify` (default on; off takes any
   certificate).  HA with `ssl_certificate` hands out its external URL only (`get_url`: prefer external, no IP), so
   that name must resolve and be reachable from the LAN.  `HASSMIC_CA_FILE` for tests.
 - **Light ring** (`ring.c`, `ring.h`, issue #26): HA's light "Light ring" and the listening ring turned towards the
@@ -1632,7 +1704,8 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   back with no finger down; the kernel lets go when the UI dies), else (no grab: `wd.grab` -1) a ring there brings our
   screen up (`ring_from`, `own_asked` kept and given back after, asked again every 10 s) and the app back after.  Tests: `ui_test.c`, `tests/fake_screen_words.py`, `build/uishot` (words*, timer*).
 - **Music Assistant's API** (`mass.c`, `mass.h`, `json.c`): the screen's library, search, queue and speakers over
-  MA's own websocket (`/ws`, port 8095; the page's URL, or with none given the Sendspin server's address pinned when the
+  MA's own websocket (`/ws`, port 8095; `wss://`/`https://` through a proxy, port 443 unless named, ws.c
+  `ws_connect_tls`, the certificate as `https_verify`, its images over https too; the page's URL, or with none given the Sendspin server's address pinned when the
   token is saved: a token only ever goes to that address, `mass_peer` merely suggests one, from sessions whose player
   role is active; without a token mass.c may look at the suggested one to say what it is); the first
   message is the server's info, from schema 28 `auth` with a long-lived token (page: `POST /api/mass`, sealed as the
@@ -1654,7 +1727,7 @@ No model `#ifdef`s in shared code: new differences become a board field, a `devi
   for pixel (node).  The band's height comes from `state/config` before `ring_start` (`settings_peek`).
 - `src/include/`: headers for the reversed Amazon libraries (`mixer_api.h`, `pryon_api.h`, `aipc_api.h`) and `netio.h`.
 - `src/tools/`: standalone device tools (`mixcap`, `mixplay`, `slplay` (the Android models' mixplay: OpenSL ES on the music stream), `pryon_test`, `aed_test`, `latency`, `runas` — AIPC refuses uid 0 and
-  the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `dha_test` not in `all`).
+  the image has no `su`; `curlspy`, `hciscan`, `a2dpprobe`, `scoprobe`, `ebcprobe`, `dha_test` not in `all`).
 
 Boot integration (`scripts/system/`, rc in `devices/<codename>/`): `hassmic.rc` (init) starts `boot.sh` (fixed, on /system), which picks the factory
 copy or a verified update and runs `main.sh` (updatable): `main.sh firewall` (egress lock re-asserted in a loop, root side

@@ -216,16 +216,16 @@ const PAGES = [
 ];
 const BRIGHTNESS = ['screen_brightness_auto', 'screen_brightness', 'screen_brightness_adjust', 'screen_adaptive_colour'];      // the Show's backlight, and its colour where Fire OS has that
 const WORDS = ['screen_text', 'screen_text_seconds', 'screen_timers'];            // the screen UI's words.c
-const IDLE = ['screen_sleep_minutes', 'screen_clock'];                             // the screen's timeout, the clock in place of dark
+const IDLE = ['screen_sleep_minutes', 'screen_clock', 'screen_motion_keep', 'screen_motion_wake'];   // the screen's timeout, the clock in place of dark, Wi-Fi motion
 const MOVED = { plugins: 'plugins', plugins_community: 'plugins', light_band: 'screen', music_on_screen: 'screen', screen_brightness_auto: 'screen', screen_brightness: 'screen', screen_brightness_adjust: 'screen', screen_adaptive_colour: 'screen',
-  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen',
+  screen_text: 'screen', screen_text_seconds: 'screen', screen_timers: 'screen', screen_clock: 'screen', screen_sleep_minutes: 'screen', screen_motion_keep: 'screen', screen_motion_wake: 'screen',
   arbitration: 'echos', bluetooth_audio: 'media', bluetooth_speaker: 'media', wake_sound_removal: 'voice',
   ring_live: 'lights' };
 // The cards of a settings page: [title, settings...].  A setting not named here (a new one, or a model's own) comes
 // last, in a card of its own, so nothing is ever lost from the page
 const LAYOUT = {
   voice: [['Microphone', 'mic_level', 'noise_reduction'], ['Mute and wake sound removal', 'mute', 'do_not_disturb', 'wake_sound_removal'],
-          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any', 'timer_stop_from_others']],
+          ['Requests', 'wake_word_in_request', 'end_of_request', 'stop_ends_listening'], ['Calls', 'answer_by_voice'], ['Action button', 'multi_press'], ['Timers', 'timer_ring', 'timer_sound', 'timer_stop_any', 'timer_stop_from_others']],
   wake: [['Engine', 'wake_engine'], ['How it hears you', 'speech_language', 'wake_word_adaptation']],
   lights: [['Brightness', 'led_auto_brightness', 'led_brightness'], ['Position', 'ring_rotation', 'light_band'], ['Live from Home Assistant', 'ring_live'], ['Screen', ...BRIGHTNESS]],
 };
@@ -254,6 +254,7 @@ const HELP = {
   end_of_request: { tag: 'Experimental', help: 'Lets the Echo end a request once the person who said the wake word stops talking, not when the room goes quiet. Home Assistant ends a request on silence, so with others talking in the room it stays open and speech-to-text writes down their words after your command. The Echo knows how loud you said the wake word: quieter voices (from about 17, 14 or 11 dB under yours) no longer keep the request open, and on the Echo Dots Amazon\'s own speech detector keeps the dishes or a kettle from doing so. Relaxed waits 1.25 s after you stop, Normal 0.7 s, Aggressive 0.45 s and lets in the least of the others. It cannot tell a voice as loud as yours, and if you turn away or drop your voice mid-sentence it may end too soon: start with Relaxed. Home Assistant\'s own end still applies, so a request never runs longer than before. ESPHome only. Off by default.' },
   multi_press: { help: 'Press the action button twice quickly to skip to the next track, three times to go back to the previous one, for Music Assistant and for a phone over Bluetooth. With nothing playing (or the assistant busy) it acts as a single press. The price: a single press waits about half a second to see whether another follows, so the assistant starts, and music pauses, a moment later than without. Home Assistant\'s "Button" event hears whatever acts as a single press, never a skip. Off by default.' },
   stop_ends_listening: { help: 'Makes "<wake word>, stop" mean "be quiet". An Echo that woke up by mistake (the TV, someone talking in the room) listens for up to 15 seconds, and Home Assistant carries out whatever it heard. With this on, "<wake word>, stop" ends that at once: the Echo stops listening and nothing of it reaches Home Assistant, and when it hears both words together it does not start at all. A ringing timer, a reply, a Drop In call and music on this Echo stop as before. The cost: "<wake word>, stop the timer" no longer reaches Home Assistant (say "<wake word>, cancel the timer"), media Home Assistant plays elsewhere is paused with "<wake word>, pause" instead, and now and then the engine hears "stop" in a short command (about 2 in 350): that command is lost, say it again. Off by default.' },
+  answer_by_voice: { help: 'Lets you answer a ringing call by saying "<wake word>, answer" (or "pick up"; "abnehmen", "décroche", "contesta", "rispondi", "opnemen", "răspunde") to this Echo, besides the action button and the screen. Phone calls over Bluetooth answer that way anyway; this is for Drop In with "After the action button" and for plugins\' calls, which otherwise connect only by a touch, so that nobody can listen into a room where nobody is. Only a request this Echo\'s own wake word began counts, never one Home Assistant opened (a question back, an announcement that listens, Home Assistant\'s own wake word). What it costs: Home Assistant turns speech into the words, so with this on a Home Assistant that put "answer" into such a request could answer the call, and so could a TV that says the wake word and "answer" while it rings. Say it to the Echo that rings: if another Echo takes the wake word, nothing is answered. Off by default; Home Assistant has no switch for it.' },
   timer_stop_any: { help: 'While a timer rings, whatever you say after the wake word stops it. That goes for any language and however you put it ("Alexa, stop the timer", "Alexa, Ruhe"). Without it only "stop" does, and "stop the timer" goes to Home Assistant, which has forgotten the finished timer and says none is running. The cost: a question during a ring ("how long is left on the pasta timer?") is not answered, it only stops the ring. Off by default.' },
   equalizer_bass: { ha: true }, equalizer_mid: { ha: true }, equalizer_treble: { ha: true },
   music_duck: { help: 'How far the music is turned down from the moment the wake word is heard until the reply has ended, for Music Assistant and for a phone over Bluetooth. Raise it if the Echo has trouble understanding you over loud music or an audiobook (the music is quieter in your voice, so speech-to-text hears you better); 60 is silence. 0 turns ducking off. Default 16 dB.' },
@@ -272,13 +273,16 @@ const HELP = {
   screen_text_seconds: { help: 'How long what you said and the reply stay on the screen once the Echo is idle again, in seconds. 0 keeps them until the next request (or a timer that rings). Default 8.' },
   screen_clock: { help: 'A screen saver: where the screen would go dark (after Screen sleeps after, or 1 minute with the mic off or in Do not disturb), it shows the time across the whole screen instead, with the date under it. Until then the face shows as always. Mic off and Do not disturb get a line under the clock saying so; music playing shows its bar. A touch on the clock brings the face back (that touch does nothing else), and the timeout starts again; so does anything the Echo does: a request, a timer, a Drop In, the volume, music starting. Uses Home Assistant\'s time zone, 12-hour where the face\'s clock is. Only in place of the face: with an app or the music page in front, the screen goes dark as before. Off by default. Brightness follows the Brightness card: Adaptive brightness dims it at night.' },
   screen_sleep_minutes: { help: 'How long the screen stays on after the last thing happened (a request, a touch, the volume, a timer), in minutes; then it goes dark, or shows the clock with Clock when idle on. 0: it never does either, the face stays. With the mic off or in Do not disturb it is 1 minute at most, as on a stock Echo Show; 0 keeps the screen on then too. Running timers on the screen keep it on whatever this says. Default 5, as stock.' },
+  screen_motion_keep: { when: () => !!settingValue('wifi_motion'), tag: 'Experimental', help: 'Wi-Fi motion (Features) counts as something happening: while it sees motion, Screen sleeps after does not run out, so the screen goes dark, or shows the clock, only once nobody has moved for that long (plus the 30 s the sensor itself stays on after the last movement). Over an app too. Motion that starts while the clock shows leaves it there (Motion wakes the screen ends it); from a touch on, it holds the face. Wi-Fi motion sees movement between the Echo and your router, through walls as well, so someone in the next room can keep it on. Not in Do not disturb: the screen sleeps after its minute then as always. Off by default; shown while Wi-Fi motion is on.' },
+  screen_motion_wake: { when: () => !!settingValue('wifi_motion'), tag: 'Experimental', help: 'A dark screen comes on when Wi-Fi motion (Features) starts seeing motion, with whatever was on it, as a touch would; with Clock when idle on, the clock gives way to the face. With Motion keeps the screen on as well, it then stays on while the motion lasts; without, for Screen sleeps after. A screen put out with Screen off in the drawer stays dark until it is touched or the Echo wakes it itself (a request, a timer); after an update, a restart of the Echo\'s software or of its screen\'s program it no longer knows, and motion wakes it again. Not in Do not disturb, so the night stays dark. Off by default; shown while Wi-Fi motion is on.' },
   screen_timers: { help: 'Timers set on this Echo, on the screen: each one\'s name (or its length) over its time left in large digits with its unit (4:59 min, 1:02:05 h, 45 s) and a bar of what is left, the one that ends first on top; a paused one in grey. When one rings it shows in orange and pulses until it is stopped, with a Stop button. A tap on the timers hides them until the next change, over an app too (the app gets none of those touches while they show). The screen stays on while timers show. What you said and the reply (Speech on screen) go before them while they show. Off by default.' },
   music_on_screen: { help: 'While a track from Music Assistant plays on this Echo, the screen shows the music page (the big cover, title, seek bar and buttons). In place of the face: only where the face is what the screen shows by itself; an app in front (Kiosk Satellite, a dashboard) is left alone. In place of the home app too: also over the app chosen as Home above (or Kiosk Satellite), which comes back when the music stops; other apps are left alone. A request, a call or a ringing timer bring the face as always, and the music page comes back when they are over. It stays until the music stops: a pause keeps it, and so does the gap between two tracks. It goes by itself only if it still shows the Playing tab: browse the library or search on it and it stays, as if opened by hand (Home in the drawer brings the home app back). Pull down the drawer and choose Face or Home, or tap the face button on the music page, and the music page stays away until the music has stopped; a face chosen that way stays as it always has, until Home in the drawer brings the home app back. Off by default.' },
   light_band: { help: 'The Echo Show has no light ring: it shows the ring\'s lights as a band along the bottom of the screen, as Alexa did. That is listening, thinking, mic off, calls, volume, timers and Home Assistant\'s "Light ring". This many pixels at the bottom are kept for it, so an app on the screen never has the band over it. 0 gives the whole screen to the apps and shows no band. Default 10, stock\'s line.' },
   bluetooth_announcements: { help: 'Says "Connected to …" and "Disconnected from …" when a phone connects, in your voice assistant\'s voice, after the chime. Home Assistant speaks the words, and only once "Allow the device to perform Home Assistant actions" is ticked in this Echo\'s ESPHome options (Settings → Devices & services → ESPHome → the Echo → Configure); without it there is the chime only.' },
   bluetooth_announcement_language: { help: 'The language of those sentences. Home Assistant does not tell the Echo which language your voice assistant speaks, so pick the one that matches its voice.' },
   sendspin_unpaired: { help: 'Lets any Music Assistant server on the network play here without pairing. Off: only a server given this Echo\'s "Sendspin pairing token" (a diagnostic entity in Home Assistant) may play.' },
-  https_verify: { help: 'Whether the Echo checks the certificate of a Home Assistant that serves HTTPS itself. Home Assistant then gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. Plain http:// addresses are not affected.' },
+  https_verify: { help: 'Whether the Echo checks the certificate of a Home Assistant that serves HTTPS itself. Home Assistant then gives the Echo https:// addresses for its spoken replies and announcements, usually its external URL. On (the default): the Echo plays them only from a server whose certificate a known authority signed for that very name, as a browser would. A self-signed certificate, or one that does not name the address Home Assistant gives out, is refused: replies stay silent and the log says why. Off: any certificate is taken, so someone on your network could pass the Echo audio of their own instead of Home Assistant\'s. The same goes for a Music Assistant given as https:// or wss:// (Music, Music Assistant on the screen). Plain http:// addresses are not affected.' },
+  wifi_roaming: { help: 'Where your Wi-Fi has several access points under one name (a mesh, or a router with repeaters), the Echo moves to a stronger one when its signal stays weak: under -70 dBm for half a minute, to one at least 8 dB stronger and no weaker than -67 dBm. It first asks the access point where to go, where the access point offers that (802.11v), then looks for itself on the channels your network was seen on. The move takes about a quarter of a second and keeps the Echo\'s address. Without it the Echo stays on the access point it joined, however weak, until the link breaks. The Wi-Fi row above shows the access point it is on and its last moves. On by default. Off: it stays where it joined.' },
   kiosk_internet: { help: 'Kiosk Satellite may reach the internet while this is on: for its own updates and for web pages it shows (iframes, dashboards). Only that app gets out: the Echo\'s own voice satellite stays on your network except for what it needs, and Amazon\'s software stays cut off. Off: it reaches your network only, so it shows Home Assistant but cannot update itself or load outside pages. On by default. Takes effect within seconds.' },
   kiosk_mic: { help: 'Lets the Kiosk Satellite app use the microphone, for an app plugin that talks, such as a doorbell\'s two-way talk. The Echo\'s own voice satellite keeps listening for the wake word and answers during such a call. In the plugin, pick "Voice communication": that source has its own processing with echo cancellation. "Automatic" picks "Camcorder" first, and that and "Voice recognition" open but give the plugin silence. Off by default. Turning it off closes the app; the Echo opens it again by itself, within half a minute. This switch sets Android\'s permission. It is no wall against the app itself: the update helper gives it the power of an adb shell, so install only an app you trust.' },
   kiosk_camera: { help: 'Lets the Kiosk Satellite app use the camera: to scan a QR code such as the Home Assistant token in its setup, or for a dashboard that shows the camera. Off by default, and while it is off the app\'s scanner cannot work. The token can also be pasted from a PC at this Echo\'s address on port 2324. Turning it off closes the app; the Echo opens it again by itself, within half a minute. As with the microphone, this sets Android\'s permission and is no wall against the app itself.' },
@@ -441,8 +445,8 @@ const HELP = {
     warnings: () => [...STAY_WARN, ...STAY_TONE_WARN], before: (v) => v === 'on' ? stayDialog() : true },
   drop_in: { icon: 'talk', ha: ['Drop In', 'Drop In with', 'End Drop In', 'the action drop_in'], help: 'Talk between two of your Echos, as Alexa\'s Drop In. One Echo calls another (the ones on the Echos page), and both hear each other. Start it from Home Assistant (the action drop_in, or by voice with the "Drop In" blueprint: "drop in kitchen") or with the Drop In button of an Echo on the Echos page. End it with the action button, "<wake word>, stop" or "hang up", on either Echo. Off: this Echo neither calls nor can be called. Only your own Echos can call it (the Echo network\'s key), never with do not disturb on or the microphones off. The ring shows green while a call runs.',
     note: 'An Echo that is called opens its microphone at once, unless it is set to answer with the button below.' },
-  call_mic: { parent: 'drop_in', help: 'What the other Echo hears from this one in a Drop In. Amazon\'s call processing: the microphones as Amazon\'s own calls sent them, with noise reduction, an even level and its echo canceller for calls; a cleaner, steadier voice, a little duller (little over 4 kHz). The assistant\'s: what speech to text gets, through the Echo\'s own gain; brighter, with more of the room. A call running keeps the one it started with, except that switching to the assistant\'s takes effect at once.' },
-  drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button connects; nobody can listen into a room where nobody is.' },
+  bluetooth_calls: { icon: 'phone', ha: ['Phone call', 'Phone caller', 'Phone', 'Answer phone call', 'End phone call', 'Take the phone call here', 'the action phone_call'], help: 'The Echo as your phone\'s hands-free speakerphone over Bluetooth, as a car kit is. Turn this on, then pair the phone with the "Bluetooth pairing" switch in Home Assistant; a phone paired before it was on must be paired again, as a phone only looks at what the Echo offers when it pairs. Calls then ring on the Echo too (the phone rings as well): answer with the action button, end with it, "<wake word>, stop" or "hang up", or from Home Assistant ("Answer phone call", "End phone call"). Where a call talks is the phone\'s choice, as with a car kit: a call answered on the phone talks on the Echo when the phone sends its audio over Bluetooth, and its audio picker moves it back; "Take the phone call here" brings one that talks on the phone to the Echo. A paired phone can so turn on the Echo\'s microphone for a call: pair only your own. The action phone_call has the phone call a number, its audio on the Echo. The call uses the Echo\'s speaker and Amazon\'s call processing for its microphone (echo cancelling, noise reduction, an even level); wideband (HD voice) where the phone offers it, else narrowband. With do not disturb on or the microphones off the Echo does not ring; the phone does. One call at a time: during a Drop In a phone\'s call stays on the phone. Off by default: while it is on, every phone paired with the Echo sends its calls here whenever it is connected.' },
+  drop_in_answer: { parent: 'drop_in', help: 'At once: a call connects straight away, with a chime, as Alexa\'s Drop In does. After the action button: the Echo rings for 30 s, and only a press of its action button (or, on a Show, its screen) connects; nobody can listen into a room where nobody is. "<wake word>, answer" connects too where "Answer calls by voice" is on (Voice page).' },
   bluetooth_speaker: { icon: 'box', ha: ['Bluetooth speaker search', 'Play on Bluetooth speaker', 'Bluetooth speaker', 'Bluetooth speaker delay'], help: 'Plays everything (replies, timers, music) on a Bluetooth speaker instead of the Echo\'s own. Put the speaker in pairing mode near the Echo and switch on "Bluetooth speaker search" in Home Assistant: the Echo pairs with the strongest one it hears.' },
   // volume, separate_volumes and the kinds' volumes, links and offsets: the Volume card has their words (buildVolumes)
   // not a setting: the System card's Restart button (main.c core_reboot)
@@ -466,6 +470,7 @@ const SUB = {
   wake_word_in_request: 'Speech-to-text hears the wake word too',
   end_of_request: 'A request ends when you stop, not when the room is quiet',
   stop_ends_listening: '"<wake word>, stop" cancels a false wake',
+  answer_by_voice: '"<wake word>, answer" picks up a Drop In or a plugin\'s call',
   multi_press: 'Press twice for next, three times for previous',
   timer_ring: 'How long a finished timer rings',
   timer_sound: 'What a finished timer plays',
@@ -489,10 +494,13 @@ const SUB = {
   screen_timers: 'Running timers counted down, a ringing one in orange',
   screen_clock: 'The time and date in place of a dark screen',
   screen_sleep_minutes: 'Minutes until it goes dark or shows the clock; 0: never',
+  screen_motion_keep: 'Idle only once nobody moved for that long',
+  screen_motion_wake: 'The screen comes on when someone moves',
   bluetooth_announcements: 'Says when a phone connects or disconnects',
   bluetooth_announcement_language: 'The language of those sentences',
   sendspin_unpaired: 'Any Music Assistant server may play here',
   https_verify: 'Checks the certificate of an HTTPS Home Assistant',
+  wifi_roaming: 'Moves to a stronger access point of your network',
   kiosk_internet: 'Kiosk Satellite may reach the internet',
   kiosk_mic: 'Kiosk Satellite may use the microphone',
   kiosk_camera: 'Kiosk Satellite may use the camera, also to scan a QR code',
@@ -524,8 +532,8 @@ const SUB = {
   bluetooth_speaker_keep_awake: 'For speakers that cut off the first word',
   bluetooth_speaker_stay_connected: 'Switching it on again is quick',
   drop_in: 'Talk between two of your Echos',
+  bluetooth_calls: 'The Echo as your phone\'s speakerphone',
   drop_in_answer: 'How a call connects',
-  call_mic: 'What the other Echo hears',
 };
 const CHOICE_NAMES = {
   wake_engine: { amazon: 'Amazon', microwakeword: 'microWakeWord (built in, deprecated)', homeassistant: 'Home Assistant' },
@@ -535,7 +543,6 @@ const CHOICE_NAMES = {
   noise_reduction: { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' },
   online_updates: { off: 'Off', beta: 'Beta', release: 'Release' },
   drop_in_answer: { auto: 'At once', ask: 'After the action button' },
-  call_mic: { call: 'Amazon\'s call processing', assistant: 'The assistant\'s' },
   music_on_screen: { off: 'Off', face: 'In place of the face', home: 'In place of the home app too' },
   timer_sound: { beep: 'Beep', timer: 'Alexa timer', alarm: 'Alexa alarm', custom: 'Your own' },
   end_of_request: { off: 'Off', relaxed: 'Relaxed', normal: 'Normal', aggressive: 'Aggressive' },
@@ -1186,7 +1193,18 @@ function settingRow(s) {
     if (status) status.replaceChildren(...[info.status()].filter(Boolean));
     if (warns) warns.replaceChildren(...info.warnings().map((t) => h('li', {}, icon('warn'), h('span', {}, t))));
   };
-  controls.set(s.name, { update: (x) => { c.update(x); paint(); }, paint, saved, root: row });
+  // (a feature's own: its card does it).  Changed while its page is hidden (Wi-Fi motion is switched on the Features
+  // page, its rows are the Screen page's): that page's cards placed anew when it shows, by the heights they have then
+  const shown = () => {
+    if (!info.when || info.parent) return;
+    const hide = !info.when();
+    if (row.classList.contains('hidden') === hide) return;
+    row.classList.toggle('hidden', hide);
+    const f = row.closest('.flow');
+    if (f && row.closest('.page.hidden')) f.most = 0;
+  };
+  shown();
+  controls.set(s.name, { update: (x) => { c.update(x); paint(); shown(); }, paint, saved, root: row });
   return row;
 }
 
@@ -1613,7 +1631,7 @@ function buildVolumes(el) {
     btns.forEach((b) => { const on = (b.dataset.v === 'on') === split; b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); });
     oneBox.classList.toggle('hidden', split); sepBox.classList.toggle('hidden', !split);
     for (const x of [...one, ...sep]) x.paint();
-    calls.el.classList.toggle('hidden', !settingValue('drop_in'));       // no calls without Drop In
+    calls.el.classList.toggle('hidden', !settingValue('drop_in') && !settingValue('bluetooth_calls'));   // no calls without Drop In or a phone's
   }
   const card = h('div', { class: 'card vol' },
     h('div', { class: 'vol-head' }, h('h3', {}, 'Volume ', saved), h('div', { class: 'seg', role: 'group', 'aria-label': 'Volume' }, btns)),
@@ -3321,7 +3339,7 @@ function massRow() {
   } };
   massCtl.paint();
   return infoRow('Music Assistant on the screen', 'The library, queue, search and speakers',
-    'Playing, and what plays, need nothing more: they come over Sendspin. Browsing the library, searching, the queue and grouping speakers go through Music Assistant\'s own API, which wants a long-lived token: in Music Assistant, open your profile (the person icon), Long-lived tokens, Create, and paste it here. It is sent sealed for this Echo and kept on it; the page never shows it again. Left empty, the address is taken from the Music Assistant that plays here when you save (port 8095), and kept: the token only ever goes there.',
+    'Playing, and what plays, need nothing more: they come over Sendspin. Browsing the library, searching, the queue and grouping speakers go through Music Assistant\'s own API, which wants a long-lived token: in Music Assistant, open your profile (the person icon), Long-lived tokens, Create, and paste it here. It is sent sealed for this Echo and kept on it; the page never shows it again. Left empty, the address is taken from the Music Assistant that plays here when you save (port 8095), and kept: the token only ever goes there. Behind a proxy that serves HTTPS, give its https:// address: the Echo then talks to it over TLS, the certificate checked as \'Check HTTPS certificates\' says.',
     btns, null, now);
 }
 
@@ -3389,11 +3407,27 @@ const wifiPassProblem = (p) => !p || /^[0-9a-fA-F]{64}$/.test(p) ? null
   : !/^[\x20-\x7e]*$/.test(p) ? 'A Wi-Fi password has only the characters of an English keyboard.'
   : p.length < 8 || p.length > 63 ? 'A Wi-Fi password has 8 to 63 characters.' : null;
 
+// The access point the Echo is on and its last move between those of the network (root's roam.sh, issue #234)
+const wifiBand = (f) => (f >= 5925 ? '6 GHz' : f >= 4900 ? '5 GHz' : '2.4 GHz');
+// the Echo's clock before Home Assistant set it says 1970 or so: no time then
+const wifiWhen = (t) => { const d = new Date(t * 1000); return t < 1767225600 ? 'earlier' : d.toDateString() === new Date().toDateString()
+  ? `at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : `on ${d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`; };
+const WIFI_HOW = { roam: 'Moved here', ap: 'Moved here by the access point', self: 'Joined again' };
+function wifiAp(w) {
+  const ap = w.ap, last = (w.moves || []).slice(-1)[0];
+  if (!ap) return [];
+  const out = [h('span', { class: 'row-val-sub' }, ap.signal ? wifiSig(ap.signal) : null,
+    `${ap.bssid} · ${wifiBand(ap.freq)}${ap.signal ? ` · ${ap.signal} dBm` : ''}`)];
+  if (last) out.push(h('span', { class: 'row-val-sub', title: last.ms >= 0 ? `The move took ${last.ms} ms` : null },
+    `${WIFI_HOW[last.how]} ${wifiWhen(last.at)}, from ${last.from_signal} dBm (${wifiBand(last.from_freq)})`));
+  return out;
+}
+
 function wifiRow() {
   const now = h('div', { class: 'row-val' });
   wifiCtl = { paint: () => {
     const w = state.wifi, ip = (w && w.ip) || location.hostname;
-    now.replaceChildren(...(w ? [w.ssid, h('span', { class: 'row-val-sub' }, ip)]
+    now.replaceChildren(...(w ? [w.ssid, h('span', { class: 'row-val-sub' }, ip), ...wifiAp(w)]
       : [h('span', { class: 'row-val-sub' }, `Network not known yet: it shows once the Echo has looked for networks · ${ip}`)]));
   } };
   return infoRow('Wi-Fi', 'A new network is tried before it is kept', 'A switch tries the new network first and keeps it only once the Echo is on it; if the Echo does not get on it within about a minute, it goes back to this one by itself.',

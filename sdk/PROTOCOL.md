@@ -1226,7 +1226,7 @@ A call comes in: the Echo rings (its ringtone, its light, on a Show the plugin's
 
 #### 101 `CALL_ANSWER` (broker → plugin, `call` 1)
 
-A person here answered the ringing call (the action button, the Show's screen): answer it on the far side, then CALL_LIVE.
+A person here answered the ringing call (the action button, the Show's screen, or \"<wake word>, answer\" where the owner turned on answer_by_voice): answer it on the far side, then CALL_LIVE.
 
 No fields.
 

@@ -99,6 +99,7 @@ const char *plugin_why(void);                               /* "" when plugins c
  * hang-up (WHY: PM_HANGUP_*) ends any.  1 if there was one */
 int  plugin_call_button(void);
 int  plugin_call_answer(void);
+int  plugin_call_answer_by(const char *how);                /* the same, HOW for the log: "said answer" (main.c core_transcript) */
 int  plugin_call_hangup(int why);
 /* ---- phase 6: a request's copy (request.audio, request.text; docs/plugins.md 3.5, 3.6, 4.12).  The core's
  * side, core_lock held (main.c, proto_esphome.c, proto_wyoming.c); none of these waits for a plugin: the audio is a

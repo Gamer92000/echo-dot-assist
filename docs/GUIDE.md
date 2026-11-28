@@ -16,9 +16,11 @@ Replies start while text to speech is still being generated.
 Replies, announcements and media come from the addresses Home Assistant gives out, `http://` or `https://`. A Home
 Assistant that serves HTTPS itself (`ssl_certificate` under `http:`) gives out its external URL (not the internal one:
 its rule, for every device), so the Echo must reach that name from inside your network: through your router
-(NAT loopback) or a local DNS entry for it. The certificate is checked: a self-signed one, or one that does not name
-that address, is refused ("SSL peer certificate ... was not OK" in the log). "Check HTTPS certificates" (settings page,
-System) off takes any certificate, but then anyone on your network could slip the Echo audio of their own.
+(NAT loopback) or a local DNS entry for it. Any of Home Assistant's SSL profiles works, "Modern" (TLS 1.3 only)
+included: the Echo speaks TLS 1.2 and 1.3 itself. The certificate is checked against the certificate authorities
+the Echo's firmware came with: a self-signed one, or one that does not name that address, is refused ("the
+certificate of ... does not check out" in the log). "Check HTTPS certificates" (settings page, System) off takes any
+certificate, but then anyone on your network could slip the Echo audio of their own.
 
 - **Speak straight on** after the wake word: Home Assistant gets everything from the end of the word, so "Alexa turn on
   the light" in one breath works, and you need not wait for the tone. The tone itself is partly still in what Home
@@ -379,28 +381,89 @@ pages list them under Echos) and have "Drop In" on (Features, on by default).
 - **From the settings page**: the Drop In button on another Echo's card under Echos.
 
 The Echo called plays Alexa's Drop In chime and connects at once. With "Drop In answers: after the action button" it
-rings for 30 s instead and only its action button connects. The ring shows Alexa's call animations meanwhile. To end a
+rings for 30 s instead and only its action button connects (on a Show also its screen; with "Answer calls by voice"
+on, below, also "<wake word>, answer"). The ring shows Alexa's call animations meanwhile. To end a
 call: the action button, "<wake word>, stop", "<wake word>, hang up" (or "auflegen", "raccroche", "cuelga",
 "riattacca", "ophangen", "închide") on either Echo, or "End Drop In".
 Music on the Echo pauses when a call connects (it does not resume by itself). The volume buttons work during a call; the wake word too, but not while the other side talks (its "Alexa" for its own
 Echo would wake this one).
 
+**Answering by voice.** "Answer calls by voice" (Voice page, Calls; off by default) lets "<wake word>, answer" pick
+up a call that rings on this Echo: a Drop In and a plugin's call (a phone's call over Bluetooth answers by voice
+anyway). The words, each alone after the wake word: "answer", "answer the call", "pick up", "accept"; "abnehmen",
+"annehmen", "rangehen"; "décroche", "réponds"; "contesta", "responde", "atiende"; "rispondi"; "opnemen", "neem op";
+"răspunde". Only a request this Echo's own wake word began counts (also one where it cut a reply), not a question
+Home Assistant asks back, an announcement that listens or Home Assistant's own wake word: those Home Assistant opens
+itself, and a call that only a person at the Echo may answer must not be answered by Home Assistant. Home Assistant
+still turns your words into text, so with the setting on it could answer such a call by putting "answer" into one of
+your requests, and so could a TV (or a sound Home Assistant plays on the Echo) that says the wake word and "answer"
+while it rings ([SECURITY.md](SECURITY.md#drop-in)). Say it to the Echo that
+rings: when another Echo answers the wake word, nothing is answered. Off, "answer" goes to Home Assistant as any
+request does, and the log says why the call was not answered.
+
 Calls are refused with do not disturb on, with the microphones off, or with another call running; the caller's log and
 Home Assistant say why. The sound goes straight between the two Echos (UDP 28932, Opus, encrypted): no cloud, no Home
 Assistant in between.
 
-**Your side's sound.** On the Echo Dot 3 and Echo Dot 2 a call sends what Amazon's own calls sent: the front end's
-call processing, with noise reduction, an even level and an echo canceller made for calls. It sounds natural and
-steady, a little duller than the assistant's stream (little over 4 kHz). "Call microphone" (Features, under Drop In)
-switches back to the assistant's stream, brighter and with more of the room. Should the call microphone stop during a
-call, the assistant's takes over at once. The Echo 2 and the Echo Dot 5 send the assistant's stream for now (they have
-the call processing too, but it has not been tried on them yet); the Echo Shows and the Echo Input have only the
-assistant's.
+**Your side's sound.** Every Echo sends what Amazon's own calls sent: the front end's call processing, with noise
+reduction, an even level and an echo canceller made for calls. It sounds natural and steady, a little duller than the
+assistant's stream (little over 4 kHz), and it carries across a room; there is no setting for it. The Echo Shows and
+the Echo Input do it as their own calls did (Android's call mode, the call path of Amazon's front end inside the audio
+system, the wake word recorded beside it for the call). Should the call processing stop during a call, the assistant's stream
+takes over at once. Measured on the Echo Dot 2, 3 and 5; run on the Echo Show 5; on the Echo 2, Echo Show 5 2nd gen,
+Echo Show 8 and Echo Input from their firmware, not tried yet. At the end of every call the log says what went to the
+other side (`call: sent ...`: which microphone, how much of the call this side talked, at what level in and out, the
+gain, and how much went out without being turned down).
 
 **Echo.** The Echo puts Amazon's audio front end into its call mode, whose echo canceller works on the other side's
 voice. What it leaves would still come back to the other Echo, so an Echo sends its room only while someone there
 talks; while the other side talks it is turned down 25 dB. Two people talking at the same time work only if the
 one here is clearly louder than the echo of the other: as on a speakerphone, take turns.
+
+## Phone calls over Bluetooth
+
+The Echo as your phone's hands-free speakerphone, as a car kit is (HFP, issue #233): on the Echo Dot 2, Echo Dot 3,
+Echo Dot 5 and Echo Show 5, where it was measured where each model's Bluetooth chip puts a call's audio, and on the
+Echo 2nd gen, Echo Show 5 2nd gen, Echo Show 8 (1st and 2nd gen) and Echo Input (the call on its jack or a
+Bluetooth speaker) as read from their firmware, not tried on them yet ([docs/re-hfp.md](re-hfp.md)).
+
+- **Set up**: turn on "Phone calls over Bluetooth" (Features; off by default), then pair the phone with Home
+  Assistant's "Bluetooth pairing" switch, as for music. A phone paired before the switch was on must be paired again:
+  a phone looks at what the Echo offers only when it pairs. While it is on, every phone paired with the Echo sends its
+  calls here whenever it is connected.
+- **A call comes in**: the Echo rings with its call animation (the phone rings too). The action button or
+  "<wake word>, answer" (Drop In's words, "Answering by voice"; no setting needed here) answers, and
+  the call talks through the Echo's speaker and Amazon's call processing (above). Those words answer in any request while it rings, a question Home Assistant asks back
+  too: an "accept" meant for it answers the phone instead. The action button, "<wake word>, stop" or "hang up" end it.
+- **Where a call talks is the phone's choice**, as with a car kit: a call answered on the phone talks on the Echo when
+  the phone sends its audio over Bluetooth (most do for a connected hands-free device), and the phone's audio picker
+  moves it back to the handset. A paired phone can so turn on the Echo's microphone for its call ([SECURITY.md](SECURITY.md#bluetooth)).
+- **In Home Assistant** (listed while the switch is on): "Phone call" says `no phone`, `idle`, `ringing`, `calling`,
+  `connected` (its audio on the Echo) or `on the phone` (a call talking on the handset: the phone kept its audio); "Phone caller" (the number,
+  or the name the phone gives) and "Phone" (the connected phone's name); the buttons "Answer phone call", "End phone
+  call" (rejects a ringing one) and "Take the phone call here" (brings a call talking on the phone to the Echo); and
+  the action `esphome.<echo>_phone_call` with `number:`, which has the phone call it, its audio on the Echo. Answering,
+  taking a call here, switching calls and calling come only from Home Assistant itself (the keyed connection), as
+  Drop In does.
+- **A second call**: one that comes in during a call (call waiting) or one on hold shows in "Phone call waiting" (its
+  caller, `unknown` where the phone names none; empty without one). The action button answers a waiting call and puts
+  the one you were on on hold; "Switch phone call" in Home Assistant does the same, and goes back and forth between
+  the two. Ending the call you are on ("End phone call", the action button, "hang up") brings the held one back. A
+  waiting call you do not answer stops when the caller gives up (or answer or reject it on the phone).
+- **Only for calls**: the Echo's microphone goes to the phone only while the phone has a call (or one dialled or
+  answered here); an audio link the phone opens without one (its voice assistant, an app's) is refused.
+- **One phone at a time**: the first device that connects for calls has the Echo's calls. A phone takes that place
+  from a device that is no phone and has no call (an Android TV box paired for music connects for calls too, and
+  most have no setting against it). Another phone waits and gets the place when the first disconnects; a device
+  that is no phone is turned away until it connects again.
+- **Do not disturb** and the microphones off: the Echo does not ring, the phone does; "Phone call" still says
+  `ringing`. One call at a time on the Echo: during a Drop In a phone's call stays on the phone.
+- **Volume**: the Echo plays a call at its call volume: the volume, or "Call volume" (Sound) with separate volumes.
+  The phone's volume keys move it during a call, and the Echo's volume buttons and Home Assistant move the phone's
+  (HFP's remote volume control). Outside a call the phone's volume does not touch the Echo's.
+- **Sound**: wideband (HD voice, mSBC, 16 kHz) where the phone offers it, which most phones do; narrowband (CVSD,
+  8 kHz) otherwise. Measured on the Echo Dot 2, Dot 3, Dot 5 and Echo Show 5; on the Echo 2nd gen, Echo Input, Echo
+  Show 5 2nd gen and Echo Show 8 by the same chips, not tried there yet ([docs/re-hfp.md](re-hfp.md)).
 
 ## Buttons and light ring
 
@@ -619,6 +682,16 @@ satellite of its own has to run without its microphone (as a display) while hass
   music starting. Music playing shows its bar under the clock. With an app or the music page in front the screen goes dark
   as before.
   Brightness follows the Brightness card: **Adaptive brightness** dims the clock at night.
+- **Motion keeps the screen on** and **Motion wakes the screen** (same card, experimental, off by default; shown
+  while [Wi-Fi motion](#wi-fi-motion) is on): a presence sensor of sorts for the screen. With the first, motion counts
+  as something happening: the screen goes dark, or shows the clock, only once nobody moved for **Screen sleeps after**
+  (plus the sensor's own 30 s), over an app too. With the second, a dark screen comes on as motion starts, showing
+  whatever it showed, and the clock gives way to the face; motion under the clock with only the first switched on
+  leaves the clock alone. A screen put out with **Screen off** in the drawer stays dark until it is touched or the Echo
+  wakes it itself (a request, a timer); after an update, a restart of hassmic or whenever the screen's program starts
+  anew (a new **Light band** height, or after it stopped) that is forgotten, and motion wakes it again. Neither in Do not disturb, so the night stays dark.
+  Wi-Fi motion sees movement between the Echo and the router, also in the next room, so expect the screen to come on
+  for someone passing there now and then.
 - **The drawer**: pull down from the top edge of the screen, whatever shows, as on Amazon's own Echo Show. In it:
   **Home** (the home app), **Face** (where the home app is another), **Music**, **Do not disturb**, **Screen off** (a
   touch wakes it), what plays (tap it for the music) and the Echo's volume. Over an app, start the pull on the thin
@@ -684,7 +757,10 @@ profile (the person icon), **Long-lived tokens**, **Create**, and on the Echo's 
 **Connect…** and paste it. The page sends it sealed for that Echo, which keeps it and never shows it again. The
 address, left empty, is taken from the Music Assistant that plays on the Echo when you save (port 8095) and kept:
 the token only ever goes there, so a Music Assistant that moves needs **Connect…** again (or its address given).
-Until then those tabs say how to connect.
+Until then those tabs say how to connect. A Music Assistant behind a proxy that serves HTTPS is given as
+`https://<name>` (or `wss://`, port 443 unless you name one): the Echo then talks to it over TLS, its certificate
+checked as for Home Assistant's media ("Check HTTPS certificates"). `http://` and `https://` of one host are two
+addresses: switching between them takes the token again.
 
 ## Music
 
@@ -996,6 +1072,8 @@ change counts. Tried in one flat for a few minutes and one night, where it mostl
   Show 5), the module hooks the new one by itself (from the version of 2026-11-17 on, once the Echo restarted; not yet
   seen on an Echo); should no frame reach it for a minute, the sensor shows unknown and the log says why.
 - ESPHome only. It does not use the microphones; muting does not stop it.
+- On an Echo Show it can also keep the screen on and wake it: **Motion keeps the screen on** and **Motion wakes the
+  screen** on the Screen page ([The screen](#the-screen-echo-show)).
 
 ## Settings page
 
@@ -1131,6 +1209,21 @@ once it has an address and the router answers, and otherwise returns to the old 
 why. Once the new one works it forgets the old ones. Expect a new IP address: find it as "Web UI address" in Home
 Assistant (which finds the Echo again within a few minutes if it reaches that network), and approve the browser there
 once more. WPA2 and open networks only; a WPA2/WPA3 mixed network joins as WPA2 (tried on an Echo 2).
+
+**Move to a stronger access point** (System; issue #234; Echo Dots and the Echo 2, on by default): where your Wi-Fi has
+several access points under one name (a mesh, a router with repeaters), the Echo moves to a stronger one when its
+signal stays under -70 dBm for 30 s. It first asks the access point where to go, if the access point takes such
+questions (802.11v, "BSS transition" in many routers' settings), then scans: every channel the first time (3 to 6 s
+off its channel), only the channels your network was seen on after that (half a second): once a minute while the
+signal stays weak, then less often (up to every 5 minutes) while it finds none stronger, as with a single router far
+away. It moves only to an access point at least 8 dB stronger and no weaker than -67 dBm, which takes
+a quarter of a second and keeps its address. An access point that does not take it is left alone for 10 minutes. The
+Wi-Fi row shows the access point the Echo is on (its band and signal) and the last move; the log has each one
+("Wi-Fi moved to ..."). Without this the Echo stays on the access point it joined, however weak, until the link
+breaks: the Wi-Fi service that moved it in Amazon's software is stopped on these Echos, and the Wi-Fi client they keep
+does not look around while connected. Fast roaming (802.11r) is not used: these Echos' Wi-Fi drivers refuse to join
+with it, so a network that requires it is one they cannot join at all. The Echo Shows and the Echo Input move by
+themselves (Android's Wi-Fi service).
 
 **Network address** (System; issue #191): Automatic, the router hands the Echo its address (DHCP; a reservation in the
 router keeps it the same), or Fixed: the address, subnet mask, router and one or two DNS servers, filled in from what

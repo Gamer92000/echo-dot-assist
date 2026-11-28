@@ -1,5 +1,5 @@
 /* Media over HTTPS (issue #30): what Home Assistant hands us for TTS, announcements and play_media when it serves
- * HTTPS itself, fetched through the firmware's libcurl and handed on as a socket like a plain http:// fetch. */
+ * HTTPS itself, fetched through http.c (hassmic's own TLS, tls.c) and handed on as a socket like a plain http:// fetch. */
 #ifndef HTTPS_H
 #define HTTPS_H
 

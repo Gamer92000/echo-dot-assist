@@ -53,6 +53,7 @@
 #include "ringdesign.h"
 #include "ledq.h"
 #include "screen.h"
+#include "wifimotion.h"
 #include "davs.h"
 #include "dropin.h"
 #include "call.h"
@@ -73,6 +74,7 @@
 #include "core.h"
 #include "ota.h"
 #include "plugin.h"
+#include "hfp.h"
 #include "plugmsg.h"
 #include "plugin_fetch.h"
 #include "plugin_index.h"
@@ -948,6 +950,16 @@ static long long wake_cut_ms;    /* when the wake word last cut a reply or an al
 static long long last_wake_ms;   /* Amazon's models know "stop" only in the ~2 s after the wake word (op.cfg.json: awake state) */
 static int quiet_abort;
 static int run_wake;             /* under lock: the wake word started this run (ours or Home Assistant's), not the button or a follow-up */
+/* under lock: what started this run (PLUGIN_REQ_*; 0: -w remote's stream before Home Assistant's wake word).  Only
+ * PLUGIN_REQ_WAKE_WORD with core_local_wake is this Echo's own engine hearing the word, from idle or cutting a reply
+ * (barge_src: the run after the cut is that word's, its replay from the word's end): a start Home Assistant cannot
+ * ask for (start_conversation, continue_conversation, its own wake word all are), which a spoken "answer" for a call
+ * only the Echo may answer needs (core_transcript, answer_voice).  It can still make one: the engine hears any sound,
+ * a reply or media Home Assistant plays here too (the echo canceller takes most of that out, not all), which
+ * docs/SECURITY.md says */
+static int run_source;
+/* under lock: setting answer_by_voice (off): "<wake word>, answer" answers a ringing Drop In or plugin's call too */
+static int answer_voice;
 /* Lock held.  heard_ms: when the engine last reported the wake word (on_wake; SIGUSR1 on the PC), stop_ms its last
  * "stop": a "stop" after heard_ms is that wake word's.  stop_cut: that "stop" ended what its wake word had cut (a
  * ring, a call, a reply, a THINKING run).  stop_ends: setting stop_ends_listening (stop_word) */
@@ -1065,6 +1077,7 @@ static void pipeline_start(uint64_t from, int source)
      * end ended this one before any audio went out (heard_end in the capture thread) */
     micend_start(&mic_end, MICEND_OFF, 0, 0, NULL);
     run_wake = from != 0;
+    run_source = source;
     whisper_run();
     proto->start();
     atomic_store(&streaming, 1);
@@ -1124,6 +1137,7 @@ void core_remote_wake(void)
         if (proto->reply_cut) proto->reply_cut();
     }
     run_wake = 1;
+    run_source = PLUGIN_REQ_HA_WAKE;
     wake_told("detected");
     if (!quiet) sound_request(SND_WAKE);
     req_begin(PLUGIN_REQ_HA_WAKE);          /* a plugin's copy from here: what streamed before was no request (3.6) */
@@ -1175,6 +1189,7 @@ int core_sound_on(int s, int set)
 int core_wake_in_request(int set) { if (set >= 0) wake_in_request = set != 0; return wake_in_request; }
 int core_end_of_request(int set) { if (set >= 0 && set < MICEND_MODES) end_mode = set; return end_mode; }
 int core_stop_ends_listening(int set) { if (set >= 0) stop_ends = set != 0; return stop_ends; }
+int core_answer_by_voice(int set) { if (set >= 0) answer_voice = set != 0; return answer_voice; }
 
 int core_bt_announce(int set) { if (set >= 0) use_bt_announce = set; return use_bt_announce; }
 
@@ -1340,16 +1355,21 @@ int core_call_button(void)
     int who = call_claimed();
     if (who == CALL_DROPIN) return dropin_running() && dropin_button();
     if (who >= CALL_PLUGIN) return plugin_call_button();
+    if (who == CALL_HFP) return hfp_button();
     return 0;
 }
 
-int core_call_answer(void)
+/* HOW: for the log ("the screen", "said answer") */
+static int call_answer(const char *how)
 {
     int who = call_claimed();
     if (who == CALL_DROPIN) return dropin_running() && dropin_answer();
-    if (who >= CALL_PLUGIN) return plugin_call_answer();
+    if (who >= CALL_PLUGIN) return plugin_call_answer_by(how);
+    if (who == CALL_HFP) return hfp_answer();
     return 0;
 }
+
+int core_call_answer(void) { return call_answer("the screen"); }
 
 /* WHY: "stop", "said hang up", "the screen" (the plugin is told which: PM_HANGUP_*) */
 int core_call_hangup(const char *why)
@@ -1357,7 +1377,16 @@ int core_call_hangup(const char *why)
     int who = call_claimed();
     if (who == CALL_DROPIN && dropin_running()) { dropin_hangup(why); return 1; }
     if (who >= CALL_PLUGIN) return plugin_call_hangup(!strcmp(why, "the screen") ? PM_HANGUP_SCREEN : PM_HANGUP_SPOKEN);
+    if (who == CALL_HFP) return hfp_hangup(why);
     return 0;
+}
+
+/* hfp.c: a phone's call over Bluetooth changed what Home Assistant's "Phone call" entities show */
+void core_phone_changed(void)
+{
+    pthread_mutex_lock(&core_lock);
+    if (connected && proto->phone_changed) proto->phone_changed();
+    pthread_mutex_unlock(&core_lock);
 }
 
 int core_call_status(char *peer, size_t cap)
@@ -2958,6 +2987,18 @@ int core_transcript(const char *text)
                                            "cuelga", "colgar", "riattacca", "riaggancia", "ophangen", "hang op", "leg op",
                                            "închide", "închide apelul", "închide Drop In", "termină apelul", "încheie apelul" };
                                                                      /* the blueprint's languages */
+    /* a ringing call is answered on these (issue #240): as they are spelled, compared folded; none is a stop or a
+     * hang-up, and each is a whole transcript, so "answer the question" is a request as before */
+    static const char *const answers[] = { "answer", "answer it", "answer the call", "answer the phone", "pick up",
+                                           "pick it up", "accept", "accept the call", "take the call",
+                                           "abnehmen", "nimm ab", "annehmen", "Anruf annehmen", "Drop In annehmen",
+                                           "rangehen", "geh ran", "abheben", "heb ab",
+                                           "décroche", "décrocher", "réponds", "répondre", "accepte l'appel", "prends l'appel",
+                                           "contesta", "contestar", "responde", "responder", "atiende", "atender",
+                                           "descuelga", "descolgar", "acepta la llamada",
+                                           "rispondi", "rispondere", "accetta", "accetta la chiamata",
+                                           "opnemen", "neem op", "aannemen", "neem aan", "beantwoorden",
+                                           "răspunde", "răspunde la apel", "preia apelul", "acceptă apelul" };
     char w[64], k[64], kw[64];
     size_t n = fold(text, w, sizeof w);
     wake_phrase_bare(kw, sizeof kw);                                /* "Echo", not "Echo (de-DE)" */
@@ -2978,6 +3019,30 @@ int core_transcript(const char *text)
             if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
             core_pipeline_finish();
             return 1;
+        }
+        /* "<wake word>, answer" while it rings.  The words are Home Assistant's (its speech to text), and so is any run
+         * but one this Echo's own engine started: start_conversation, continue_conversation and -w remote's wake word
+         * all open one.  A phone's call Home Assistant answers anyway ("Answer phone call"), so any run does for it.
+         * A Drop In ("After the action button") and a plugin's call (docs/plugins.md 4.8) are answered only by a person
+         * at the Echo: by voice only with answer_by_voice, which the owner turns on (the page, an import, a preset;
+         * Home Assistant has no entity for it), and only in a run that began with this Echo's own wake word.  What that still lets Home
+         * Assistant do (put "answer" into such a run's transcript) is docs/SECURITY.md's.  Not answered: the words go
+         * on to Home Assistant as without the call, the log says why */
+        int who = call_claimed();
+        if (call_was == CALL_RINGING && said(w, answers, sizeof answers / sizeof *answers)) {
+            const char *no = who == CALL_HFP ? NULL
+                           : !answer_voice ? "answering by voice is off (the settings page: Voice, Calls)"
+                           : !core_local_wake || run_source != PLUGIN_REQ_WAKE_WORD ? "this run did not begin with this Echo's own wake word"
+                           : NULL;
+            if (no) fprintf(stderr, "said answer: the call not answered: %s\n", no);
+            else if (!call_answer("said answer")) fprintf(stderr, "said answer: the call no longer rings: on to Home Assistant\n");
+            else {
+                fprintf(stderr, "said answer: the call answered, run cancelled\n");
+                req_ending(PLUGIN_REQEND_CANCELLED);
+                if (connected && proto->cancel) { barge_in = 0; atomic_store(&streaming, 0); proto->cancel(); quiet_abort = 1; }
+                core_pipeline_finish();
+                return 1;
+            }
         }
     }
     int hit = said(w, stops, sizeof stops / sizeof *stops);
@@ -3559,6 +3624,7 @@ static void mix_apply(void)                  /* lock held: the mixer's volumes a
     atomic_store(&sounds_q16, (int)lroundf(mix_gain(kind_now(VOL_SOUNDS)) * 65536));
     atomic_store(&timers_q16, (int)lroundf(mix_gain(kind_now(VOL_TIMERS)) * 65536));
     audio_call_gain(mix_gain(kind_now(VOL_CALLS)));
+    hfp_call_volume(kind_now(VOL_CALLS));          /* a phone's call: its speaker gain follows (only stored here) */
 }
 
 static void tts_kind(int media)              /* the playback thread, at each start of the TTS stream */
@@ -3626,6 +3692,24 @@ int core_even_volume(int set)
     return vol_even;
 }
 int core_kind_volume(int k, int set) { if (set >= 0) { kinds[k].level = clamp100(set); mix_apply(); } return kinds[k].level; }
+
+int core_call_volume(int v)
+{
+    pthread_mutex_lock(&core_lock);
+    if (v >= 0) {
+        v = clamp100(v);
+        if (!vol_split) { if (v != core_volume()) core_set_volume(v); }
+        else if (kinds[VOL_CALLS].linked) { if (v != kind_volume(VOL_CALLS)) core_set_volume(v - kinds[VOL_CALLS].offset); }
+        else if (v != kinds[VOL_CALLS].level) {
+            kinds[VOL_CALLS].level = v; mix_apply(); volume_led(v, 0);
+            fprintf(stderr, "volume: calls %d\n", v);
+            settings_save(); core_settings_changed();
+        }
+    }
+    v = kind_now(VOL_CALLS);
+    pthread_mutex_unlock(&core_lock);
+    return v;
+}
 int core_kind_linked(int k, int set)
 {
     if (set >= 0 && (set != 0) != kinds[k].linked) {
@@ -4444,6 +4528,9 @@ static void term_start(void)
     sigaction(SIGTERM, &sa, &term_was);
 }
 
+/* Wi-Fi motion changed (wifimotion.c's poller, no locks held): screen.c tells the UI */
+static void motion_screen(void) { (void)screen_motion(); }
+
 int main(int argc, char **argv)
 {
     const char *manifest = NULL, *input = board.keypad; int port = 0, print_mdns = 0, o;
@@ -4500,6 +4587,10 @@ int main(int argc, char **argv)
     term_start();                       /* (after ringlive_start: its SIGTERM handler is the one before ours) */
     rd_start();                         /* designs asked for before this start: still installing, or back */
     screen_start();                                 /* a model with a screen: its UI process (screen.h) */
+    /* Wi-Fi motion for the screen ("Motion keeps the screen on", "... wakes"): its changes to the UI as they come, not at
+       the band's next look; the poller from here, whatever the protocol (proto_esphome.c starts it only with Home
+       Assistant's first link, and Wyoming never did) */
+    if (screen_motion_keep(-1) >= 0) wifimotion_start(motion_screen);
     audio_earcon_started = earcon_started;
     led("-u", "scone-setup");           /* a restart inside the pairing window: the window is gone, its chaser would loop on */
     led("-u", "factory-reset");         /* a reset asked for before this start is done (main.sh) */
@@ -4577,6 +4668,10 @@ int main(int argc, char **argv)
     if (arb_running() && duck_start()) fprintf(stderr, "duck: no thread, the other Echos' runs do not duck the music here\n");
     if (arb_running() && ringstop_start()) fprintf(stderr, "ringstop: no thread, a stop here ends no ring elsewhere\n");
     if (dropin_port && arb_running() && dropin_start(dropin_port)) fprintf(stderr, "drop in: not available\n");
+    /* Every call's audio, not Drop In's alone: a plugin's and a phone's call too, also where arbitration (and so Drop
+     * In) does not run: Wyoming, -w remote, -a 0.  Started by dropin_start only, those calls connected with no audio
+     * either way (issue #239).  Both threads sleep on a condition until a call's media begins */
+    if (call_start()) fprintf(stderr, "call: no playout thread, calls have no audio\n");
 
     pthread_t cap_t, play_t, ear_t;
     pthread_create(&cap_t, NULL, capture_thread, NULL);
@@ -4614,8 +4709,9 @@ int main(int argc, char **argv)
     fprintf(stderr, "hassmic " VERSION " (" BUILD ") %s on %d, wake=%s\n", proto->id, core_port, core_local_wake ? "local" : "remote");
     if (ota_port) { pthread_t st; if (!pthread_create(&st, NULL, selftest_thread, NULL)) pthread_detach(st); }
     while (!atomic_load(&quit)) {
-        int c = net_accept(ls);
-        if (c < 0) break;
+        int c = net_accept_kept(&ls, core_port, proto->id);        /* never ends the loop (netio.h, issue #241) */
+        if (c < 0) continue;
+        if (atomic_load(&quit)) { close(c); break; }                /* the capture ended while accept() waited */
         /* A link that went away must not hold a client slot (or core_lock, in a blocked write) for ever:
          * writes give up after 5 s, keepalive notices a dead peer within ~25 s.  Both make serve() return.  Keepalive
          * only probes while nothing waits for an acknowledgement, though; with a state update unacknowledged the

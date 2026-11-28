@@ -84,9 +84,12 @@ def tls_files(d):
     return write("ca.pem", ca), write("srv.pem", srv, key), write("self.pem", own, self_key)
 
 
-def https_server(port, pem):
+def https_server(port, pem, tls=None):
+    """tls "1.3": TLS 1.3 alone (Home Assistant's "Modern" SSL profile, issue #236), "1.2": TLS 1.2 alone, else both"""
     import ssl
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(pem)
+    if tls == "1.3": ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    if tls == "1.2": ctx.maximum_version = ssl.TLSVersion.TLSv1_2
     class TLSServer(ThreadingHTTPServer):
         def shutdown_request(self, request):        # close_notify at the end, as aiohttp sends it: the body ends there
             try: request.unwrap()
@@ -168,6 +171,11 @@ async def home_assistant(e):
     return ha
 
 
+def rx_stat_file(p, rcpi):                     # what the Wi-Fi driver answers RX_STAT (HASSMIC_FAKE_WIFI): whole or not
+    with open(p + ".new", "w") as f: f.write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
+    os.replace(p + ".new", p)                  # at all, the poller reads it every 100 ms
+
+
 class Echo:
     """build/hassmic-host as the tests know it: its state in a temp directory, a settings file from before the mic
     level, installed wake word models, a keypad (a FIFO), the light sensor and Wi-Fi driver's files, the settings page
@@ -209,13 +217,11 @@ class Echo:
                                      env=env, stderr=open(self.logpath, "w") if log else None)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", self.HTTP_PORT), Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-        self.httpsd, self.selfd = https_server(self.HTTPS_PORT, self.srv_pem), https_server(self.SELF_PORT, self.self_pem)
+        # Home Assistant on its "Modern" SSL profile: TLS 1.3 and nothing else (issue #236); the self-signed one both
+        self.httpsd, self.selfd = https_server(self.HTTPS_PORT, self.srv_pem, "1.3"), https_server(self.SELF_PORT, self.self_pem)
 
     def keyev(self, code, value): os.write(self.keypad, struct.pack("llHHi", 0, 0, 1, code, value))     # struct input_event, EV_KEY
-    def rx_stat(self, rcpi):                   # whole or not at all: the Wi-Fi poller reads it every 100 ms
-        p = self.env["HASSMIC_FAKE_WIFI"]
-        with open(p + ".new", "w") as f: f.write(f"RX Stat:\nRX SNR (dB)          = 32\nRCPI RX0             = {rcpi}\n")
-        os.replace(p + ".new", p)
+    def rx_stat(self, rcpi): rx_stat_file(self.env["HASSMIC_FAKE_WIFI"], rcpi)
     def wake(self): self.proc.send_signal(signal.SIGUSR1)          # the PC's stand-in for the wake word
     def log(self): return open(self.logpath, errors="replace").read() if self.logpath else ""
 

@@ -11,7 +11,8 @@
 #define WIFIMOTION_SENS_DEFAULT 5
 
 int  wifimotion_present(void);                      /* module or RX_STAT; probed at the first call */
-void wifimotion_start(void (*changed)(void));       /* poller thread; changed(): wifimotion_motion() changed, no locks */
+void wifimotion_start(void (*changed)(void));       /* poller thread, once; each call adds its changed() (4 at most):
+                                                     * wifimotion_motion() changed, called with no locks held */
 int  wifimotion_enable(int set);                    /* -1: query */
 int  wifimotion_sensitivity(int set);               /* WIFIMOTION_SENS_MIN..MAX, clamped; -1: query */
 int  wifimotion_motion(void);                       /* 1 moving, 0 still, -1 off (state unknown) */

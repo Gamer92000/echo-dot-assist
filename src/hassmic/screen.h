@@ -59,4 +59,17 @@ int  screen_keep_on(void);
 int  screen_clock(int set);
 int  screen_sleep_min(int set);
 int  screen_saver(void);
+/* Wi-Fi motion for the screen (wifimotion.c, the feature on): screen_motion_keep, "Motion keeps the screen on": while it
+ * moves the timeout above does not run out (ring_band.c tells PowerManager of activity, the UI holds back the clock),
+ * so idle is that long without motion (plus the sensor's own 30 s); screen_motion_wake, "Motion wakes the screen": a
+ * dark screen comes on when motion starts (ring_band.c), the clock gives way to the face (the UI).  Neither in Do not
+ * disturb: the night's screen stays dark.  -1 where there is no screen.  screen_motion: moving now (Wi-Fi motion on and
+ * moving: 1, else 0), read by ring_band.c once a second; a change goes to the UI ("mo") */
+int  screen_motion_keep(int set);
+int  screen_motion_wake(int set);
+int  screen_motion(void);
+/* the drawer's Screen off put the screen out and it has not been on since (the UI's "slept"): "Motion wakes the
+ * screen" leaves it dark, a person's choice; a touch, the power button or a pattern's wake ends it.  Kept in memory
+ * only: a UI that ends takes it along (none left to say "slept 0"), and so does a restart of hassmic (the docs say so) */
+int  screen_slept(void);
 #endif

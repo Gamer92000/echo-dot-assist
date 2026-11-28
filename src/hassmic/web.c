@@ -2220,7 +2220,6 @@ static void mass_api(int fd, struct req *r)
     int rc = mass_set(url, !strcmp(th, "-") ? "-" : !strcmp(th, "=") ? "" : (const char *)tok);
     crypto_wipe(tok, sizeof tok); crypto_wipe(sealed, sizeof sealed);
     if (rc == -2) { respond_sjson(fd, r, 409, "{\"error\":\"Give Music Assistant's address\"}"); return; }
-    if (rc == -4) { respond_sjson(fd, r, 400, "{\"error\":\"The Echo talks to Music Assistant's API without TLS: give its http address (port 8095)\"}"); return; }
     if (rc == -3) { respond_sjson(fd, r, 409, "{\"error\":\"A new address takes the token again: it only ever goes where it was given\"}"); return; }
     char o[4096]; size_t n = mass_status_json(o, sizeof o);
     respond_s(fd, r, rc ? 500 : 200, "application/json", NULL, o, n);
@@ -2414,12 +2413,12 @@ static char pl_check[PS_CHECK_JSON]; static size_t pl_check_n;      /* lk: what 
  *   CHECKED_MS  two minutes: a dialog read.  Until then the package the owner is reading about is the one the
  *               slot holds, and no other browser's, nor a push, takes its place;
  *   STUCK_MS    a fetch caps itself at FETCH_MS (bring_thread); half a minute past that its thread sits in what
- *               nothing interrupts (this libcurl's name lookup), and the slot is not held for it;
+ *               nothing interrupts (the name lookup, getaddrinfo), and the slot is not held for it;
  *   WAITS ends with the wait for the button, LOGIN_MS.
  * FETCH_MS, five minutes for one fetch as a whole, the look and every candidate: a package is 4 MB at most, which
  * a link down to 256 kbit/s (32 kB/s: an Echo at the edge of its Wi-Fi) brings in 2 min 8 s, and a look is three
  * requests of 15 s at most; five minutes are that with room, and on a usual link all four candidates.  Before, a
- * server that kept each transfer above libcurl's 512 B/s floor held the slot for an hour (four times 900 s).
+ * server that kept each transfer above the fetch's 512 B/s floor held the slot for an hour (four times 900 s).
  * (hassmic's own claim, a push, holds CHECKING and INSTALLING only: within its call, which nobody takes.  Its column
  * "a browser or a push" is what a claim of hassmic's own gives way to; the Echo fetches nothing by itself.)
  * HASSMIC_PLUGIN_SLOT=<checked ms>:<upload ms>:<fetch ms> for the tests. */
@@ -2441,7 +2440,10 @@ static const struct pl_rule { int same, other, own, from_own; const char *why; }
     [PL_SECOND]     = { T_NOW,   T_CHECKED, T_CHECKED, T_NOW,   "a browser is installing a plugin just now: try again in two minutes" },
 };
 #define PL_OVERTAKEN "another install took this one's place before it was accepted: nothing was installed. Upload or fetch the package again"
-static int ASK_DELAY_MS;        /* HASSMIC_PLUGIN_ASK_DELAY: /install sleeps between its check and its ask (tests/fake_plugins_race.py) */
+/* HASSMIC_PLUGIN_ASK_DELAY=<ms>[:<file>]: /install sleeps between its check and its ask, that long, or with a file for
+ * as long as it exists, that long at most, and says so (tests/fake_plugins_race.py: the window held open until what it
+ * tests in it is done, not for a time a busy machine overran) */
+static int ASK_DELAY_MS; static char ASK_DELAY_FILE[200];
 /* HASSMIC_PLUGIN_SYNC_DELAY=<ms>:<file>: while the file exists a synced install sleeps, that long at most, between
  * its note (pending) and the install (tests/fake_plugins_sync.py) */
 static int SYNC_DELAY_MS; static char SYNC_DELAY_FILE[200];
@@ -3204,8 +3206,8 @@ static int bring_ok(const struct ps_manifest *m, int tier, const char *what, cha
 }
 
 /* One fetch, for the claim b->gen: a browser's.  While it looks and downloads the slot is FETCHING and nothing of
- * the staging file is touched: a cancel lets go of the slot at once and this thread finds out when libcurl next
- * asks (b->stop).  For the staging file it moves the slot to CHECKING, which nobody takes.  The version is the
+ * the staging file is touched: a cancel lets go of the slot at once and this thread finds out within 250 ms
+ * (b->stop, http.c).  For the staging file it moves the slot to CHECKING, which nobody takes.  The version is the
  * index's choice for this build (pf_best: what it requires, not withdrawn), so one download */
 static void *bring_thread(void *arg)
 {
@@ -3684,7 +3686,11 @@ static void plugins_api(int fd, struct req *r)
              * the slot still is this claim, held in CHECKING, with the digest listed (GEN, LISTED: read above,
              * under lk).  What the check said about the button decides only which way is tried: the store looks
              * again when it writes (ps_stage_install), and installs without a press only what needs none then */
-            if (ASK_DELAY_MS) usleep((useconds_t)ASK_DELAY_MS * 1000);
+            if (ASK_DELAY_MS) {
+                fprintf(stderr, "plugins: (test) the install's ask held%s\n", ASK_DELAY_FILE[0] ? " while the file is there" : "");
+                if (!ASK_DELAY_FILE[0]) usleep((useconds_t)ASK_DELAY_MS * 1000);
+                else for (int ms = 0; ms < ASK_DELAY_MS && !access(ASK_DELAY_FILE, F_OK); ms += 20) usleep(20000);
+            }
             if (!button) {
                 pthread_mutex_lock(&lk); int go = pl_mine(pub) && !memcmp(pl.digest, listed, 32) && pl_move(gen, PL_CHECKING, PL_INSTALLING); pthread_mutex_unlock(&lk);
                 if (!go) snprintf(err, sizeof err, "%s", PL_OVERTAKEN);
@@ -4114,11 +4120,11 @@ static void *listener(void *arg)
 {
     int ls = net_listen(port);
     (void)arg;
-    if (ls < 0) { perror("web: listen"); return NULL; }
-    fprintf(stderr, "web: settings page on port %d\n", port);
+    if (ls < 0) perror("web: listen");                          /* (net_accept_kept tries again every second) */
+    else fprintf(stderr, "web: settings page on port %d\n", port);
     for (;;) {
-        int c = net_accept(ls); pthread_t t;
-        if (c < 0) { if (errno == EINTR) continue; break; }
+        int c = net_accept_kept(&ls, port, "web"); pthread_t t;
+        if (c < 0) continue;
         if (atomic_fetch_add(&nconn, 1) >= MAX_CONN) { atomic_fetch_sub(&nconn, 1); close(c); continue; }   /* a browser opens few */
         if (pthread_create(&t, NULL, conn_thread, (void *)(long)c)) { atomic_fetch_sub(&nconn, 1); close(c); }
         else pthread_detach(t);
@@ -4159,7 +4165,7 @@ int web_start(int p, const struct web_hooks *h)
     }
     if ((e = getenv("HASSMIC_LOGIN_RATE"))) { int a, b; if (sscanf(e, "%d:%d", &a, &b) == 2 && a > 0 && b > 0) { ASK_ADDR = a; ASK_ALL = b; } }
     if ((e = getenv("HASSMIC_PLUGIN_SLOT"))) { int c, u, f; if (sscanf(e, "%d:%d:%d", &c, &u, &f) == 3 && c >= 0 && u >= 0 && f > 0) { CHECKED_MS = c; UPLOAD_MS = u; FETCH_MS = f; } }
-    if ((e = getenv("HASSMIC_PLUGIN_ASK_DELAY")) && atoi(e) > 0) ASK_DELAY_MS = atoi(e);
+    if ((e = getenv("HASSMIC_PLUGIN_ASK_DELAY")) && atoi(e) > 0) { ASK_DELAY_MS = atoi(e); if (strchr(e, ':')) snprintf(ASK_DELAY_FILE, sizeof ASK_DELAY_FILE, "%s", strchr(e, ':') + 1); }
     if ((e = getenv("HASSMIC_PLUGIN_OWN_DELAY")) && atoi(e) > 0) OWN_DELAY_MS = atoi(e);
     if ((e = getenv("HASSMIC_PLUGIN_SYNC_DELAY")) && sscanf(e, "%d:%199s", &SYNC_DELAY_MS, SYNC_DELAY_FILE) != 2) SYNC_DELAY_MS = 0;
     if ((e = getenv("HASSMIC_PLUGIN_NONCE_MS")) && atoi(e) > 0) ACC_NONCE_MS = atoi(e);

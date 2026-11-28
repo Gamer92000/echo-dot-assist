@@ -2,7 +2,7 @@
  * Plugins from the plugin index (docs/plugins.md 5.3, 5.4): the repository hassmic-plugins publishes on GitHub
  * Pages a signed list of plugins (index.json, .sig), a signed list of what was withdrawn (revoked.json, .sig) and
  * every package it lists (packages/<id>-<version>.hmp), each with a listing inside signed by the index key.  The
- * Echo reads them the way update.c fetches its own bundles: update_fetch, i.e. the firmware's libcurl, net_socket,
+ * Echo reads them the way update.c fetches its own bundles: update_fetch, i.e. http.c on hassmic's own TLS, net_socket,
  * HTTPS against the system's CAs, only the address built in (keys/plugins.conf: PLUGIN_INDEX).  A browser could read
  * the site itself, but it would then have to hand the Echo what it read, and the Echo checks everything anyway: one
  * reader, the one that decides.
@@ -203,7 +203,7 @@ static long fresh_s(int force)
 
 static time_t now_s(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec + 1; }    /* (+1: 0 is "never") */
 
-/* libcurl's words about URL without the URL in front: what the page shows */
+/* update_fetch's words about URL without the URL in front: what the page shows */
 static const char *bare(const char *why, const char *url)
 {
     size_t ul = strlen(url);
@@ -327,7 +327,6 @@ int pf_look_until(const char *want, int pace, const volatile int *stop, long lon
     }
 done:
     pthread_mutex_lock(&fl);
-    known.looking = 0;
     /* a look someone cancelled found nothing out: the list every browser reads, its age and its reason stay as
      * they were (before, one browser's cancelled fetch left every page an empty list that "failed: cancelled").
      * Nor does one the Echo made by itself that failed (PF_DAILY): the page's list, and the hour PF_AUTO holds it,
@@ -358,6 +357,10 @@ done:
     pi_index_free(&ix);
     free(ij); free(is); free(rj); free(rs);
     if (st) { char p[400]; mkdir(ps_dir(), 0700); seen_path(p, sizeof p); if (statefile_write(p, 0600, st, stn)) fprintf(stderr, "plugins: cannot write %s: the versions seen listed are known until the next start only\n", p); free(st); }
+    /* Only now is the look over for whoever asks (pf_json's "looking"): .serial and .listed are on the flash, which
+     * statefile_write's fsyncs take a while to put there (CI 2026-11-24: the page read the new list, the files were
+     * not there yet).  A look that ends with the files behind its answer has nothing else to wait for */
+    pthread_mutex_lock(&fl); known.looking = 0; pthread_mutex_unlock(&fl);
     if (state == PF_CANCELLED) { snprintf(err, cap, "%s", why[0] ? why : "cancelled"); if (strcmp(err, "cancelled")) fprintf(stderr, "plugins: the plugin index not looked at: %s\n", err); }
     else if (state == PF_OK) {
         pthread_mutex_lock(&fl);

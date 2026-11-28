@@ -72,9 +72,35 @@ struct board {
     int cold_lead_ms;
     /* audio_mixer.c: the mixer's micHfp carries the front end's call path ("Voice" in AFE.cfg: echo canceller, residual
      * echo suppressor, noise reduction, AGC) while a Voip stream is open, measured on this model; a call then sends it
-     * (call.c, setting call_mic).  0: not measured, the assistant's micAsr as before.  Measured: donut (a talker,
-     * 2026-11-13), biscuit (a talker and the echo, 2026-11-17); PLAN.md "Calls with Amazon's call microphone" */
+     * (call.c), always: no setting (2026-11-26, the maintainer: no reason ever to send the assistant's instead).
+     * 0: none, the assistant's micAsr.  Measured: donut (a talker, 2026-11-13), biscuit (a talker and the echo,
+     * 2026-11-17), cannoli (a user's phone calls, 2026-11-26); PLAN.md "Calls with Amazon's call microphone"; the
+     * Android models' as stock's (audio_android.c), radar's from the firmware */
     int call_mic;
+    /* call.c's echo estimate on that path held this many dB under what plays (after a call's first 2 s): micHfp's AGC
+     * puts speech at the playback's level, and an uncapped estimate ducked every quick reply.  Measured: the echo left
+     * well under it (donut, biscuit: PLAN.md "Calls with Amazon's call microphone"; cannoli, a user's traces,
+     * 2026-11-26).  0 (unmeasured): uncapped, as on micAsr: a quick reply's start ducked, never an echo let through */
+    float call_echo_cap_db;
+
+    /* Phone calls over Bluetooth (hfp.c, scoaudio.c; docs/re-hfp.md): where a call's audio goes once the phone opened its
+     * synchronous link.  No chip here moves it over HCI: each puts it where the model's stock HAL takes it, measured per
+     * model (scoprobe/ebcprobe, 2026-11-25) or read from its firmware.  SCO_NONE: no calls on this model.  SCO_PCM: the
+     * chip's PCM pins on the SoC, the PCM devices of card 0 named sco_play / sco_cap in /proc/asound/pcm (as stock's
+     * MediaTek HAL finds them, AudioALSADeviceParser) at 8 kHz (CVSD coded by the chip), opened with
+     * sco_play_ch / sco_cap_ch channels (the first carries the call), the controls of sco_route set to 1 while it runs
+     * and to 0 after.  SCO_EBC: an integrated Bluetooth core's BTCVSD (/dev/ebc): the air's bitstream, coded here
+     * (cvsd.c).  bt_sco_cmd: a vendor command sent after every HCI reset, where the chip's driver does not configure its
+     * PCM side itself: opcode (little endian), length, parameters; NULL: none */
+    int sco;
+    const char *sco_play, *sco_cap;
+    int sco_play_ch, sco_cap_ch;
+    const char *const *sco_route;
+    const unsigned char *bt_sco_cmd;
+    /* SCO_PCM: the chip codes mSBC (wideband) itself from 16 kHz linear audio on its PCM pins, the link accepted with
+     * Enhanced Accept Synchronous Connection (data path 1, transport unit 16, T2's parameters); measured Echo to Echo
+     * with a tone above 4 kHz both ways (scoprobe msbc -U 16, docs/re-hfp.md).  0: not measured, CVSD only */
+    int sco_msbc_chip;
 
     /* speaker gain (spkgain.c): an ALSA control of card 0 that sets the speaker amplifier's analog gain, which the
      * settings page may raise; NULL: none.  stock: what the speaker plays at on a stock Echo (what the audio HAL's
@@ -91,6 +117,8 @@ struct board {
      * own control: tried in order where speaker_gain is not on the card.  Fields as above; {NULL}-terminated, or NULL */
     const struct board_gain { const char *name; int stock, steps, db, min_db, limit; } *speaker_gain_alt;
 };
+
+enum { SCO_NONE, SCO_PCM, SCO_EBC, SCO_HCI };     /* board.sco; SCO_HCI: over HCI as the standard has it (the PC's tests) */
 
 extern const struct board board;
 /* volcurve.c: the Echo Dot 2's curve, measured there; the stand-in for a model whose own is not measured yet */

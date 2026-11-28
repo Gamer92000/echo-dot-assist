@@ -7,7 +7,7 @@
  * system resolver does not do that.  timeout_s applies to each connect() and stays set as send and receive timeout. */
 int net_connect(const char *host, const char *port, int timeout_s);
 
-/* socket() as the group that the egress lock lets out to any address (runas -r); for sockets others open for us (libcurl) */
+/* socket() as the group that the egress lock lets out to any address (runas -r); for the sockets http.c opens */
 int net_socket(int family, int type, int protocol);
 
 /* IPv4 address of a ".local" name by one-shot mDNS query (RFC 6762 5.1), in network byte order; 0 if nobody answered. */

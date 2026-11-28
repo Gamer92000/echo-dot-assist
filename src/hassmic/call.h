@@ -12,13 +12,14 @@
 #define CALL_PKT   400                  /* the largest encoded frame (Opus at 24 kbit/s: ~60 bytes) */
 
 /* One call on the Echo at a time, whoever carries it (docs/plugins.md 4.8): Drop In (dropin.c) or a plugin with `call`
- * (plugin.c).  The claim is taken from calling or ringing on and let go when the call is over; whoever finds it taken
+ * (plugin.c) or a phone's over Bluetooth (hfp.c).  The claim is taken from calling or ringing on and let go when the call is over; whoever finds it taken
  * refuses "busy", Drop In against a plugin and the other way round.  Its states are Drop In's (dropin.h), which Home
  * Assistant's "Drop In" sensor has always said */
 enum { CALL_IDLE, CALL_CALLING, CALL_RINGING, CALL_LIVE,
        CALL_ANSWERING };                /* a plugin's: a person answered here, its far side not in yet (never Drop In's,
                                          * whose states Home Assistant sees) */
-enum { CALL_NOBODY = 0, CALL_DROPIN = 1, CALL_PLUGIN = 16 };      /* CALL_PLUGIN + the broker's entry: a plugin's */
+enum { CALL_NOBODY = 0, CALL_DROPIN = 1, CALL_HFP = 2,          /* CALL_HFP: a phone's call over Bluetooth (hfp.c) */
+       CALL_PLUGIN = 16 };                                         /* CALL_PLUGIN + the broker's entry: a plugin's */
 /* Lock-free (one atomic): any lock or none.  call_claim: 0 WHO has it now (or had it), -1 another has it */
 int  call_claim(int who);
 void call_release(int who);             /* only WHO's claim goes */
@@ -52,10 +53,5 @@ float call_far_level(void);             /* the loudest of the far end that can b
 int  call_far_talking(void);            /* the other side's voice plays here now (or did, ECHO_MS ago) */
 
 int  call_start(void);                  /* the playout and call microphone threads, once.  0 ok */
-/* Where a call's microphone comes from: Amazon's call pipeline (audio.h callmic_*) where the backend has one, read by a
- * thread of call.c's own while the call's Voip stream is open, else the assistant's micAsr from call_mic.  set: 1 the
- * call pipeline (the default), 0 the assistant's, -1 reads; a call running keeps the one it started with until it ends,
- * except that switching to the assistant's takes effect at once */
-int  call_mic_source(int set);
 
 #endif

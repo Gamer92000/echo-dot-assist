@@ -25,6 +25,7 @@
 #include "wifimotion.h"
 #include "statefile.h"
 #include "buttons.h"
+#include "hfp.h"
 #include <ctype.h>
 #include <limits.h>
 #include <math.h>
@@ -36,7 +37,6 @@ const char *const denoise_names[4] = { "Off", "Low", "Medium", "High" };
 static const char *const denoise_values[4] = { "off", "low", "medium", "high" };
 static const char *const arb_modes[2] = { "hassmic", "kiosk" };            /* ARB_HASSMIC, ARB_KIOSK */
 static const char *const dropin_answers[2] = { "auto", "ask" };          /* dropin_ask() 0, 1 */
-static const char *const call_mics[2] = { "call", "assistant" };         /* call_mic_source() 1, 0 */
 static const char *const timer_sounds[4] = { "timer", "alarm", "beep", "custom" };    /* TIMER_SOUND_* */
 static const char *const music_pages[3] = { "off", "face", "home" };    /* screen_music_page(): src/ui MP_OFF, MP_FACE, MP_HOME */
 /* the aligner's languages first (tools/wakealign/build.sh; main.c speech_locale), then those it has no model for yet,
@@ -70,7 +70,11 @@ static _Atomic int duck_db = 16;                        /* music_duck: what the 
 static int bt_audio = 1, bt_speaker, whisper = 1;      /* features kept here; bt_speaker's default: settings_load */
 static int bt_proxy = 1;                                /* on: what every Echo did before the switch came (issue #152) */
 static int light_sensor;                                /* off: auto brightness moved the level in HA's history all day (forum, 2026-10-15) */
+#ifndef WIFI_ROAMING
+#define WIFI_ROAMING 0                  /* the Makefile's: 1 where device.conf has WIFI_SERVICE (root stops wifisvc, roam.sh roams) */
+#endif
 static int kiosk_net = 1;                                 /* lockdown.sh reads it from state/config */
+static int wifi_roam = 1;                                 /* root's roam.sh reads it from state/config */
 static int kiosk_mic;                                     /* off: main.sh keeps RECORD_AUDIO from the app; it reads state/config */
 static int kiosk_cam;                                     /* off: and CAMERA */
 static int kiosk_dlna;                                    /* off: lockdown.sh admits the app's DLNA renderer only on "=on" */
@@ -110,8 +114,8 @@ static int colour_actual(void)
 
 /* ---------------------------------------------------------------- the table */
 
-enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, ARB, ARB_RING, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
-          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, CALL_MIC, UPDATES, HTTPS_VERIFY, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
+enum id { WAKE_ENGINE, SPEECH_LANG, WAKE_ADAPT, MIC_LEVEL, DENOISE, WAKE_SOUND, SOUND_TOUCH, SOUND_MICS_OFF, SOUND_MICS_ON, SOUND_VOLUME, SOUND_BT_ON, SOUND_BT_OFF, WAKE_SOUND_REMOVAL, MUTE, DND, TIMER_RING, TIMER_SOUND, TIMER_STOP_ANY, TIMER_STOP_OTHERS, STOP_ENDS, ANSWER_VOICE, MULTI_PRESS, WAKE_IN_REQ, END_REQ, BT_ANNOUNCE, BT_LANG, LED_AUTO, LED_LEVEL, RING_ROT, BAND, MUSIC_PAGE, SCR_AUTO, SCR_LEVEL, SCR_ADJUST, SCR_COLOUR, SCREEN_TEXT, SCREEN_HOLD, SCREEN_TIMERS, SCR_SLEEP, SCR_CLOCK, SCR_MOTION_KEEP, SCR_MOTION_WAKE, ARB, ARB_RING, ARB_MODE, ARB_AUTO, ARB_WINDOW, ARB_OFFSET, SOUND, WHISPER, WAKE_EVENTS, PLUGINS, COMMUNITY, REQUEST_TEXT, RING_LIVE, WIFI_MOTION,
+          WIFI_SENS, LIGHT_SENSOR, BT_PROXY, BT_AUDIO, BT_SPEAKER, BT_OUT_DELAY, BT_OUT_AWAKE, BT_OUT_STAY, DROPIN, DROPIN_ANSWER, BT_CALLS, UPDATES, HTTPS_VERIFY, WIFI_ROAM, KIOSK_NET, KIOSK_MIC, KIOSK_CAM, KIOSK_DLNA, SS_UNPAIRED, EQ_BASS, EQ_MID, EQ_TREBLE, SPK_GAIN, DUCK, DUCK_OTHERS, VOLUME, VOL_SPLIT,
           ASSIST_LINK, ASSIST_LEVEL, ASSIST_OFFSET, SOUNDS_LINK, SOUNDS_LEVEL, SOUNDS_OFFSET, TIMER_LINK, TIMER_LEVEL, TIMER_OFFSET,
           CALL_LINK, CALL_LEVEL, CALL_OFFSET,
           VOL_EVEN, NSET };
@@ -153,6 +157,10 @@ static const struct setting table[NSET] = {
     /* buttons.c keeps it: double press of the action button = next, triple = previous; a single press waits 450 ms */
     [MULTI_PRESS] = { "multi_press", "Double and triple press of the action button", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     [STOP_ENDS]   = { "stop_ends_listening", "Stop after the wake word ends listening", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* main.c core_transcript (issue #240): "<wake word>, answer" answers a ringing Drop In or plugin's call too, in a run
+     * this Echo's own wake word began.  No entity in Home Assistant (the page, an import, a preset set it): Home
+     * Assistant may not grant itself what it lets it do (SECURITY.md) */
+    [ANSWER_VOICE] = { "answer_by_voice", "Answer calls by voice", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* main.c: the request's audio from the wake word on (replay_whole); not with Home Assistant's wake word */
     [WAKE_IN_REQ] = { "wake_word_in_request", "Wake word in the request", "Voice", NULL, S_BOOL, 0, 1, 1, 0 },
     /* micend.c, issue #66: ESPHome only (Wyoming has no end of audio here) */
@@ -186,6 +194,10 @@ static const struct setting table[NSET] = {
     /* the screen's timeout in place of stock's 5 min (mic off and Do not disturb: 1 min at most); 0 never: ring_band.c
      * sets it, or with the clock on over our own screen, the UI counts it */
     [SCR_SLEEP]   = { "screen_sleep_minutes", "Screen sleeps after", "Lights", "min", S_INT, 0, 120, 1, 0 },
+    /* screen.c, ring_band.c, the UI's face.c: Wi-Fi motion (wifimotion.c) as activity for that timeout, and a dark
+     * screen woken by motion; listed where the Echo has both, the page shows them while Wi-Fi motion is on */
+    [SCR_MOTION_KEEP] = { "screen_motion_keep", "Motion keeps the screen on", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
+    [SCR_MOTION_WAKE] = { "screen_motion_wake", "Motion wakes the screen", "Lights", NULL, S_BOOL, 0, 1, 1, 0 },
     [ARB]         = { "arbitration", "Wake word arbitration with other Echos", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [ARB_RING]    = { "arbitration_ring", "Show the ring while choosing an Echo", "Features", NULL, S_BOOL, 0, 1, 1, 0 },
     /* arb.c keeps them in memory, state/config on disk: lockdown.sh admits Kiosk Satellite's port by it */
@@ -231,12 +243,16 @@ static const struct setting table[NSET] = {
     /* dropin.c keeps them in memory, state/config on disk */
     [DROPIN]      = { "drop_in", "Drop In", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [DROPIN_ANSWER] = { "drop_in_answer", "Drop In answers", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
-    /* call.c keeps it: a call's microphone from Amazon's call pipeline (micHfp) or the assistant's (micAsr); only where
-     * the backend has the first (the Dots' mixer) */
-    [CALL_MIC]    = { "call_mic", "Call microphone", "Features", NULL, S_CHOICE, 0, 0, 1, 0 },
+    /* hfp.c keeps it: the Echo as a phone's hands-free unit (issue #233).  A feature: Home Assistant's "Phone call"
+     * entities; off by default, as the hands-free record makes every phone paired after it send its calls here */
+    [BT_CALLS]    = { "bluetooth_calls", "Phone calls over Bluetooth", "Features", NULL, S_BOOL, 0, 1, 1, 1 },
     [UPDATES]     = { "online_updates", "Online updates", "System", NULL, S_CHOICE, 0, 0, 1, 0 },
     /* https.c keeps it: media from a Home Assistant that serves HTTPS itself (issue #30) */
     [HTTPS_VERIFY] = { "https_verify", "Check HTTPS certificates", "System", NULL, S_BOOL, 0, 1, 1, 0 },
+    /* stored on/off: root's scripts/device/roam.sh moves the Echo to a stronger access point of its network unless
+     * state/config says off (issue #234; where wifisvc is stopped, device.conf WIFI_SERVICE: Android's framework roams
+     * on the others).  Exported: a choice about the network, which the Echos share */
+    [WIFI_ROAM]   = { "wifi_roaming", "Move to a stronger access point", "System", NULL, S_BOOL, 0, 1, 1, 0 },
     /* stored on/off; root's lockdown.sh lets Kiosk Satellite's uid out unless state/config says off (screen models) */
     [KIOSK_NET]   = { "kiosk_internet", "Kiosk Satellite internet access", "System", NULL, S_BOOL, 0, 1, 0, 0 },
     /* stored on/off: root's main.sh grants or revokes the app's RECORD_AUDIO (screen models; not exported:
@@ -293,13 +309,14 @@ static int present(enum id i)
     case RING_LIVE: return ringlive_available();
     case ARB: case ARB_RING: case ARB_MODE: case ARB_AUTO: case ARB_WINDOW: case ARB_OFFSET: case DUCK_OTHERS: case TIMER_STOP_OTHERS: return arb_running();
     case DROPIN: case DROPIN_ANSWER: return dropin_running();
-    case CALL_MIC: return callmic_present() && dropin_running();
+    case BT_CALLS: return ble_present() && hfp_present();
     case SS_UNPAIRED: return core_sendspin_port != 0;
     case SPK_GAIN: return spkgain_present();
     case MULTI_PRESS: return !board.action_combo;               /* the Shows: no action key, the volume pair stands in */
     case BAND: return ring_band_rows(-1) >= 0;
     case MUSIC_PAGE: return screen_ui();
     case KIOSK_NET: case KIOSK_MIC: case KIOSK_CAM: case KIOSK_DLNA: return board.kiosk;
+    case WIFI_ROAM: { const char *e = getenv("HASSMIC_WIFI_ROAMING"); return e ? *e == '1' : WIFI_ROAMING; }     /* tests */
     case SCR_AUTO: case SCR_LEVEL: case SCR_ADJUST: return board.backlight || getenv("HASSMIC_FAKE_BACKLIGHT");   /* tests */
     case SCR_COLOUR: return colour_actual() >= 0;
     case SCREEN_TEXT: return screen_words_on(-1) >= 0;
@@ -307,6 +324,8 @@ static int present(enum id i)
     case SCREEN_TIMERS: return screen_timers_on(-1) >= 0;
     case SCR_CLOCK: return screen_clock(-1) >= 0;
     case SCR_SLEEP: return screen_sleep_min(-1) >= 0;
+    case SCR_MOTION_KEEP: return screen_motion_keep(-1) >= 0 && wifimotion_present();
+    case SCR_MOTION_WAKE: return screen_motion_wake(-1) >= 0 && wifimotion_present();
     case RING_ROT: return ring_band_rows(-1) < 0;                 /* LEDs to turn: the Dots' ring, not the band */
     default: return 1;
     }
@@ -354,7 +373,6 @@ int settings_choices(const struct setting *s, const char *const **names)
     case WAKE_ENGINE: return core_wake_engines(names);        /* the fixed three and the wake plugins (main.c) */
     case SPEECH_LANG: *names = speech_langs; return SPEECH_LANGS;
     case DROPIN_ANSWER: *names = dropin_answers; return 2;
-    case CALL_MIC: *names = call_mics; return 2;
     case MUSIC_PAGE: *names = music_pages; return 3;
     case TIMER_SOUND: *names = timer_sounds; return 4;
     case END_REQ: *names = micend_names; return MICEND_MODES;
@@ -393,6 +411,7 @@ int settings_get(const struct setting *s)
     case TIMER_STOP_ANY: return core_timer_stop_any(-1);
     case TIMER_STOP_OTHERS: return ringstop_from_others(-1);
     case STOP_ENDS: return core_stop_ends_listening(-1);
+    case ANSWER_VOICE: return core_answer_by_voice(-1);
     case MULTI_PRESS: return buttons_multi_press(-1);
     case WAKE_IN_REQ: return core_wake_in_request(-1);
     case END_REQ: return core_end_of_request(-1);
@@ -412,6 +431,7 @@ int settings_get(const struct setting *s)
     case ARB_AUTO: return arb_window_auto(-1);
     case ARB_WINDOW: return arb_window(-1);
     case ARB_OFFSET: return arb_offset(INT_MIN);
+    case WIFI_ROAM: return wifi_roam;
     case KIOSK_NET: return kiosk_net;
     case KIOSK_MIC: return kiosk_mic;
     case KIOSK_CAM: return kiosk_cam;
@@ -433,7 +453,7 @@ int settings_get(const struct setting *s)
     case RING_LIVE: return ring_live;
     case DROPIN: return dropin_enable(-1);
     case DROPIN_ANSWER: return dropin_ask(-1);
-    case CALL_MIC: return call_mic_source(-1) ? 0 : 1;
+    case BT_CALLS: return hfp_enable(-1);
     case SPK_GAIN: return spkgain_get();
     case DUCK: return duck_db;
     case DUCK_OTHERS: return duck_for_others(-1);
@@ -454,6 +474,8 @@ int settings_get(const struct setting *s)
     case SCREEN_TIMERS: return screen_timers_on(-1);
     case SCR_CLOCK: return screen_clock(-1);
     case SCR_SLEEP: return screen_sleep_min(-1);
+    case SCR_MOTION_KEEP: return screen_motion_keep(-1);
+    case SCR_MOTION_WAKE: return screen_motion_wake(-1);
     default: return 0;
     }
 }
@@ -478,6 +500,7 @@ static void put(enum id i, int v)
     case TIMER_STOP_ANY: core_timer_stop_any(v); break;
     case TIMER_STOP_OTHERS: ringstop_from_others(v); break;
     case STOP_ENDS: core_stop_ends_listening(v); break;
+    case ANSWER_VOICE: core_answer_by_voice(v); break;
     case MULTI_PRESS: buttons_multi_press(v); break;
     case WAKE_IN_REQ: core_wake_in_request(v); break;
     case END_REQ: core_end_of_request(v); break;
@@ -497,6 +520,7 @@ static void put(enum id i, int v)
     case ARB_AUTO: arb_window_auto(v); break;
     case ARB_WINDOW: arb_window(v); break;
     case ARB_OFFSET: arb_offset(v); break;
+    case WIFI_ROAM: wifi_roam = v; break;
     case KIOSK_NET: kiosk_net = v; break;
     case KIOSK_MIC: kiosk_mic = v; break;
     case KIOSK_CAM: kiosk_cam = v; break;
@@ -523,7 +547,7 @@ static void put(enum id i, int v)
     case BT_OUT_STAY: bt_stay = v; a2dp_out_stay(v && bt_speaker); break;
     case DROPIN: dropin_enable(v); break;
     case DROPIN_ANSWER: dropin_ask(v); break;
-    case CALL_MIC: call_mic_source(v == 0); break;
+    case BT_CALLS: hfp_enable(v); break;
     case SPK_GAIN: spkgain_set(v); break;
     case DUCK: duck_db = v; break;
     case DUCK_OTHERS: duck_for_others(v); break;
@@ -544,6 +568,8 @@ static void put(enum id i, int v)
     case SCREEN_TIMERS: screen_timers_on(v); break;
     case SCR_CLOCK: screen_clock(v); break;
     case SCR_SLEEP: screen_sleep_min(v); break;
+    case SCR_MOTION_KEEP: screen_motion_keep(v); break;
+    case SCR_MOTION_WAKE: screen_motion_wake(v); break;
     default: break;
     }
 }
@@ -867,6 +893,17 @@ static int export_from_before_switches(const char *text)
     return 1;
 }
 
+/* Settings that are gone: an export or a config of an older build may still have them.  Passed over without a word
+ * (a model that lacks a setting says "no such setting on this Echo"; these no Echo has) */
+static const char *const retired[] = {
+    "call_mic",                 /* 2026-11-26: Amazon's call processing wherever a model has it, no choice (issue #233) */
+};
+static int retired_name(const char *k)
+{
+    for (size_t i = 0; i < sizeof retired / sizeof *retired; i++) if (!strcmp(k, retired[i])) return 1;
+    return 0;
+}
+
 int settings_apply_text(const char *text, char *err, size_t errsz)
 {
     int applied = 0; size_t en = 0;
@@ -880,6 +917,7 @@ int settings_apply_text(const char *text, char *err, size_t errsz)
         if (!*k || *k == '#' || !(eq = strchr(k, '='))) continue;
         *eq = 0; v = eq + 1;
         const struct setting *s = settings_find(k);
+        if (!s && retired_name(k)) continue;
         if ((s ? rank((int)(s - table)) : RANKS - 1) != pass) continue;   /* plugins, the switches, then the rest */
         char e[160];
         if (!settings_set(k, v, e, sizeof e)) applied++;

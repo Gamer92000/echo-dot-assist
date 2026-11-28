@@ -95,6 +95,15 @@ dozen daemons phone home within seconds.
       `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` (comma list works); `mixer`, `netmgrd`, `wifisvc` stay up. Tighten to the real subnet after DHCP
 - [x] `scripts/device/wifi-join.sh`: join via stock `wpa_supplicant`, refuses to run without lockdown (untested). PC wrapper
       `scripts/wifi-join.sh` pushes git-ignored `secrets/wifi.conf` (line 1 SSID, line 2 passphrase), SSID sent as hex
+- [x] **`wifi-join.sh` keeps one profile (issue #213, 2026-11-24).**  On the Dots it added a network on every run and
+      saved it before knowing whether it joined; a failed run did `enable_network all` and saved that too.  #213's
+      cannoli, joined a few times over USB, had one profile a try, all enabled, and moved between its networks.  Now as
+      wifi.sh's switch: nothing saved until COMPLETED, then every network saved before removed (P2P groups,
+      disabled=2, left alone) and saved; a failure removes the new one and enables only what was enabled before,
+      unsaved, so the file on disk never changed.  A CR at a line's end is dropped (a `wifi.conf` from Windows), and a
+      missing line 2 is named as such (#213 got "the password is not one WPA2 takes").  An Echo with duplicates
+      already: one more successful run clears them.  `tests/fake_wifi_join.py`'s Dot block (cannoli, the stand-in
+      wpa_cli of fake_wifi_tools.py; four of its checks fail on the script before).
 - [x] **(device)** Never-registered device, USB/ADB only → `lockdown.sh` → `scripts/wifi-join.sh`: joined IoT SSID (no-internet VLAN),
       192.168.100.147/22, lock tightened to `192.168.100.0/22`, `ping 1.1.1.1` fails, `lockdown.sh ... watch` running.
       Stock INPUT drops ICMP (PC ping fails) but TCP 16700 is reachable from the PC (VLAN if `enp5s0.2`).
@@ -868,6 +877,25 @@ Run in this order. Each step says what it proves.
       log: Sendspin's 10 s line ends in `mixer %+.2f ms` (the model moved since the reference, on the mixer only),
       and `audio: music stream: the mixer counts -x ms against the model, its reference` at each stream's 10 s.
       Asked of the reporter: those two lines from both Echos while they drift.
+      **The time exchange's pace by the clock's predicted error (2026-11-24, CI's flakes).** The next client/time came
+      3 s later once `sqrt(poo)` (the offset's error now) was under 1 ms, with the drift known from a few exchanges
+      200 ms apart: over the 3 s the prior grew to several ms (an unloaded PC run: 3.4 ms at the fourth exchange), and
+      a reply the receive thread read late (half its delay in z, the same in e) was weighted by that prior: the clock
+      moved by up to the prior's width.  CI's parallel run: `sendspin-9` learnt +6.9 ppm against an output 500 ppm
+      slow (a ~3 ms shift in its last 3 s suffices: the integral learns from 5 s on), `sendspin` one resync of -104 ms
+      (a 96 ms chunk dropped whole, 105 ms of tone missing; a player thread away longer than the queue gives the same
+      line, which now says which: queued and the time since the last write).  Simulated (this filter, exchanges
+      ±0.3-1.5 ms, one reply 50 ms late, 270 runs): 26 ms off at most, 12 at the 95th percentile; with the pace chosen
+      by `tf_error_at` (the clock within 1/2/5 ms at the next exchange, else 200 ms) 1.2 ms, 14 exchanges in the first
+      30 s instead of 11.  A move over 5 ms by one exchange is logged.
+      Its first CI run after that (45464536456, sendspin-9) logged the -104's kind again: `-690.0 ms off the schedule,
+      resynced (queued 116 ms, 82 ms since the last write)`, so not a player away, and before it `one time exchange
+      moved the clock +843274.7 ms`: the filter's second sample, whose drift is `(z2 - z1) / dt`, came 40 us after the
+      first (a stalled server answering two at once), a drift of +2300, then 16 % that passed `use_drift`'s test.
+      Shown by holding the receive thread 250 ms before the first reply (both read back to back): resyncs of +40 and
+      +56 ms in 2 of 6 players.  Now the drift's first estimate waits until it can be within 1 % (sd,
+      `TF_INIT_DRIFT_SD`), each sample before weighed into the offset by its variance (`tf.base` the time it stands
+      for): the same hold, no resync, the drift ~1e-5 four samples in; samples ±0.1 ms 200 ms apart start as before.
 - [x] mDNS: init's `avahi-daemon` runs in SELinux domain `avahi-daemon`, which is denied read on `/data/misc/avahi/services`
       (so nothing was ever published, also not for Wyoming). `magiskpolicy` cannot parse a rule for a type with a hyphen →
       `boot.sh`/`run.sh` stop the init service and start avahi themselves in the `su` domain. Verified: answers queries from the PC.
@@ -1416,6 +1444,54 @@ Run in this order. Each step says what it proves.
       The guided setup asks too (`fixed_ask` with the settings to start with, defaults from the Echo's lease;
       `fixed_set` after the preset: the request over adb, the PC's own GETs of the new address as the reach).  Its
       `fixed_set` against the Dot 2 over USB: kept, said so.  Improv (the phone's setup) has no field for it.
+- [x] Roaming between the access points of one network (issue #234, 2026-11-25; reported on an eero mesh: a donut on a
+      far node at -90 dBm, ~50 % loss, for hours, with another node 30-40 dB stronger).  Root's `scripts/device/roam.sh`,
+      sourced by main.sh, `roam_look` every netwatch round on the models that stop wifisvc (device.conf `WIFI_SERVICE`:
+      donut, biscuit, radar, cannoli; the Android models' framework roams).  Measured on our UniFi mesh (three APs, one
+      SSID on 2437/2462/5500/5560; the IoT SSID offers 802.11k neighbor reports, not BTM or FT; a sister SSID offers
+      FT-PSK and BTM) with biscuit (USB), donut, cannoli:
+      *What does not roam today.*  wpa_supplicant `v2.6-devel-7.1.2_mbedtls` on every Dot (four builds, one source):
+      no bgscan module (`bgscan simple`/`learn` absent; the `bgscan` field parses and does nothing: the reporter saw
+      no scan, a cannoli's BSS entries were 35992 s old), `SIGNAL_MONITOR` FAIL (no CQM), `NEIGHBOR_REP_REQUEST` FAIL
+      ("Insufficient RRM support in driver"), `WNM_BSS_QUERY` OK.  Amazon's own picker (`adptClntPickBss`,
+      `adptClnt_bgscan`, `adptClntScanDfsChannels`) prefers 5 GHz at association: biscuit joined 5500 at -76 dBm with
+      2462 at -59 there, 34 of 160 pings to the router lost; it does not pull back by itself (biscuit 15 min on 2462).
+      The MediaTek drivers have firmware roaming (`roamingFsm`, neighbor requests, BTM, FT auth) switched off in
+      `/system/vendor/firmware/wifi.cfg` (`DisRoaming 1`, donut and cannoli); `iwpriv wlan0 driver "SET_CFG DisRoaming
+      0"` reads back 0 and starts nothing (no ROAMING event in a reassociation's driver log).  The drivers run
+      wpa_supplicant's SME (`mtk_cfg80211_auth`/`_assoc`).
+      *802.11r*: `key_mgmt WPA-PSK FT-PSK` or `FT-PSK` against the FT SSID: "Association request to the driver failed:
+      err=22" at once on biscuit (gen2) and donut (gen4m), as issue #90's PSK-SHA256 (the 4-way handshake is never
+      reached).  Cannoli (eero's backport of the MediaTek driver) takes it: associated, then the 4-way handshake failed
+      on the wrong key (the FT SSID's PSK is another one, so no FT roam could be tried).  No FT offered: two of three
+      driver families refuse it, and on cannoli an FT transition (the driver's FT authentication) is untried.
+      *Moves.*  `wpa_cli roam` alone: biscuit 2462<->5500 ~200 ms, 7 of 200 pings lost around it; cannoli (gen4m: a
+      deauthentication and a fresh authentication) once went to another AP than the one named (Amazon's picker) and
+      once hung 5 s in authentication and fell back, ~90 pings lost.  With the target pinned (`set_network <id> bssid
+      <target>`, roam, `bssid any` at once): cannoli both ways landed where told, 160 and 240 ms, 1-2 of 160 lost.  A
+      roam to a BSS older than the table keeps (no scan for minutes) answers FAIL: roam.sh moves only right after a scan.
+      *Scans while associated* (age of the current BSS back to 0): 4 channels 0.5 s, every channel 3.2 s (biscuit) and
+      4.2 s (cannoli); the reporter's donut ~6 s.
+      *roam.sh*: weak = signal_poll under -70 dBm for 3 rounds (30 s); then, where the AP's Extended Capabilities say
+      BSS Transition (bit 19), a BTM query (reason 16) and one round for the AP to move it (wpa_supplicant follows the
+      request itself); then a scan, every channel first and at most every 10 min, the network's own channels (learnt
+      from every scan: the stand-in for a neighbor report) in between, one a minute, then 2, 4 and every 5 min while none
+      is found (one router far away has nothing to move to; a level of -9999 or 0 counts as none); a candidate 8 dB stronger
+      and at least -67 dBm, pinned, roamed, unpinned; a target that does not take within 5 s left alone 10 min; 60 s of
+      quiet after any change.  A pin a killed netwatch left (`wifi/roam-pin`) goes at the next round; a network the
+      owner pinned is left alone; the setting `wifi_roaming` (System page, on, exported) off: nothing but the record.
+      Every change of AP said in boot.log (ours, the AP's, the supplicant's own after a lost link) and kept for the
+      page (`wifi/roam`: the AP and the last 5 moves; wifi.c, the Wi-Fi row; the signal from /proc/net/wireless, which
+      the MediaTek drivers fill as an unsigned byte: 199 = -57).  Thresholds as Apple's and Android's rules of thumb;
+      measured here: -73..-76 dBm lost 20-45 % of pings, -54..-64 under 4 %.
+      On the Echos with roam.sh alone (looks every 10 s, real wpa_supplicant): biscuit parked on 5500 at -74 moved
+      itself to 2462 at -54 in 360 ms after its minute and one scan, learning 2462/2437/5560; cannoli (thresholds
+      loosened to make it move on this mesh) to the AP its picker had refused before, 340 ms, unpinned after.
+      `tests/fake_wifi_roam.py` (fake wpa_cli with the picker, the country column of a Dot 5's scan_results, BTM),
+      `tests/fake_web_wifi.py` (the page's JSON).
+      [ ] the BTM query against an access point that offers it: none here takes it on the IoT SSID (UniFi's "BSS
+      Transition" off), so only its decision and the fake were run; the radar not tried (same driver family as biscuit).
+      [ ] 802.11r on cannoli, whose driver takes an FT association: needs an FT network whose key we have.
 - [~] Wi-Fi switch on the settings page (2026-10-07, asked: scan plus a name typed by hand, password before or after
       picking, back to the old network if the new one fails, warn about the new address). hassmic (puffin) may not talk
       to wpa_supplicant: `state/wifi-request` for root (`main.sh` ota_watch, every 2 s) -> `scripts/device/wifi.sh` in the
@@ -2734,7 +2810,107 @@ Run in this order. Each step says what it proves.
       reads, calibration per unit; then `ring_frame`/`LED_FRAME` for them); the band of the Shows and the Echo
       Input's one LED are not part of it; a theme pack applied from Home Assistant (root's install, as Apply) asked
       about, not built.
-- [ ] Other stock features without a Home Assistant counterpart yet (survey 2026-10-01): offline alarm clock and
+- [x] A ringing call answered by voice (issue #240, 2026-11-26): "<wake word>, answer" (and "pick up", "accept",
+      "abnehmen", "décroche", "contesta", "rispondi", "opnemen", "răspunde", ...: main.c `core_transcript`'s
+      `answers[]`, whole transcripts only, beside `hangups[]`) while `call_was` is ringing.  A phone's call (HFP)
+      always: Home Assistant answers those anyway.  A Drop In ("ask") and a plugin's call only with setting
+      `answer_by_voice` (Voice, page only, exported, off) and only in a run this Echo's own engine began (`run_source`
+      PLUGIN_REQ_WAKE_WORD and `core_local_wake`, from idle or cutting a reply: barge_src): a follow-up
+      (continue_conversation), start_conversation and -w remote's wake word are runs Home Assistant opens itself; the
+      transcript is Home Assistant's in every run, and the engine also hears what Home Assistant plays on the Echo
+      (docs/SECURITY.md: residual, the owner's choice).  A phone's in any run, a question back included.  Not
+      answered: the words go on to Home Assistant, the log says why (also when the call stopped ringing meanwhile).  Tests: fake_plugins_call
+      5b (off, a follow-up refused, answered), fake_ha_dropin (off, "Réponds !" on), fake_hfp ("Abnehmen." without the
+      setting).  Not done (the issue's second half, declined: docs/plugins.md 1, "a plugin in Home Assistant's place"):
+      spoken commands declared by plugins; Home Assistant's sentence triggers on a plugin's `ha.actions` do that.
+      Open: arbitration does not favour the ringing Echo, so "<wake word>, answer" said where another Echo wins the
+      round answers nothing; Wyoming never asks `core_transcript` (neither "hang up" nor "answer" there).
+- [~] Phone calls over Bluetooth, the Echo as hands-free unit (HFP 1.7 HF, CVSD; issue #233, 2026-11-25): hfp.c,
+      scoaudio.c, cvsd.c, setting `bluetooth_calls` (off).  docs/re-hfp.md has where each chip puts the audio and every
+      measurement.  No chip moves SCO data over HCI; the audio goes as stock's HAL has it: cannoli DL6/UL5 through
+      PCM1 (kernel DAPM routes), donut DL2 / DAI through the 2nd I2S (stock's mixer_paths "bt-sco"), checkers
+      VOIP_Call_BT_*, donut and checkers with the MT7668's 0xfc72 03 10 00 4a (cannoli's newer driver sends it,
+      theirs not), biscuit the air's CVSD on /dev/ebc, coded in cvsd.c.  Measured Echo to Echo with tones both ways
+      (scoprobe for the link, tinyplay/tinycap, ebcprobe), every direction of every model.  hassmic's HFP on hardware
+      against PipeWire 1.6's audio gateway: biscuit and cannoli, service level connection, the link accepted, audio in
+      (biscuit 1752 packets in 6.6 s, 8 lost; cannoli 401 frames, 0 lost), the room's sound out from biscuit; a
+      /dev/ebc teardown race rebooted biscuit once (fixed: the last thread closes it).  The Echo Dot 5's BR/EDR address
+      was the chip's default 00:0c:43:29:50:01 on every unit: ble.c sets the idme's with 0xfc1a.  PC test
+      tests/fake_hfp.py (SDP, RFCOMM, the AT exchange, ring/answer/end/dial/handset/take here/do not disturb, both
+      directions' audio over HCI), unit-cvsd (with a real chip's CVSD in testdata/hfp).
+      Then (2026-11-25, same day): remote volume (+VGS both ways, the phone's taken only while a call's audio is on
+      the Echo: core_call_volume), a second call (AT+CHLD=?, AT+CCWA=1, +CLCC where the phone has enhanced call
+      status; AT+CHLD=2 by the action button with a call waiting and HA's "Switch phone call", AT+CHLD=1 to end
+      beside a held one; HA "Phone call waiting"), mSBC where the host codes the link (ebc, hci: sco_wideband();
+      AT+BAC=1,2, +BCS answered, the link's air mode decides, "take it here" as AT+BCC; msbc.c's H2 framing with
+      losses; sbc.c's msbc_* against libsbc: decoder 79 dB to sbcdec -m, encoder the same SNR as sbcenc -m, every
+      flipped CRC-covered bit refused).  tests/fake_hfp.py: all of it, mSBC both ways through sbcenc/sbcdec -m.
+      Wideband on hardware (same evening, docs/re-hfp.md "Wideband on the PCM paths"): cannoli's MT7663 codes mSBC
+      from/to 16 kHz on its PCM pins, set up and accepted (Enhanced Setup/Accept, data path 1; 5 kHz 100 %, 6 kHz
+      99 %): board `sco_msbc_chip`, scoaudio.c `sco_accept_params`, the PCM devices at 16 kHz.  biscuit's /dev/ebc
+      carries hassmic-made mSBC out at the air's rate and hands in a chip's, both decoded (sbcenc/sbcdec -m); its
+      whole stack against PipeWire's gateway: SLC, codec negotiation to mSBC, +VGS both ways.  donut's MT7668 takes
+      Enhanced Setup/Accept and sets up no mSBC link on data path 1 with transport unit 0; with 16 it does, both ways,
+      on donut and checkers (5 kHz 100 %, 6 kHz 100 %), and cannoli takes 16 too: one parameter set, board
+      `sco_msbc_chip` on donut, cannoli, checkers.  (The MT7668 also passes transparent bytes, two 8-bit slots a frame,
+      which the SoC's mono bus halves: no use.)  Stock never had wideband calls (static: docs/re-hfp.md).
+      Open: a real phone (Android, iPhone) on each model; an mSBC call end to end through hassmic (the paths measured
+      with the probes; PipeWire's gateway reports no call); cupcake, cronos, crown, athena wideband on by their chips' measured siblings, never run; the mSBC fallback's
+      untested branches (fake_hfp.py: the once-per-answer bound of the re-armed window, an accept the command queue
+      dropped, a CVSD link's failure not counted) and a chip refusing the CVSD accept (0x0429) or our setup (0x0428),
+      which nothing turns into a link failure (the answer's window runs out);
+      donut and checkers
+      with hassmic's HFP (their paths measured only Echo to Echo); cannoli's microphone towards the phone unmuted (the
+      trial's -67 dBFS: it was muted, zeros as meant); the phone's voice assistant (AT+BVRA: its audio link is refused
+      without a call now, by design); radar (ebc), cronos, crown (pcm, checkers' links) and athena (pcm by name: its
+      link table not read) set from their firmware, never run; cupcake donut's path (its bootloader's GPIO table muxes
+      the 2nd I2S, its device tree does not), never run; rejecting a waiting call from the Echo (AT+CHLD=0: none of
+      its controls does it yet).
+      A real phone (2026-11-25/26, a user's Echo Dot 5 with a Redmi 12C, issue #233): SLC with features 0xf67, mSBC,
+      downlink clean (e.g. 4831 frames in, 4827 played, 0 lost, 0 late); the uplink (micAsr, the call's gain and gate)
+      heard but quiet from across the room, clearly better at 30 cm, WhatsApp worse than a cellular call; noise
+      reduction made no difference (it is the pipeline's, not the call's).  Talker -50..-58 dBFS in micAsr at a
+      normal distance, at NEAR_MIN_DB.  Then (2026-11-26): cannoli `call_mic` 2 (offered, micAsr by default: from
+      the firmware only, stock's libpjmedia-audiodev.so plays Voip and records micHfp as on donut and biscuit, and
+      its AFE.cfg "Voice" path is biscuit's: AEC, Frequency Masking RES, the same NR and CNG, FB AGC -23 dBFS, +20
+      constant, +12 at most, 16 kHz mono); "Call microphone" moved to the Voice page's Calls card and shown with Drop
+      In or HFP on (it was a child of Drop In: hidden without it); a `call: sent ...` line at every call's end
+      (microphone, talk share, level in/out, gain, unducked share).  An Android TV box (Mi Box, Android 14) paired
+      as a music source connected for calls first and kept the phone out: a phone (class of device major 0x02) now
+      takes the place from a gateway that is no phone and has no call (fake_hfp.py "two gateways").  Seen in the same
+      log: calls the user took for incoming came as callsetup 2/3 (the phone's own "outgoing"), no RING or +CLIP:
+      asked.  The same user then built `call_mic = 1` on cannoli and measured it (HASSMIC_DROPIN_TRACE, WhatsApp and
+      cellular): micHfp never stalled; speech -10..-30 dBFS (micAsr -50..-58), the room between words -88; a count at
+      30 cm, 1.5 m, 3 m: -27, -28, -29 dBFS median, all past the gate after the first second; the far end "a huge
+      difference".  cannoli `call_mic` 1 since.  Left: call.c's echo suppressor on micHfp.  The far end plays at
+      -6..-10 dBFS, micHfp's AGC brings speech near that, so a reply's first DOUBLE_TALK_N frames were learnt as echo,
+      `es_c` reached its 0 dB cap within seconds and no reply passed as double talk again; with the hold falling
+      20 dB/s, speech within 1 s of the far end went out at full level 7..36 %, 1-2.5 s 68..86 %, later 96..100 %.  Now
+      on micHfp where measured (`board.call_echo_cap_db` -30 on the Dots): `es_c` capped at -30 after 2 s, double talk after 2 frames, the hold falling 50 dB/s; unmeasured models keep micAsr's tuning.
+      `make unit-call` H1 (the user's pattern: 0 of 154 reply frames at full level before, 144 after) and H2 (an echo
+      28 dB under the playback left in micHfp stays ducked).  radar `call_mic` 2 (offered from its firmware: stock's
+      pjmedia records micHfp, AFE.cfg's "Voice" path VAEC + Lite RES, AGC -26).  The Shows and the Echo Input the way
+      their stock calls do it (static, docs/re-checkers.md "Calls"): MODE_IN_COMMUNICATION (media.audio_policy
+      setPhoneState, 3 on Android 7, 4 on 9), the call on the music stream (stock's voice stream has another volume
+      curve: speaker -24..0 dB against music's -58..0, Show 5), the recorder on VOICE_COMMUNICATION
+      (the HAL's libasp "Voice" pipeline), board `call_mic` 2 on checkers, cronos, crown, athena, cupcake.  Beside
+      the assistant's as stock's: Fire OS's policy lets a second recorder start only beside HOTWORD/2999/3000, so
+      the assistant's records HOTWORD while Amazon's call processing is chosen (the firmware's android::AudioRecord
+      by dlsym on SDK 25, OpenSL ES preset 6 on athena); where that fails, VOICE_RECOGNITION and the one recorder
+      switched for the call.  On the user's Show 5 (2026-11-26, a Drop In to a Dot 3, nobody talking): HOTWORD
+      capture 6 s in 6 s at the room's -62 dBFS (a read that does not wait answers WOULD_BLOCK: fixed after the first
+      try took it for an error and fell back), setPhoneState status 0 both ways, the VOICE_COMMUNICATION recorder
+      beside it carried 96 % of the call while the HOTWORD capture went on (5 s in 5 s), 0 frames missing.  Open: a
+      talker's levels and the wake word on HOTWORD.  Then (same day, the maintainer: "no reason to ever disable
+      it"): the setting `call_mic` removed (settings.c `retired`: an export's or config's line read without a word),
+      Amazon's call processing on every model that has it, `board.call_mic` 1 on radar and the Android five.
+      HOTWORD only for a call (`hot_for_call`, callmic_open to _close: a review's point, an Echo that makes no calls
+      records as before); on the Show 5 the switch at a call's start ~80 ms, both recorders, back after.  Reviewed in
+      22 rounds (code-review high); the last ones' findings were edge cases, most in the HTTPS client of #236.  Left
+      open from them: http.c tries a name's addresses one after another with the whole connect_s each (libcurl's happy
+      eyeballs tried IPv4 ~200 ms after IPv6), so a network with broken IPv6 waits or fails; the capture thread's
+      fatal end waits in main()'s accept() until a client comes (before this work too).  Open: a talker's levels and the wake word during a
+      call on a Show; radar, cronos, crown, athena, cupcake never run. (survey 2026-10-01): offline alarm clock and
       reminders (HA has timers only).
       Not worth mapping: Matter (`ace_chip_service`), Sidewalk/BLE mesh, calling outside the house (`commsd`), stereo pairs.
 - [~] Calls with Amazon's call microphone (2026-11-13, Echo Dot 3): a user's calls from a Dot 3 sounded dull and full of
@@ -2899,6 +3075,26 @@ Run in this order. Each step says what it proves.
       the blueprint with real Echos (it ran in a real HA against PC Echos, above), and whether 2 s is enough over a
       busy Wi-Fi for "calling" to reach HA (the blueprint then tries the second action name only where it differs:
       never on an Echo with its own name).
+- [~] Servers that stop listening (issue #241, 2026-11-26; an Echo Dot 2 on 2026.11.18): the satellite went
+      unavailable ~7 times a day at the same wall-clock times (05:15, 14:21, 14:30 local: something on the network or
+      Fire OS's side, not uptime), Home Assistant's reconnect refused (`[Errno 111]`) in the same millisecond, and
+      sometimes for hours, while hassmic ran on: settings page answering, mDNS announced again, the wake word heard
+      ("no Home Assistant link, nothing started").  Each time `client disconnected (0 left)`, then within ~15 ms
+      `micAsr delivers nothing (status 112)` and a reopen.  Found in the code: every accept loop (ESPHome in main.c,
+      web.c, sendspin.c, ota.c) ended at the first accept() error without a word; Linux hands a queued connection's
+      own failure out through accept() (ECONNABORTED, EHOSTUNREACH, ...: accept(2) says to retry), and a listener shut
+      down or destroyed answers EINVAL.  ESPHome's loop then ran main()'s end, whose `cap_close()` closes the capture
+      while the capture thread still reads it (whether that is the reopen seen right after the link: not shown).  Now `netio.h` `net_accept_kept`: such errors are said (once in 10 s) and the loop goes
+      on; EINVAL, EBADF, ENOTSOCK open a new listener on the port, also where the first listen at start failed (web,
+      Sendspin, push port; ESPHome still ends then, root restarts it) (`make unit-netio`).
+      Not shown: that this is #241.  main()'s end returns, and root's loop restarts hassmic 3 s later
+      (`hassmic exited rc=1, restart in 3 s`, main.sh; no `== satellite start`, which only the service's start says).
+      Hours of refusal by this path need main()'s end to hang as well (`cap_close()`'s `MixerClose` against the capture
+      thread's own reopen of the same handle is the candidate) and the listener to have stopped listening (a refusal,
+      not a timeout: a listener nobody accepts from fills its queue and drops SYNs).  Asked of the reporter: `hassmic
+      exited` in boot.log, `/proc/net/tcp` for a LISTEN on :65C5 and the main thread's wchan in the dead state.  Not
+      changed: `micAsr rate=4294967295` after a reopen is no sign of a dead stream (it shows on working starts, donut
+      and cannoli above).  What closes the link at those times is not known.
 - [~] A new IP address (2026-10-11, GitHub issue #17: new addresses from the router, Home Assistant lost the Echos
       until a power cycle, "sometimes it takes 2"). Home Assistant's ESPHome config flow moves an entry to the address
       in an mDNS announcement only while the entry is not connected (`config_flow.py`
@@ -2954,6 +3150,45 @@ Run in this order. Each step says what it proves.
       CA-signed certificate, self-signed refused, taken with the setting off (persisted), unreachable reports failure.
       Device (biscuit, 2026-10-13, announcements over its ESPHome API): raw.githubusercontent.com MP3 with checks on
       played; a self-signed server refused (curl 60), played with `https_verify=off`.  Open: a real HA over HTTPS.
+      (Since issue #236, below: no longer libcurl, the same behaviour on http.c and tls.c.)
+- [~] TLS 1.3 (issue #236, 2026-11-26; HA's SSL profile "Modern v6", TLS 1.3 alone: "SSL connect error" for every
+      reply's audio, "Intermediate v6" worked).  Every firmware's libcurl runs on its Android's BoringSSL: libssl.so of
+      donut, biscuit, radar, cannoli, checkers, cronos, crown, cupcake (Android 7, libcurl 7.50.1) has no TLS 1.3 code
+      at all, athena's (Android 9, libcurl 7.58) only the drafts (`SSL_set_tls13_variant`, `SSL_is_draft_downgrade`).
+      Every TLS user of hassmic's was exposed the same way where the server is the owner's: media (HA), online updates
+      from an update server of the owner's and the plugin index's site (Sources, #175); GitHub, github.io and Amazon
+      still offer 1.2.  Now hassmic's own: mbedTLS 3.6.8 LTS (`src/third_party/mbedtls`, `tools/mbedtls-vendor.sh`:
+      55 library files and 131 headers of the release, unchanged; `hassmic_config.h`: a TLS 1.2/1.3 client, ECDHE,
+      AES-GCM and ChaCha20-Poly1305, RSA (PKCS#1 v1.5 and PSS) and ECDSA, X25519/P-256/P-384/P-521, the kernel's
+      randomness for TLS and PSA alike), `tls.c` (non-blocking under a lock per connection: ws.c's reader and writers
+      share one; an address's certificate checked against its IP entries after the handshake, no SNI for it, RFC
+      6066), `http.c` (one HTTP/1.1 client: GET/POST, the caller's headers, redirects HTTPS-only where asked and none of
+      the caller's headers to another origin (7.50.1 sent Amazon's token along), Content-Length, chunks or the end,
+      connect/total times and the low speed limit as a moving window, a stop within 250 ms, `.local` by our mDNS,
+      `net_socket` or a plain socket), and https.c, update.c (with plugin_fetch.c), davs.c and mass.c on them;
+      `fwcurl.c` gone, no libcurl loaded.  Music Assistant over `wss://`/`https://` while at it (a proxy in front of it;
+      port 443 unless named; certificate as `https_verify`; the token pinned to the address, http:// and https:// two).
+      Missed at first: without `MBEDTLS_X509_RSASSA_PSS_SUPPORT` the ClientHello offers no `rsa_pss_rsae_*`, which
+      TLS 1.3 needs for RSA certificates: GitHub's release-assets CDN (RSA) answered with an unreadable record.
+      CAs: the firmware's folder, as before (donut and athena: 136 and 135 roots, ISRG X1, USERTrust, DigiCert G2,
+      Amazon's; parsed once at the first check, ~420 kB kept); a chain to a newer root fails as it did with
+      BoringSSL (1.1.1.1's SSL.com ECC root).  Cost: hassmic for donut +336 kB stripped (2.52 -> 2.85 MB).
+      Tests: `make unit-http` (58 cases under ASan/UBSan: TLS 1.3 and 1.2 alone with ECDSA and RSA, certificates for
+      a name, an address, another name, run out, self-signed, bodies, redirects, headers to another origin, POST,
+      the times, stops, refused addresses); fake_ha_esphome (HTTPS_PORT TLS 1.3 alone, a TLS 1.2-only server
+      beside it); fake_ma_api (wss:// with TLS 1.3 alone: session, login and images over TLS, a self-signed proxy
+      refused, back to ws://).  Against the real servers from the PC with the donut's and athena's CA folders:
+      api.github.com, the release-assets CDN, gamer92000.github.io, api.amazon.com, letsencrypt.org; the ARM build
+      under qemu-arm (TLS 1.3 and 1.2 against the PC's servers, ECDSA and RSA-PSS chains of GitHub's).
+      A review (two rounds) found: a write cut by its timeout sent again from the start; the reader flushing a
+      writer's pending record, which the writer then sent twice (and, after a failed write, credited to the next,
+      shorter one: a heap read sent to the server); time in the reader's callback counted as the server's silence; a
+      long Location followed cut; an address's certificate without serverAuth taken; a 307 taking Amazon's body to
+      another server.  All fixed (tls.c `wpend`/`wptr`, ws.c ends a connection after a frame not sent whole), each with
+      a case in `unit-http` (client-only certificates, a 3000-byte Location, a cross-origin 307, a reader that waits
+      3 s, 3 MB POSTed to a server that reads late).
+      Open: on an Echo, Amazon's login and download (davs.c) with the new client, an online update, a real HA on
+      "Modern".
 - [x] Frozen at the first wake word after 18.6 h (2026-10-13, GitHub issue #31; Echo Dot 3 on 2026.10.12.210015, up
       ~24 h): wake word, wake sound, listening ring, then nothing; buttons dead (action logged, not acted on), no
       pipeline timeout, power cycle needed. HA ran a whole pipeline meanwhile. The log's last hassmic lines: `whisper:
@@ -3707,6 +3942,40 @@ Run in this order. Each step says what it proves.
       the clock 59.3 s later, not at once; the drawer 60 s while out, held again closed; a paused music page dark 60 s
       after the last touch.  `service call power 12` answers `00000000 00000001` / `00000000` there, and a
       userActivity leaves a dark screen asleep.
+- [~] Echo Show: the idle screen by Wi-Fi motion (2026-11-15, asked for: idle only after X minutes without motion,
+      the screen on again when someone moves).  Settings `screen_motion_keep` ("Motion keeps the screen on") and
+      `screen_motion_wake` ("Motion wakes the screen"), both off, in screen.c, listed where `wifimotion_present`, the
+      page's rows only while `wifi_motion` is on (HELP `when` on plain rows now: `settingRow`).  `ring_band.c` reads
+      `screen_motion()` once a second (Wi-Fi motion on and moving; a change goes to the UI as `mo <moving> <keep>
+      <wake>`, its own generation: a `ck` would count as the settings changing and end the clock): motion starting
+      wakes a screen that is not on (`isInteractive` != 1, `screen_wake`); while it lasts a userActivity every 10 s
+      and one as it ends, so PowerManager's timeout counts from the sensor's end (30 s after the last movement); not
+      while the timeout is the UI's (the clock), nor in Do not disturb.  The UI (`scene.c` `mo`, `face.c`
+      `motion_holds`): with "keeps" no clock while it moves and the count from its end; motion starting under the
+      clock ends it only with "wakes" (else `mo_skip`: that motion holds nothing until it stops or anything else
+      happens, `scene_active`: a touch, the drawer, a request, an app; "under the clock" only where the clock shows,
+      not under an app past the timeout); neither in Do not disturb (`s->dnd`, also with the mic off, where
+      `face_mode` says M_MUTE).  The band's checks go on once a second while no renderer comes up (that wait was 30 s
+      at a time: a motion wake that late), and the old height back after a failed one starts its renderer anew (it
+      was left without one).  Checked on the PC: `ui_test` (keeps without wakes under the clock, wakes, held past
+      twice the timeout, the count from the end, wakes alone, Do not disturb, a touch on the clock under such motion,
+      motion under an app past the timeout, mic off with Do not disturb), `unit-ring_band` (wake, hold, the end's activity, Do not disturb, keeps alone, no
+      renderer), `fake_screen_words.py` (off by default, `mo` told, the band's wake and hold from a wobbling fake
+      RX_STAT, the timeout from its end, Do not disturb, Wi-Fi motion off), `fake_screen.py`, `fake_web.py`,
+      `fake_ha_esphome_features.py`.  Seen on the contributor's Echo Show 5 2nd gen (PR #190, 2026-11-15): on about
+      a second after walking in, held while moving, dark about a minute after leaving ("Screen sleeps after" not
+      stated).  Open: our own Shows.
+      Follow-ups (2026-11-25, review of the merged PR): the poller started only with Home Assistant's first ESPHome
+      link (`proto_esphome.c` `serve`), so under Wyoming the switches did nothing and the UI heard motion only at the
+      band's next look; `wifimotion_start` now takes up to 4 listeners and `main.c` starts it with the screen's
+      (`motion_screen` -> `screen_motion`) wherever there is a screen, whatever the protocol.  The drawer's Screen
+      off wins over "wakes": the UI says `slept 1` with it and `slept 0` once the screen is on again however it came on
+      (`scene_screen`), screen.c's `screen_slept` (forgotten with a new UI, nothing once the UI was given up), the
+      band leaves such a screen dark.  The page: a `when` row changed while its page is hidden marks that page's flow
+      to be placed anew when it shows (`reflow` places cards once per column count).  Checked: `ui_test` (`slept`
+      both ways, nothing for a screen out otherwise), `unit-ring_band` (slept: no wake; after: the wake),
+      `fake_screen_words.py` (the UI's `slept` end to end; an Echo under Wyoming whose UI hears the motion; that check
+      fails with main.c's start taken out: the harness's own probe of the ESPHome port started the poller).
 - [~] The Echo's own words in more languages, Romanian first (2026-11-11).  `speech_language` lists every language of
       `bt_langs` (it, pt, nl, sv, da, nb, fi, pl) and ro, stored by name; `speech_locale` maps them and their zones
       (Brazil's before "America/"); the aligner (no MFA model for them in build.sh) skips them, the page's as the
@@ -4255,6 +4524,20 @@ word and echo cancellation in a room, all checked on our unit (2026-11-15).
       [scp_A_ready_ipi_handler] SCP id: 0` — the first `SCP is ready` on this unit — with tinysys-ipc probed and
       buffers registered.  `ledctrl -s setup-mode` is accepted with the HAL answering.  Custom LED designs stay
       unported (the ACS `.animation_bin` format); stock animations are ledcontroller's again.
+
+- [x] **Installs by others, 2026-11-20/21 (issues #213, #216), and the README after them (PR #212, issue #221).**
+      #213: a factory-new 2022 unit (antirback tee 2, lk 1) stopped at `mcupm_a` as the README says, with
+      `scp_a` != `scp_b` and `mcupm_a` != `mcupm_b` (slots of different eras, unlike #200's identical pairs);
+      `cannoli-upgrade`, then the BL2 step (the zero-padded readback hash matched on all four), then the install.
+      #216: a Dot on NS6573/7577N (built 2026-06-12, U-Boot 2019.04-ge2847f4130) stopped at `tee1`: both TEEs
+      differed from 8349's, `mcupm_a` and `scp_a` matched; `cannoli-upgrade` and the install, and the ring worked
+      without the BL2 step.  So the upgrade is for any build before 8349, not the launch firmware only, and a TEE
+      that differs says nothing about BL2: the README now words both so.  #221 (and #213's "`--ota-parts` needs
+      assembling"): the README ran `payload_dump.py` on the OTA download, a zip around `payload.bin` (stored, not
+      compressed), which fails the `CrAU` check; `payload_dump.py` now reads the payload inside the zip in place
+      (same images as from the bare `payload.bin`, compared on 8349), and the README unpacks the builder's
+      `work/inputs/stock.zip` into `firmware/cannoli/unpack/parts`, which `--ota-parts` takes whole.  PR #212's
+      point, kept: every block of the README says which checkout it runs in (`cd ../<checkout>` first).
 
 - [x] **Setup from a phone (Improv) on cannoli, 2026-11-15, after a reset, the HA app on Android.**  Three faults, the
       BLE side fine throughout (phone connected, credentials taken, the trailing space a phone keyboard adds dropped).

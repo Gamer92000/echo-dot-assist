@@ -67,6 +67,7 @@ struct proto {
     void (*plugin_entity)(unsigned key, const char *type);  /* may be NULL: a plugin's entity's state (TYPE NULL), or its
                                                  * event (core_plugin_entity) */
     void (*music_changed)(void);                /* may be NULL: a plugin's music plays, pauses or ends: the media player */
+    void (*phone_changed)(void);                /* may be NULL: a phone's call over Bluetooth changed (hfp_status), lock held */
     int (*keyed)(void);                         /* may be NULL (no such thing: Wyoming): 1 once Home Assistant set the
                                                  * device key (only its keyed link sets a plugin's entities), else 0 */
 };
@@ -124,6 +125,8 @@ int  core_sound_on(int s, int set);              /* sounds.h's sound has its swi
 int  core_wake_in_request(int set);              /* the request's audio from the wake word on, not after it; -1 reads */
 int  core_end_of_request(int set);               /* the end of a request heard on the Echo (micend.h: MICEND_*), -1 reads */
 int  core_stop_ends_listening(int set);          /* "<wake word>, stop" also ends listening (main.c stop_word), -1 reads */
+int  core_answer_by_voice(int set);              /* "<wake word>, answer" also answers a Drop In or a plugin's call (main.c
+                                                    core_transcript; a phone's always), -1 reads */
 int  core_bt_announce(int set);                  /* same: chime and "Connected to <name>" when a phone connects */
 int  core_bluetooth(int set);                   /* same; -B on the command line: leave the radio to the stock stack */
 int  core_dnd(int set);                          /* same: do not disturb, announcements are dropped (the protocol checks) */
@@ -139,6 +142,9 @@ int  core_kind_volume(int kind, int set);
 int  core_kind_linked(int kind, int set);
 int  core_kind_offset(int kind);
 void core_set_kind_offset(int kind, int offset);    /* -VOL_OFFSET_MAX..VOL_OFFSET_MAX */
+/* Not the lock: a call's volume as a phone sets it (hfp.c, +VGS): the volume, the music's moved so that a linked Call
+ * volume lands there, or Call volume itself; -1 only reads.  Returns what a call plays at now */
+int  core_call_volume(int set);
 enum { SPEAKER_NONE, SPEAKER_MIXER, SPEAKER_ABSOLUTE };
 void core_speaker_volume(int pct);              /* lock held: a speaker with absolute volume set by its own buttons */
 void core_speaker(int mode, int pct);            /* not the lock: playing on the Echo's speaker, a Bluetooth speaker with a
@@ -314,7 +320,8 @@ void   core_bt_pairing(int on);                             /* the Bluetooth spe
  * core_dropin_result: what came of a Drop In call this Echo made (DROPIN_R_*; here: refused before it started, nothing
  * else told).  core_call_refusal: why a call cannot run right now (muted; incoming: do not disturb too), NULL if it can.
  * What a person here does to the call that runs, whoever carries it: core_call_button (the action button: answers a
- * ringing one, ends any other; 1 if there was one), core_call_answer (the screen's Answer: a ringing one only),
+ * ringing one, ends any other; 1 if there was one), core_call_answer (the screen's Answer: a ringing one only; a
+ * spoken "answer" is core_transcript's),
  * core_call_hangup (a "stop", "hang up", the screen; 1 if there was one).  core_call_status: the state shown, PEER */
 void   core_call(int who, int state, const char *peer, int outgoing);
 void   core_dropin_result(int result, const char *peer, int here);
@@ -325,6 +332,8 @@ int    core_call_button(void);
 int    core_call_answer(void);
 int    core_call_hangup(const char *why);
 int    core_call_status(char *peer, size_t cap);
+void   core_phone_changed(void);                            /* hfp.c: what Home Assistant's "Phone" entities show changed
+                                                               (not the lock) */
 void   core_spawn(char *const argv[]);                      /* the same, without waiting for it or its output */
 void   core_run(char *const argv[], char *out, size_t n);   /* runs a stock tool the way the core does, until it closes its
                                                                stdout, which lands in out, or 20 s have passed (then it is

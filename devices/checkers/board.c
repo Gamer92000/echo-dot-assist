@@ -74,6 +74,11 @@ const struct board board = {
      * Flat at the top and steep at the bottom, unlike the Dot's: 90 is 4 dB under 100 (Dot 10), 10 is 51 (Dot 41).
      * hassmic's volume v plays at index (30 v + 50) / 100: a point every 5, each that index's (the curve between them
      * within 1 dB of the index played); index 1 is under the room's noise, 0 silent */
+    /* Amazon's call processing (audio_android.c "a call as stock's calls have it"): stock's calls record
+     * VOICE_COMMUNICATION, which this HAL gives libasp's "Voice" pipeline (getAspPipelineType: 7 -> 1), in
+     * MODE_IN_COMMUNICATION, beside the wake word's HOTWORD (2026-11-26: the Show 5 ran it, the others by the same
+     * firmware code) */
+    .call_mic = 1,
     .volume_curve = (const struct board_vol[]){
         { 0, -66 }, { 5, -60.0f }, { 10, -51.2f }, { 15, -43.7f }, { 20, -41.0f }, { 25, -34.9f }, { 30, -31.8f },
         { 35, -26.7f }, { 40, -24.8f }, { 45, -20.8f }, { 50, -19.7f }, { 55, -17.8f }, { 60, -15.8f }, { 65, -13.0f },
@@ -91,4 +96,9 @@ const struct board board = {
     .speaker_gain_stock = 29,
     .speaker_gain_steps = 2,
     .speaker_gain_db = 3,
+    /* phone calls (docs/re-hfp.md): the MT7668 on MediaTek's DAI BT, the HAL's VOIP_Call_BT_Playback / _Capture.  The
+     * chip's PCM side as cannoli's newer driver sets it for the MT7668 (0xfc72), without which nothing comes in */
+    .sco = SCO_PCM, .sco_play = "VOIP_Call_BT_Playback", .sco_cap = "VOIP_Call_BT_Capture", .sco_play_ch = 1, .sco_cap_ch = 1,
+    .bt_sco_cmd = (const unsigned char[]){ 0x72, 0xfc, 4, 0x03, 0x10, 0x00, 0x4a },
+    .sco_msbc_chip = 1,             /* the MT7668 codes mSBC from VOIP_Call_BT_* at 16 kHz, set up and accepted (2026-11-25) */
 };

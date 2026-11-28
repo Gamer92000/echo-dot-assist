@@ -69,6 +69,23 @@ def connected(w):
     return (n, air_of(w, n)) if n else (None, None)
 
 
+def on_bss(w, air):
+    """the access point of the network it is on: world "bssid" (roaming, tests/fake_wifi_roam.py), else the first"""
+    return next((b for b in air["bss"] if b[0] == w.get("bssid")), air["bss"][0])
+
+
+def roam_to(w, target):
+    """wpa_cli roam as the Dots' wpa_supplicant does it: Amazon's picker (world "picker") takes another access point
+    unless the network is pinned to the target; one in "refuse" is not joined (the Echo stays where it was)"""
+    n, air = connected(w)
+    if not n or not any(b[0] == target for b in air["bss"]): return "FAIL"
+    if n.get("bssid") not in (None, target): return "FAIL"
+    if target in w.get("refuse", []): return "OK"
+    w["bssid"] = target if n.get("bssid") == target or not w.get("picker") else w["picker"]
+    w.setdefault("roams", []).append([target, n.get("bssid")])
+    return "OK"
+
+
 def wpa(w, args):
     cmd, a = args[0], args[1:]
     net = lambda i: next((n for n in w["networks"] if str(n["id"]) == i), None)
@@ -76,7 +93,8 @@ def wpa(w, args):
         st = associate(w)
         if st != "COMPLETED": return f"wpa_state={st}\naddress=02:00:00:00:00:01"
         n, air = connected(w)
-        lines = [f"bssid={air['bss'][0][0]}", f"freq={air['bss'][0][1]}", f"ssid={esc(bytes.fromhex(n['ssid']))}", f"id={n['id']}",
+        b = on_bss(w, air)
+        lines = [f"bssid={b[0]}", f"freq={b[1]}", f"ssid={esc(bytes.fromhex(n['ssid']))}", f"id={n['id']}",
                  "mode=station", "wpa_state=COMPLETED"]
         if "addrs" in w and "svc" in w:            # wpa_cli reads the interface's address (init's dhcpcd world)
             if w["addrs"]: lines.append(f"ip_address={w['addrs'][0]}")
@@ -100,6 +118,7 @@ def wpa(w, args):
             if not (v.startswith('"') or (len(v) == 64 and all(c in "0123456789abcdef" for c in v))): return "FAIL"
             n["psk"] = v
         elif k in ("priority", "scan_ssid", "disabled"): n[k] = int(v)
+        elif k == "bssid" and v == "any": n.pop("bssid", None)
         else: n[k] = v
         return "OK"
     if cmd == "get_network":
@@ -127,6 +146,18 @@ def wpa(w, args):
         if w.get("current") == n["id"] or w.get("target") == n["id"]: w["current"] = w["target"] = None
         return "OK"
     if cmd == "reassociate": w["current"] = w["target"] = None; return "OK"
+    if cmd == "signal_poll":
+        n, air = connected(w)
+        return f"RSSI={on_bss(w, air)[2]}\nLINKSPEED=65\nNOISE=9999\nFREQUENCY={on_bss(w, air)[1]}" if n else "FAIL"
+    if cmd == "bss":                                # what the roaming reads: age and the access point's elements
+        for air in w["air"]:
+            for b in air["bss"]:
+                if b[0] == a[0]: return f"bssid={b[0]}\nfreq={b[1]}\nlevel={b[2]}\nage=0\nie={w.get('ies', {}).get(b[0], '0003616263')}"
+        return "FAIL"
+    if cmd == "roam": return roam_to(w, a[0])
+    if cmd == "wnm_bss_query":                      # an access point that takes BSS transition queries moves the Echo
+        if w.get("btm_to"): w["bssid"] = w.pop("btm_to")
+        return "OK"
     if cmd == "save_config":
         if w.get("save_fails"): return "FAIL"
         w["saved"] = json.loads(json.dumps(w["networks"])); return "OK"
@@ -134,7 +165,8 @@ def wpa(w, args):
     if cmd == "scan_results":
         rows = ["bssid / frequency / signal level / flags / ssid"]
         for air in w["air"]:
-            for bssid, freq, sig in air["bss"]: rows.append(f"{bssid}\t{freq}\t{sig}\t{air['flags']}\t{esc(bytes.fromhex(air['hex']))}")
+            for bssid, freq, sig in air["bss"]:          # world "country": the column a Dot 5 prints before the SSID
+                rows.append(f"{bssid}\t{freq}\t{sig}\t{air['flags']}\t" + (f"{w['country']} \t" if w.get("country") else "") + esc(bytes.fromhex(air['hex'])))
         return "\n".join(rows)
     return "UNKNOWN COMMAND"
 

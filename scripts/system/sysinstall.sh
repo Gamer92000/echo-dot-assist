@@ -163,6 +163,11 @@ stock_apps() {      # stock_apps "LIST": those in REMOVED, the rest back where t
 }
 
 if [ "$MODE" = uninstall ]; then
+    # a call hassmic left in Android's call mode (audio_android.c's mark): MODE_NORMAL before stock takes over again
+    if [ -f /data/local/hassmic/state/call-mode ] && command -v service > /dev/null; then
+        [ "$(getprop ro.build.version.sdk)" -ge 28 ] 2>/dev/null && tx=4 || tx=3
+        service call media.audio_policy $tx i32 0 > /dev/null 2>&1; rm -f /data/local/hassmic/state/call-mode
+    fi
     stock_apps ""
     if [ -f $POLICY.pre-hassmic ]; then
         new $POLICY $POLICY.pre-hassmic 644 0:0 $PLABEL; commit; rm $POLICY.pre-hassmic

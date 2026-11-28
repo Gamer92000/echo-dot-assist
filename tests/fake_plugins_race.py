@@ -7,8 +7,8 @@ tests/fake_plugins_fetch.py.
 What was wrong (a review, 2026-11-19): /api/plugins/install looked at the slot, let go of the lock for its check of
 the file, and armed the press without looking again.  A second browser's fetch in that window took the slot, its end
 wrote "checked" over the wait, and the press the owner gave the first browser's dialog installed whatever the second
-had uploaded by then.  HASSMIC_PLUGIN_ASK_DELAY=<ms> makes that window as wide as a test needs (slept between
-/install's check and its ask), HASSMIC_PLUGIN_SLOT=<checked ms>:<upload ms>:<fetch ms> the slot's timeouts short.
+had uploaded by then.  HASSMIC_PLUGIN_ASK_DELAY=<ms>:<file> holds that window open for as long as a test needs
+(between /install's check and its ask, while the file is there), HASSMIC_PLUGIN_SLOT=<checked ms>:<upload ms>:<fetch ms> the slot's timeouts short.
 
 With the timeouts as they are: in that window another browser's fetch and upload, and a push, are refused; the
 press installs the first browser's package.  Since the eighth read /install's look at the file is in CHECKING,
@@ -122,6 +122,7 @@ def main():
         for n, d in assets.items(): plugs.setdefault(n.rsplit("_", 1)[0], []).append(plugsite.unlisted(d))
         site.build(plugs)
 
+    hold = os.path.join(top, "ask-hold"); ASK = f"20000:{hold}"     # in_window's window, held while `hold` is there
     def start(fresh="3600:0", **more):
         more.setdefault("HASSMIC_LOGIN_MS", "60000:300")       # (browsers log in one after the other here: web.c keeps others back 0.3 s after a press, not 30)
         e = dict(os.environ, HASSMIC_STATE=state, HASSMIC_CAP=f"{ROOT}/testdata/alexa_espeak.raw", HASSMIC_PLAY=os.path.join(state, "play.raw"),
@@ -145,12 +146,17 @@ def main():
         path = os.path.join(top, "push.hmp"); open(path, "wb").write(pkg)
         r = subprocess.run(PCTOOL + ["plugin", "127.0.0.1", str(OTA), os.path.join(top, key + ".key"), path], capture_output=True, text=True)
         return r.returncode, r.stdout.strip()
-    def in_window(who, meanwhile, after=0.5):
-        """WHO asks /api/plugins/install, which sleeps HASSMIC_PLUGIN_ASK_DELAY between its check and its ask; MEANWHILE
-        runs in that window.  (status, answer) of the install, and what MEANWHILE gave"""
-        res = {}
+    def in_window(who, meanwhile):
+        """WHO asks /api/plugins/install, which HASSMIC_PLUGIN_ASK_DELAY holds between its check and its ask while the
+        file `hold` is there; MEANWHILE runs once it is held, and the window ends after it (CI 2026-11-24: a push begun
+        0.5 s into a window of 1.5 s reached the slot after it).  (status, answer) of the install, and what MEANWHILE gave"""
+        res = {}; open(hold, "w").close(); n0 = len(open(log, errors="replace").read())
         t = threading.Thread(target=lambda: res.update(a=post(who, "/api/plugins/install"))); t.start()
-        time.sleep(after); m = meanwhile(); t.join()
+        try:
+            check(logged(log, "the install's ask held", n0, 10), "the install is held between its check and its ask")
+            m = meanwhile()
+        finally: os.unlink(hold)
+        t.join()
         return res["a"], m
     def press_for_nothing(what, *nothing):
         n0 = len(open(log).read())
@@ -159,7 +165,7 @@ def main():
     told = lambda r: "took this one's place" in r.get("error", "")
 
     v1 = package()
-    proc = start(HASSMIC_PLUGIN_ASK_DELAY="1500")
+    proc = start(HASSMIC_PLUGIN_ASK_DELAY=ASK)
     try:
         wait_port(PORT, WEB, OTA)
         b = Browser(WEB); check(b.login_with_button(proc), "logged in with the button")
@@ -236,7 +242,7 @@ def main():
 
         # ==== the timeouts run out at once (a dialog left open for longer than the slot keeps it): taken, and told
         proc.terminate(); proc.wait()
-        proc = start(fresh="0:0", HASSMIC_PLUGIN_ASK_DELAY="3000", HASSMIC_PLUGIN_SLOT="200:200:4000"); wait_port(PORT, WEB, OTA)
+        proc = start(fresh="0:0", HASSMIC_PLUGIN_ASK_DELAY=ASK, HASSMIC_PLUGIN_SLOT="200:200:4000"); wait_port(PORT, WEB, OTA)
         publish(testwake_3=package(version=3)); look(b)
         # (The takeover is before A's /install now, not inside it: from its look at the file on, the slot is CHECKING,
         # which no timeout opens.  Shown first: timeouts run out, and still nothing is taken in the window)
@@ -281,7 +287,7 @@ def main():
         # (as after a reboot: within one boot the waits withdrawn above keep a browser that is not approved back for
         # their minute over a restart too, state/web_wait; tests/fake_web.py one_wait has that)
         with open(os.path.join(top, "boot-2"), "w") as f: f.write("another-boot\n")
-        proc = start(fresh="0:0", HASSMIC_FAKE_LED=leds, HASSMIC_LOGIN_MS="3000:1500", HASSMIC_PLUGIN_ASK_DELAY="1500", HASSMIC_PLUGIN_OWN_DELAY="1500",
+        proc = start(fresh="0:0", HASSMIC_FAKE_LED=leds, HASSMIC_LOGIN_MS="3000:1500", HASSMIC_PLUGIN_ASK_DELAY=ASK, HASSMIC_PLUGIN_OWN_DELAY="1500",
                      HASSMIC_BOOT_ID=os.path.join(top, "boot-2")); wait_port(PORT, WEB, OTA)
         text = lambda n0=0: open(log, errors="replace").read()[n0:]
         ring = lambda: [l.split()[-2] + " " + l.split()[-1] for l in open(leds).read().splitlines() if "authenticated_setup_mode" in l or l.endswith(" wait")]

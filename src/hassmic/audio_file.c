@@ -217,6 +217,7 @@ void      voip_close(void) { s_close(&voip); }
  * stream stalls (audio_mixer.c) */
 static FILE *callcap; static short callblock[800];
 int  callmic_present(void) { return getenv("HASSMIC_CALL_CAP") != NULL; }
+float callmic_echo_cap(void) { return -30; }             /* (the Dots' measured cap: the tests' micHfp is theirs) */
 int  callmic_open(void) { const char *p = getenv("HASSMIC_CALL_CAP"); if (!callcap && p) callcap = fopen(p, "rb"); return callcap ? 0 : -1; }
 int  callmic_read(const void **data)
 {
@@ -284,3 +285,5 @@ int  afe_arbitration(long ts, long te, char *json, size_t n)
 }
 int  afe_eq_get(char *json, size_t n) { if (n) json[0] = 0; return 0; }
 void afe_eq_set(const char *json) { (void)json; }
+
+int audio_sco_native(void) { return 0; }
