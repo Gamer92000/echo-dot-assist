@@ -50,30 +50,39 @@ httplib      third_party/cpp-httplib/repo                        yhirose/cpp-htt
 PATCHES=3
 pin=$(echo "$SOURCES $PATCHES" | sha256sum | cut -c1-16)
 tree=$src/tree-$pin
-if [ ! -f "$tree/.complete" ]; then
-    rm -rf "$tree"; mkdir -p "$tree"
-    echo "$SOURCES" | while read -r name dir path sum; do
-        [ -n "$name" ] || continue
-        a=$src/$name-${path##*/}.tar.gz
-        if [ ! -f "$a" ] || [ "$(sha256sum "$a" | cut -c1-64)" != "$sum" ]; then
-            curl -fsSL --retry 3 -o "$a.part" "https://github.com/$path.tar.gz"
-            [ "$(sha256sum "$a.part" | cut -c1-64)" = "$sum" ] || { echo "otbr-build: $name: checksum differs" >&2; rm -f "$a.part"; exit 1; }
-            mv "$a.part" "$a"
-        fi
-        mkdir -p "$tree/$dir"
-        tar -xzf "$a" -C "$tree/$dir" --strip-components=1
-    done
-    # the link metrics subject: ot-br-posix forces it on for every Thread version but 1.1 (see the top)
-    sed -i 's/set(OT_LINK_METRICS_SUBJECT ON CACHE STRING "enable link metrics subject" FORCE)/set(OT_LINK_METRICS_SUBJECT OFF CACHE STRING "enable link metrics subject" FORCE)/' \
-        "$tree/third_party/openthread/CMakeLists.txt"
-    grep -q 'OT_LINK_METRICS_SUBJECT OFF' "$tree/third_party/openthread/CMakeLists.txt" || { echo "otbr-build: the link metrics patch no longer applies" >&2; exit 1; }
-    # the upstream DNS servers: a file main.sh writes (Android's /etc is the system partition's, with no resolv.conf)
-    # (root writes it in its own folder: not in the radio user's, where a link could point root elsewhere)
-    r=$tree/third_party/openthread/repo/src/posix/platform/resolver.cpp
-    sed -i 's|kResolvConfFullPath\[\] = "/etc/resolv.conf"|kResolvConfFullPath[] = "/data/local/hassmic/thread-resolv.conf"|' "$r"
-    grep -q '/data/local/hassmic/thread-resolv.conf' "$r" || { echo "otbr-build: the resolv.conf patch no longer applies" >&2; exit 1; }
-    touch "$tree/.complete"
-fi
+# Two of this script run at once under make -j: the plain build and the CSL one (the Makefile).  On a fresh checkout
+# neither finds the archives or the tree, and both would fetch into the same files and extract into the same tree:
+# one loses its download to the other's mv (CI's first laser build, 2026-11-28: "ot-br-posix: checksum differs" on a
+# .part that was no longer there).  So the tree is made under a lock, and the other run finds it complete.  flock is
+# util-linux's
+command -v flock >/dev/null || { echo "otbr-build: needs flock (util-linux)" >&2; exit 1; }
+(
+  flock 9
+  if [ ! -f "$tree/.complete" ]; then
+      rm -rf "$tree"; mkdir -p "$tree"
+      echo "$SOURCES" | while read -r name dir path sum; do
+          [ -n "$name" ] || continue
+          a=$src/$name-${path##*/}.tar.gz
+          if [ ! -f "$a" ] || [ "$(sha256sum "$a" | cut -c1-64)" != "$sum" ]; then
+              curl -fsSL --retry 3 -o "$a.part" "https://github.com/$path.tar.gz"
+              [ "$(sha256sum "$a.part" | cut -c1-64)" = "$sum" ] || { echo "otbr-build: $name: checksum differs" >&2; rm -f "$a.part"; exit 1; }
+              mv "$a.part" "$a"
+          fi
+          mkdir -p "$tree/$dir"
+          tar -xzf "$a" -C "$tree/$dir" --strip-components=1
+      done
+      # the link metrics subject: ot-br-posix forces it on for every Thread version but 1.1 (see the top)
+      sed -i 's/set(OT_LINK_METRICS_SUBJECT ON CACHE STRING "enable link metrics subject" FORCE)/set(OT_LINK_METRICS_SUBJECT OFF CACHE STRING "enable link metrics subject" FORCE)/' \
+          "$tree/third_party/openthread/CMakeLists.txt"
+      grep -q 'OT_LINK_METRICS_SUBJECT OFF' "$tree/third_party/openthread/CMakeLists.txt" || { echo "otbr-build: the link metrics patch no longer applies" >&2; exit 1; }
+      # the upstream DNS servers: a file main.sh writes (Android's /etc is the system partition's, with no resolv.conf)
+      # (root writes it in its own folder: not in the radio user's, where a link could point root elsewhere)
+      r=$tree/third_party/openthread/repo/src/posix/platform/resolver.cpp
+      sed -i 's|kResolvConfFullPath\[\] = "/etc/resolv.conf"|kResolvConfFullPath[] = "/data/local/hassmic/thread-resolv.conf"|' "$r"
+      grep -q '/data/local/hassmic/thread-resolv.conf' "$r" || { echo "otbr-build: the resolv.conf patch no longer applies" >&2; exit 1; }
+      touch "$tree/.complete"
+  fi
+) 9>"$src/.lock"
 
 case $target in
 armv7a-*) abi=armeabi-v7a;;

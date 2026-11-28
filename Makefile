@@ -298,7 +298,7 @@ $(OUT)/otbr-agent-csl: scripts/otbr-build.sh
 # gprcp: our own RCP for the GP712 in place of Amazon's ot-rcp (PLAN.md "Thread 1.4"; docs/re-gp712.md): OpenThread's
 # RCP on Qorvo's GP712 platform and public library, transmit security and timing in software; zig, static musl
 $(OUT)/gprcp: scripts/gprcp-build.sh $(shell find src/gprcp -type f)
-	scripts/gprcp-build.sh $(OUT)
+	scripts/gprcp-build.sh $(OUT) $(NDK)
 
 # The plugins' launcher (docs/plugins.md 2): root's, static, nothing of Amazon's; its system call filter is made
 # from the table the SDK also reads.  The PC's (hassmic's own tests) changes no user and has the x86_64 filter.

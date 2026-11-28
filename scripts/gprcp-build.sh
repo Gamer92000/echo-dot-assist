@@ -9,13 +9,18 @@
 # stdin/stdout, as Amazon's.
 #
 # The library is the Raspberry Pi's (hard float, glibc's names), so the program is a static musl one, built by zig,
-# as the plugins are (Android's NDK is soft float).  Qorvo's EULA: use, and distribution in products, with Qorvo
-# silicon only (the Echo 4 is): fetched here by checksum, never in git.
-#   scripts/gprcp-build.sh <out dir>      writes <out>/gprcp
+# as the plugins are (Android's NDK is soft float).  Its tools are zig's own and the NDK's, never the host's: the
+# archive is repacked with zig's ar, and the result stripped with the NDK's llvm-strip, as otbr-build.sh strips (a
+# fresh runner has no llvm tools on its PATH: the first laser build, 2026-11-28, stopped at llvm-ar).  Qorvo's EULA:
+# use, and distribution in products, with Qorvo silicon only (the Echo 4 is): fetched here by checksum, never in git.
+#   scripts/gprcp-build.sh <out dir> [<ndk>]      writes <out>/gprcp
 set -euo pipefail
 out=$1
 top=$(cd "$(dirname "$0")/.." && pwd)
 src=$top/toolchain/src/gp712
+ndk=${2:-$top/toolchain/android-ndk-r21e}
+llvm_strip=$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+[ -x "$llvm_strip" ] || { echo "gprcp-build: no llvm-strip in the NDK ($llvm_strip): pass the NDK as the second argument" >&2; exit 1; }
 mkdir -p "$src" "$out"; out=$(cd "$out" && pwd)
 command -v zig >/dev/null || { echo "gprcp-build: needs zig (ziglang.org) for the static musl build" >&2; exit 1; }
 
@@ -57,11 +62,11 @@ if [ ! -f "$tree/.complete" ]; then
     # Qorvo's library with the one byte Amazon's driver needs
     lib=$(echo "$SOURCES" | awk '$1=="qorvo-lib"' | { read -r n u s; get "$n" "$u" "$s"; })
     sdk=$tree/sdk/gp712/lib; mkdir -p "$sdk/x"
-    ( cd "$sdk/x" && ar x "$lib"
+    ( cd "$sdk/x" && zig ar x "$lib"
       o=gpMacDispatcher_wrapper_client.o
       [ "$(od -An -tx1 -j $((0x8318)) -N4 $o | tr -d " \n")" = 02080000 ] || { echo "gprcp-build: the version bytes are not where docs/re-gp712.md says" >&2; exit 1; }
       printf '\x07' | dd of=$o bs=1 seek=$((0x8319)) conv=notrunc 2>/dev/null
-      llvm-ar rcs ../libQorvoGP712_ftd.a $(ar t "$lib") && cp ../libQorvoGP712_ftd.a ../libQorvoGP712_mtd.a )
+      zig ar rcs ../libQorvoGP712_ftd.a $(zig ar t "$lib") && cp ../libQorvoGP712_ftd.a ../libQorvoGP712_mtd.a )
     rm -rf "$sdk/x"
     touch "$tree/.complete"
 fi
@@ -91,7 +96,7 @@ mkdir -p "$b"
     '-DCMAKE_C_FLAGS=-DOPENTHREAD_BUILD_DATETIME=\"gprcp\"' '-DCMAKE_CXX_FLAGS=-DOPENTHREAD_BUILD_DATETIME=\"gprcp\"' \
     "$tree" > cmake.log 2>&1 || { tail -30 cmake.log >&2; exit 1; }
   ninja ot-rcp > ninja.log 2>&1 || { grep -E 'error|FAILED|undefined' ninja.log | head -30 >&2; exit 1; } )
-llvm-strip -o "$out/gprcp" "$b/bin/ot-rcp"
+"$llvm_strip" -o "$out/gprcp" "$b/bin/ot-rcp"
 # the trees and builds of earlier pins (~100 MB each): only this one is used again
 for d in "$src"/tree-* "$out"/gprcp-build-*; do [ "$d" = "$tree" ] || [ "$d" = "$b" ] || rm -rf "$d"; done
 echo "gprcp-build: $out/gprcp $(stat -c%s "$out/gprcp") bytes"
